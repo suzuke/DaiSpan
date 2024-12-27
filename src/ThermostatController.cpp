@@ -1,337 +1,168 @@
-#include "ThermostatController.h"
-#include "Debug.h"
+#include "controller/ThermostatController.h"
+#include "protocol/S21Protocol.h"
+#include "protocol/S21Utils.h"
+#include "common/Debug.h"
 
-// 添加模式文字轉換函數
-const char* getControllerModeText(ThermostatMode mode) {
-    switch (mode) {
-        case ThermostatMode::OFF: return "OFF";
-        case ThermostatMode::HEAT: return "HEAT";
-        case ThermostatMode::COOL: return "COOL";
-        case ThermostatMode::AUTO: return "AUTO";
-        default: return "UNKNOWN";
+// 溫度範圍常量
+static constexpr float MIN_TEMP = 16.0;
+static constexpr float MAX_TEMP = 30.0;
+static constexpr float TEMP_STEP = 0.5;
+
+// 更新間隔常量
+static constexpr unsigned long UPDATE_INTERVAL = 5000;  // 5秒更新一次
+static constexpr unsigned long ERROR_RESET_THRESHOLD = 5;  // 5次錯誤後重置
+
+// HomeKit 模式轉換為空調模式
+static uint8_t convertHomeKitToACMode(uint8_t hapMode) {
+    switch (hapMode) {
+        case HAP_MODE_OFF:  return AC_MODE_AUTO;  // 關機狀態用自動模式
+        case HAP_MODE_HEAT: return AC_MODE_HEAT;  // 製熱
+        case HAP_MODE_COOL: return AC_MODE_COOL;  // 製冷
+        case HAP_MODE_AUTO: return AC_MODE_AUTO;  // 自動
+        default: return AC_MODE_AUTO;
     }
 }
 
-// 添加大金模式到 HomeKit 模式的轉換函數
-ThermostatMode convertDaikinModeToHomeKit(uint8_t daikinMode) {
-    switch (daikinMode) {
-        case 0: return ThermostatMode::OFF;   // 大金 OFF
-        case 1: return ThermostatMode::AUTO;  // 大金 AUTO
-        case 3: return ThermostatMode::COOL;  // 大金 COOL
-        case 4: return ThermostatMode::HEAT;  // 大金 HEAT
-        case 2:  // 除濕
-        case 6:  // 送風
-        default: return ThermostatMode::OFF;
-    }
-}
-
-// 添加 HomeKit 模式到大金模式的轉換函數
-uint8_t convertHomeKitModeToDaikin(ThermostatMode homekitMode) {
-    switch (homekitMode) {
-        case ThermostatMode::OFF: return 0;   // 大金 OFF
-        case ThermostatMode::AUTO: return 1;  // 大金 AUTO
-        case ThermostatMode::COOL: return 3;  // 大金 COOL
-        case ThermostatMode::HEAT: return 4;  // 大金 HEAT
-        default: return 0;  // 預設使用 OFF 模式
-    }
-}
-
-ThermostatController::ThermostatController(S21Protocol& s21) : 
-  protocol(s21),
-  currentTemperature(21.0),
-  targetTemperature(21.0),
-  currentMode(ThermostatMode::OFF),
-  targetMode(ThermostatMode::OFF),
-  lastUpdateTime(0),
-  consecutiveErrors(0) {  // 初始化連續錯誤計數器
-  
-  DEBUG_INFO_PRINT("[Controller] 開始初始化...\n");
-  
-  // 直接讀取初始狀態
-  bool tempSuccess = updateCurrentTemp();
-  bool modeSuccess = updateCurrentMode();
-  
-  DEBUG_INFO_PRINT("[Controller] 初始化完成 - 溫度讀取：%s，模式讀取：%s\n",
-                   tempSuccess ? "成功" : "失敗",
-                   modeSuccess ? "成功" : "失敗");
-  
-  if (tempSuccess && modeSuccess) {
-    DEBUG_INFO_PRINT("[Controller] 初始狀態 - 溫度：%.1f°C，模式：%d(%s)\n",
-                     currentTemperature,
-                     static_cast<int>(currentMode),
-                     getControllerModeText(currentMode));
-  }
-}
-
-bool ThermostatController::isValidModeTransition(ThermostatMode newMode) {
-  return true;
-}
-
-bool ThermostatController::shouldUpdate() {
-  unsigned long currentTime = millis();
-  static unsigned long lastErrorTime = 0;
-  static unsigned long consecutiveErrors = 0;
-  
-  // 如果有連續錯誤，逐��增加更新間隔
-  if (consecutiveErrors > 5) {
-    unsigned long interval = std::min(UPDATE_INTERVAL * (consecutiveErrors / 5), (unsigned long)5000);
-    if (currentTime - lastUpdateTime >= interval) {
-      lastUpdateTime = currentTime;
-      return true;
-    }
-    return false;
-  }
-  
-  // 正常更新間隔
-  if (currentTime - lastUpdateTime >= UPDATE_INTERVAL) {
-    lastUpdateTime = currentTime;
-    return true;
-  }
-  return false;
-}
-
-bool ThermostatController::updateCurrentTemp() {
-  uint8_t payload[4];
-  size_t payloadLen;
-  uint8_t cmd0, cmd1;
-  static unsigned long lastErrorLogTime = 0;
-  
-  if (!protocol.sendCommand('R', 'H')) {
-    if (millis() - lastErrorLogTime >= 5000) {  // 每5秒只記錄一次錯誤
-      DEBUG_ERROR_PRINT("[Controller] 錯誤：無法讀取當前溫度（可能未連接空調）\n");
-      lastErrorLogTime = millis();
-    }
-    return false;
-  }
-  
-  // 等待並解析回應，直到收到正確的回應
-  unsigned long startTime = millis();
-  while (millis() - startTime < 1000) {  // 1秒超時
-    if (protocol.parseResponse(cmd0, cmd1, payload, payloadLen)) {
-      if (cmd0 == 'S' && cmd1 == 'H') {  // 檢查是否是我們期待的回應
-        if (payloadLen >= 4) {  // 溫度數據應該有4個字節
-          float newTemp = s21_decode_float_sensor(payload);
-          if (abs(newTemp - currentTemperature) >= TEMP_UPDATE_THRESHOLD) {
-            DEBUG_INFO_PRINT("[Controller] 溫度更新：%.1f°C -> %.1f°C\n", 
-                           currentTemperature, newTemp);
-            currentTemperature = newTemp;
-          }
-          consecutiveErrors = 0;  // 重置錯誤計數
-          return true;
-        }
-      }
-    }
-  }
-  
-  consecutiveErrors++;  // 增加錯誤計數
-  if (millis() - lastErrorLogTime >= 5000) {  // 每5秒只記錄一次錯誤
-    DEBUG_ERROR_PRINT("[Controller] 錯誤：未收到正確的溫度回應（可能未連接空調）\n");
-    lastErrorLogTime = millis();
-  }
-  return false;
-}
-
-bool ThermostatController::updateCurrentMode() {
-  uint8_t payload[4];
-  size_t payloadLen;
-  uint8_t cmd0, cmd1;
-  static unsigned long lastErrorLogTime = 0;
-  
-  if (!protocol.sendCommand('F', '1')) {
-    if (millis() - lastErrorLogTime >= 5000) {  // 每5秒只記錄一次錯誤
-      DEBUG_ERROR_PRINT("[Controller] 錯誤：無法發送 F1 命令（可能未連接空調）\n");
-      lastErrorLogTime = millis();
-    }
-    return false;
-  }
-  
-  // 等待並解析回應
-  unsigned long startTime = millis();
-  bool responseReceived = false;
-  
-  while (millis() - startTime < 500) {  // 縮短超時時間到 500ms
-    if (protocol.parseResponse(cmd0, cmd1, payload, payloadLen)) {
-      if (cmd0 == 'G' && cmd1 == '1' && payloadLen >= 4) {
-        responseReceived = true;
-        
-        // 解析電源狀態和模式
-        uint8_t power = payload[0] - '0';
-        uint8_t daikinMode = payload[1] - '0';
-        
-        // 根據電源狀態決定模式
-        ThermostatMode newMode;
-        if (!power) {
-          // 如果電源關閉，強制設為 OFF
-          newMode = ThermostatMode::OFF;
-        } else {
-          // 如果電源開啟，使用當前目標模式
-          newMode = targetMode;
-          
-          // 如果目標模式是 OFF，則設為 AUTO（因為電源已開啟）
-          if (newMode == ThermostatMode::OFF) {
-            newMode = ThermostatMode::AUTO;
-          }
-        }
-        
-        // 更新模式
-        if (newMode != currentMode) {
-          DEBUG_INFO_PRINT("[Controller] 模式更新：%d(%s) -> %d(%s)\n", 
-                         static_cast<int>(currentMode), getControllerModeText(currentMode),
-                         static_cast<int>(newMode), getControllerModeText(newMode));
-          currentMode = newMode;
-        }
-        
-        // 更新目標溫度
-        float newTargetTemp = s21_decode_target_temp(payload[2]);
-        if (abs(newTargetTemp - targetTemperature) >= TEMP_UPDATE_THRESHOLD) {
-          DEBUG_INFO_PRINT("[Controller] 目標溫度更新：%.1f°C -> %.1f°C\n",
-                         targetTemperature, newTargetTemp);
-          targetTemperature = newTargetTemp;
-        }
-        
-        consecutiveErrors = 0;  // 重置錯誤計數
-        break;  // 收到正確回應後立即退出
-      }
-    }
-    delay(10);  // 短暫延遲，避免過度佔用 CPU
-  }
-  
-  if (!responseReceived) {
-    consecutiveErrors++;  // 增加錯誤計數
-    if (millis() - lastErrorLogTime >= 5000) {  // 每5秒只記錄一次錯誤
-      DEBUG_ERROR_PRINT("[Controller] 錯誤：F1 命令超時，未收到回應（可能未連接空調）\n");
-      lastErrorLogTime = millis();
-    }
-    return false;
-  }
-  
-  return true;
-}
-
-bool ThermostatController::setTargetTemperature(float temp) {
-    if (temp < MIN_TEMP || temp > MAX_TEMP) {
-        DEBUG_ERROR_PRINT("[Controller] 錯誤：溫度設置超出範圍 (%.1f°C)。允許範圍：%.1f-%.1f°C\n", 
-                       temp, MIN_TEMP, MAX_TEMP);
-        return false;
+// 空調模式轉換為 HomeKit 模式
+static uint8_t convertACToHomeKitMode(uint8_t acMode, bool isPowerOn) {
+    // 如果電源關閉，始終返回 OFF 模式
+    if (!isPowerOn) {
+        return HAP_MODE_OFF;
     }
     
-    // 構建D1命令的payload
+    // 只有在電源開啟時才進行正常的模式轉換
+    switch (acMode) {
+        case AC_MODE_HEAT: return HAP_MODE_HEAT;
+        case AC_MODE_COOL: return HAP_MODE_COOL;
+        case AC_MODE_AUTO: return HAP_MODE_AUTO;
+        case AC_MODE_DRY:  return HAP_MODE_COOL;  // 除濕模式映射為製冷
+        case AC_MODE_FAN:  return HAP_MODE_AUTO;  // 送風模式映射為自動
+        default: return HAP_MODE_AUTO;
+    }
+}
+
+ThermostatController::ThermostatController(S21Protocol& p) : 
+    protocol(p),
+    power(false),
+    mode(AC_MODE_AUTO),
+    targetTemperature(21.0),
+    currentTemperature(21.0),
+    consecutiveErrors(0),
+    lastUpdateTime(0) {
+    
+    DEBUG_INFO_PRINT("[Controller] 開始初始化...\n");
+    update();  // 初始化時更新一次狀態
+    DEBUG_INFO_PRINT("[Controller] 初始化完成\n");
+}
+
+bool ThermostatController::setPower(bool on) {
     uint8_t payload[4];
-    payload[0] = currentMode != ThermostatMode::OFF ? '1' : '0';  // power
-    
-    // 轉換 HomeKit 模式到大金模式
-    payload[1] = '0' + convertHomeKitModeToDaikin(currentMode);
-    
-    // 編碼溫度
-    payload[2] = s21_encode_target_temp(temp);  // 直接使用用戶設置的溫度
-    payload[3] = AC_FAN_AUTO;  // 保持風扇設置不變
+    payload[0] = on ? '1' : '0';  // power
+    payload[1] = '0' + mode;      // 當前模式
+    payload[2] = s21_encode_target_temp(targetTemperature);
+    payload[3] = AC_FAN_AUTO;     // 風扇自動模式
     
     if (!protocol.sendCommand('D', '1', payload, 4)) {
-        DEBUG_ERROR_PRINT("[Controller] 錯誤：無法設置目標溫度\n");
+        DEBUG_ERROR_PRINT("[Controller] 錯誤：無法設置電源狀態\n");
         return false;
     }
-
-    targetTemperature = temp;  // 保存用戶設置的溫度
-    DEBUG_INFO_PRINT("[Controller] 目標溫度設置為 %.1f°C\n", temp);
     
+    power = on;
+    DEBUG_INFO_PRINT("[Controller] 電源狀態設置為：%s\n", on ? "開啟" : "關閉");
     return true;
 }
 
-bool ThermostatController::setTargetMode(ThermostatMode mode) {
-    if (!isValidModeTransition(mode)) {
-        return false;
+bool ThermostatController::setTargetMode(uint8_t newMode) {
+    // 將 HomeKit 模式轉換為空調模式
+    uint8_t acMode = convertHomeKitToACMode(newMode);
+    
+    // 如果是切換到關機模式，直接關閉電源
+    if (newMode == HAP_MODE_OFF) {
+        return setPower(false);
     }
-
-    // 構建D1命令的payload
-    uint8_t payload[4];
-    payload[0] = mode != ThermostatMode::OFF ? '1' : '0';  // power
     
-    // 轉換 HomeKit 模式到大金模式
-    payload[1] = '0' + convertHomeKitModeToDaikin(mode);
-    
-    // 如果從 OFF 切換到其他模式，設置適當的目標溫度
-    if (currentMode == ThermostatMode::OFF && mode != ThermostatMode::OFF) {
-        switch (mode) {
-            case ThermostatMode::COOL:
-                targetTemperature = std::max(MIN_TEMP, currentTemperature - 1.0f);
-                break;
-            case ThermostatMode::HEAT:
-                targetTemperature = std::min(MAX_TEMP, currentTemperature + 1.0f);
-                break;
-            case ThermostatMode::AUTO:
-                targetTemperature = currentTemperature;  // AUTO 模式保持當前溫度
-                break;
+    // 如果當前是關機狀態且不是切換到關機模式，需要先開機
+    if (!power && newMode != HAP_MODE_OFF) {
+        if (!setPower(true)) {
+            return false;
         }
     }
     
-    // 使用目標溫度
+    uint8_t payload[4];
+    payload[0] = power ? '1' : '0';  // 保持當前電源狀態
+    payload[1] = '0' + acMode;       // 新模式
     payload[2] = s21_encode_target_temp(targetTemperature);
-    payload[3] = AC_FAN_AUTO;  // 保持風扇設置不變
+    payload[3] = AC_FAN_AUTO;        // 風扇自動模式
     
     if (!protocol.sendCommand('D', '1', payload, 4)) {
         DEBUG_ERROR_PRINT("[Controller] 錯誤：無法設置目標模式\n");
         return false;
     }
-
-    targetMode = mode;
-    currentMode = mode;  // 立即更新當前模式，避免重複發送命令
     
-    DEBUG_INFO_PRINT("[Controller] 目標模式設置為：%d(%s)，目標溫度：%.1f°C\n", 
-                     static_cast<int>(mode), getControllerModeText(mode),
-                     targetTemperature);
+    mode = acMode;
+    DEBUG_INFO_PRINT("[Controller] 模式設置為：%d\n", newMode);
     return true;
 }
 
-float ThermostatController::getCurrentTemperature() const {
-  return currentTemperature;
-}
-
-float ThermostatController::getTargetTemperature() const {
-  return targetTemperature;
-}
-
-ThermostatMode ThermostatController::getCurrentMode() const {
-  return currentMode;
-}
-
-ThermostatMode ThermostatController::getTargetMode() const {
-  return targetMode;
-}
-
-void ThermostatController::loop() {
-  static unsigned long lastLoopTime = 0;
-  unsigned long currentTime = millis();
-  
-  // 每5秒輸出一次心跳信息，如果有連續錯誤則顯示警告
-  if (currentTime - lastLoopTime >= 5000) {
-    if (consecutiveErrors > 5) {
-      DEBUG_INFO_PRINT("[Controller] 運行中... 警告：可能未連接空調（%lu 次連續錯誤）\n", 
-                       consecutiveErrors);
-    } else {
-      DEBUG_INFO_PRINT("[Controller] 運行中... 距離上次更新：%lu ms\n", 
-                       currentTime - lastUpdateTime);
+bool ThermostatController::setTargetTemperature(float temperature) {
+    // 檢查溫度是否在有效範圍內
+    if (temperature < MIN_TEMP || temperature > MAX_TEMP || isnan(temperature)) {
+        DEBUG_ERROR_PRINT("[Controller] 錯誤：無效的溫度值 %.1f°C\n", temperature);
+        return false;
     }
-    lastLoopTime = currentTime;
-  }
-  
-  if (shouldUpdate()) {
-    DEBUG_VERBOSE_PRINT("[Controller] 開始執行狀態更新...\n");
-    lastUpdateTime = currentTime;  // 更新時間戳
     
-    // 獨立執行每個更新，確保一個失敗不影響其他
-    bool modeUpdateSuccess = updateCurrentMode();
-    bool tempUpdateSuccess = updateCurrentTemp();
+    uint8_t payload[4];
+    payload[0] = power ? '1' : '0';  // 保持當前電源狀態
+    payload[1] = '0' + mode;         // 保持當前模式
+    payload[2] = s21_encode_target_temp(temperature);
+    payload[3] = AC_FAN_AUTO;        // 風扇自動模式
     
-    #ifdef DEBUG_MODE
-    if (!modeUpdateSuccess || !tempUpdateSuccess) {
-      if (consecutiveErrors <= 5) {  // 只在初始幾次錯誤時顯示詳細信息
-        DEBUG_INFO_PRINT("[Controller] 狀態更新結果 - 模式：%s，溫度：%s\n",
-                       modeUpdateSuccess ? "成功" : "失敗",
-                       tempUpdateSuccess ? "成功" : "失敗");
-      }
+    if (!protocol.sendCommand('D', '1', payload, 4)) {
+        DEBUG_ERROR_PRINT("[Controller] 錯誤：無法設置目標溫度\n");
+        return false;
     }
-    #endif
     
-    DEBUG_VERBOSE_PRINT("[Controller] 狀態更新完成\n");
-  }
+    targetTemperature = temperature;
+    DEBUG_INFO_PRINT("[Controller] 目標溫度設置為：%.1f°C\n", temperature);
+    return true;
+}
+
+void ThermostatController::update() {
+    unsigned long currentTime = millis();
+    // 檢查是否達到更新間隔
+    if (currentTime - lastUpdateTime < UPDATE_INTERVAL) {
+        return;
+    }
+    lastUpdateTime = currentTime;
+
+    uint8_t payload[4];
+    size_t payloadLen;
+    uint8_t cmd0, cmd1;
+    
+    // 更新狀態
+    if (protocol.sendCommand('F', '1')) {
+        if (protocol.parseResponse(cmd0, cmd1, payload, payloadLen)) {
+            if (cmd0 == 'G' && cmd1 == '1' && payloadLen >= 4) {
+                power = payload[0] == '1';
+                mode = payload[1] - '0';
+                targetTemperature = s21_decode_target_temp(payload[2]);
+                
+                DEBUG_INFO_PRINT("[Controller] 狀態更新 - 電源：%s，模式：%d，目標溫度：%.1f°C\n",
+                               power ? "開啟" : "關閉", mode, targetTemperature);
+            }
+        }
+    }
+    
+    // 更新當前溫度
+    if (protocol.sendCommand('R', 'H')) {
+        if (protocol.parseResponse(cmd0, cmd1, payload, payloadLen)) {
+            if (cmd0 == 'S' && cmd1 == 'H' && payloadLen >= 4) {
+                float newTemp = s21_decode_float_sensor(payload);
+                if (abs(newTemp - currentTemperature) >= 0.5) {
+                    currentTemperature = newTemp;
+                    DEBUG_INFO_PRINT("[Controller] 當前溫度更新為：%.1f°C\n", currentTemperature);
+                }
+            }
+        }
+    }
 } 
