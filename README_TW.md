@@ -34,7 +34,9 @@ Copyright (c) 2024 DaiSpan
 ## 硬體需求
 
 - ESP32 開發板
+- - ESP32-S3-DevKitC-1（推薦使用）
 - TTL 轉 S21 轉接器
+- - TTL 轉 S21 轉接器（3.3V 電平）
 - 具有 S21 接口的大金空調
 
 ## 接腳配置

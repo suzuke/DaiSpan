@@ -35,8 +35,8 @@ Licensed under the MIT License. This means:
 
 ## Hardware Requirements
 
-- ESP32 development board
-- TTL to S21 adapter
+- ESP32-S3-DevKitC-1 (recommended)
+- TTL to S21 adapter (3.3V level)
 - Daikin air conditioner with S21 port
 
 ## Pin Configuration
