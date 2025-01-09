@@ -170,20 +170,21 @@ void ThermostatDevice::loop() {
         newCurrentMode = HAP_MODE_OFF;
     } else {
         uint8_t mode = controller.getTargetMode();
-        if (mode == HAP_MODE_AUTO) {
-            // 在 AUTO 模式下，根據當前溫度和目標溫度決定實際狀態
-            float targetTemp = controller.getTargetTemperature();
-            float currentTemp = controller.getCurrentTemperature();
-            if (currentTemp < targetTemp - 0.5) {  // 添加溫差閾值
-                newCurrentMode = HAP_MODE_HEAT;
-            } else if (currentTemp > targetTemp + 0.5) {  // 添加溫差閾值
-                newCurrentMode = HAP_MODE_COOL;
-            } else {
-                newCurrentMode = HAP_MODE_OFF;
-            }
-        } else {
-            newCurrentMode = mode;
-        }
+        // if (mode == HAP_MODE_AUTO) {
+        //     // 在 AUTO 模式下，根據當前溫度和目標溫度決定實際狀態
+        //     float targetTemp = controller.getTargetTemperature();
+        //     float currentTemp = controller.getCurrentTemperature();
+        //     if (currentTemp < targetTemp - 0.5) {  // 添加溫差閾值
+        //         newCurrentMode = HAP_MODE_HEAT;
+        //     } else if (currentTemp > targetTemp + 0.5) {  // 添加溫差閾值
+        //         newCurrentMode = HAP_MODE_COOL;
+        //     } else {
+        //         newCurrentMode = HAP_MODE_OFF;
+        //     }
+        // } else {
+        //     newCurrentMode = mode;
+        // }
+        newCurrentMode = mode;
     }
     
     // 只在實際狀態發生變化時更新

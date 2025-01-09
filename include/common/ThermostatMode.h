@@ -13,6 +13,7 @@
 #define AC_MODE_COOL    3  // 冷房模式
 #define AC_MODE_AUTO    1  // 自動模式
 #define AC_MODE_AUTO_2  0  // 自動模式 2
+#define AC_MODE_AUTO_3  7  // 自動模式 3
 #define AC_MODE_DRY     2  // 除濕模式
 #define AC_MODE_INVALID -1 // 無效模式
 
@@ -83,6 +84,7 @@ static const char* getACModeText(uint8_t acMode) {
         case AC_MODE_COOL: return "製冷";
         case AC_MODE_AUTO: return "自動";
         case AC_MODE_AUTO_2: return "自動 2";
+        case AC_MODE_AUTO_3: return "自動 3";
         case AC_MODE_DRY:  return "除濕";
         default: return "未知";
     }

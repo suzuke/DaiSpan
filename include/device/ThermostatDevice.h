@@ -22,7 +22,7 @@
 #define TEMP_STEP        0.5f    // 溫度調節步長
 
 // 更新間隔設定（毫秒）
-#define UPDATE_INTERVAL    1000   // 狀態更新間隔（1秒）
+#define UPDATE_INTERVAL    5000   // 狀態更新間隔（3秒）
 #define HEARTBEAT_INTERVAL 5000   // 心跳日誌間隔（5秒）
 
 class ThermostatDevice : public Service::Thermostat {

@@ -9,10 +9,6 @@ static constexpr float MAX_TEMP = 30.0;
 static constexpr float TEMP_STEP = 0.5;
 static constexpr float TEMP_THRESHOLD = 0.2f;
 
-// 更新間隔常量
-static constexpr unsigned long UPDATE_INTERVAL = 5000;  // 5秒更新一次
-static constexpr unsigned long ERROR_RESET_THRESHOLD = 5;  // 5次錯誤後重置
-
 ThermostatController::ThermostatController(S21Protocol& p) : 
     protocol(p),
     power(false),
@@ -101,11 +97,6 @@ bool ThermostatController::setTargetTemperature(float temperature) {
 
 void ThermostatController::update() {
     unsigned long currentTime = millis();
-    // 檢查是否達到更新間隔
-    if (currentTime - lastUpdateTime < UPDATE_INTERVAL) {
-        return;
-    }
-    lastUpdateTime = currentTime;
 
     uint8_t payload[4];
     size_t payloadLen;
@@ -118,16 +109,20 @@ void ThermostatController::update() {
                 bool newPower = payload[0] == '1';
                 uint8_t newMode = payload[1] - '0';
                 float newTargetTemp = s21_decode_target_temp(payload[2]);
+                uint8_t fanSpeed = payload[3];
+                uint8_t fanSpeedValue = convertACToFanSpeed(fanSpeed);
                 
-                // 添加詳細的模式日誌
-                DEBUG_INFO_PRINT("========== 空調模式狀態 ==========\n");
+                // 添加詳細的狀態日誌
+                DEBUG_INFO_PRINT("========== 空調狀態 ==========\n");
                 DEBUG_INFO_PRINT("電源狀態：%s\n", newPower ? "開啟" : "關閉");
                 DEBUG_INFO_PRINT("大金模式：%d (%s)\n", newMode, getACModeText(newMode));
                 DEBUG_INFO_PRINT("HomeKit模式：%d (%s)\n", 
                                convertACToHomeKitMode(newMode, newPower),
                                getHomeKitModeText(convertACToHomeKitMode(newMode, newPower)));
                 DEBUG_INFO_PRINT("目標溫度：%.1f°C\n", newTargetTemp);
-                DEBUG_INFO_PRINT("================================\n");
+                DEBUG_INFO_PRINT("風扇速度：原始字符='%c'(0x%02X), 轉換值=%d (%s)\n", 
+                               fanSpeed, fanSpeed, fanSpeedValue, getFanSpeedText(fanSpeedValue));
+                DEBUG_INFO_PRINT("==============================\n");
                 
                 power = newPower;
                 mode = newMode;

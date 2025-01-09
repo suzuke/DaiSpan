@@ -2,10 +2,6 @@
 #include "protocol/S21Utils.h"
 #include "common/Debug.h"
 
-// 定義溫度和狀態更新的閾值
-#define TEMP_UPDATE_THRESHOLD 0.5f  // 溫度更新閾值（攝氏度）
-#define STATUS_UPDATE_INTERVAL 5000  // 增加狀態更新間隔到5秒
-
 // 常量定義
 static constexpr uint32_t TIMEOUT_MS = 500;  // 通訊超時時間
 static constexpr size_t BUFFER_SIZE = 256;   // 緩衝區大小
