@@ -1,7 +1,6 @@
 #pragma once
 
-#include <Arduino.h>
-#include "S21Protocol.h"
+#include "../common/ThermostatMode.h"
 
 // Calculate packet checksum
 static inline uint8_t s21_checksum(uint8_t* buf, int len) {
@@ -46,23 +45,9 @@ static inline float s21_decode_float_sensor(const unsigned char* payload) {
 
 // Convert between Daikin and Faikin fan speed enums
 static inline unsigned char s21_encode_fan(int speed) {
-    switch (speed) {
-        case FAIKIN_FAN_AUTO:
-            return AC_FAN_AUTO;
-        case FAIKIN_FAN_QUIET:
-            return AC_FAN_QUIET;
-        default:
-            return speed - FAIKIN_FAN_1 + AC_FAN_1;
-    }
+    return convertFanSpeedToAC(speed);
 }
 
 static inline int s21_decode_fan(unsigned char v) {
-    switch (v) {
-        case AC_FAN_AUTO:
-            return FAIKIN_FAN_AUTO;
-        case AC_FAN_QUIET:
-            return FAIKIN_FAN_QUIET;
-        default:
-            return v - AC_FAN_1 + FAIKIN_FAN_1;
-    }
+    return convertACToFanSpeed(v);
 } 

@@ -16,13 +16,14 @@
 #define HAP_STATE_COOL      2
 
 // 溫度範圍和閾值
-#define TEMP_THRESHOLD    0.5f  // 溫度變化閾值
-#define MIN_TEMP         16.0f  // 最低溫度限制
-#define MAX_TEMP         30.0f  // 最高溫度限制
+#define TEMP_THRESHOLD    0.2f   // 溫度變化閾值（與 Controller 保持一致）
+#define MIN_TEMP         16.0f   // 最低溫度限制
+#define MAX_TEMP         30.0f   // 最高溫度限制
+#define TEMP_STEP        0.5f    // 溫度調節步長
 
 // 更新間隔設定（毫秒）
-#define UPDATE_INTERVAL    300  // 狀態更新間隔（0.3秒）
-#define HEARTBEAT_INTERVAL 5000  // 心跳日誌間隔（5秒）
+#define UPDATE_INTERVAL    1000   // 狀態更新間隔（1秒）
+#define HEARTBEAT_INTERVAL 5000   // 心跳日誌間隔（5秒）
 
 class ThermostatDevice : public Service::Thermostat {
 private:

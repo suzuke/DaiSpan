@@ -5,9 +5,9 @@
 #include "common/Debug.h"
 #include "WiFi.h"
 
-// 使用ESP32的第二個串口（GPIO16=RX2, GPIO17=TX2）
-#define S21_RX_PIN 16
-#define S21_TX_PIN 17
+// 使用ESP32的第二個串口（GPIO14=RX2, GPIO13=TX2）
+#define S21_RX_PIN 14
+#define S21_TX_PIN 13
 
 // 全局變量
 S21Protocol* s21Protocol = nullptr;
@@ -79,7 +79,7 @@ void setup() {
   DEBUG_INFO_PRINT("\n[Main] 開始啟動...\n");
   
   // 先初始化 HomeSpan
-  homeSpan.setWifiCredentials("your_ssid", "your_password");
+  homeSpan.setWifiCredentials("suzuke", "0978362789");
   homeSpan.setWifiCallback(wifiCallback);
   homeSpan.setPairingCode("11122333");
   homeSpan.setStatusPin(2);  // 使用 LED 指示狀態

@@ -7,39 +7,11 @@
 static constexpr float MIN_TEMP = 16.0;
 static constexpr float MAX_TEMP = 30.0;
 static constexpr float TEMP_STEP = 0.5;
+static constexpr float TEMP_THRESHOLD = 0.2f;
 
 // 更新間隔常量
 static constexpr unsigned long UPDATE_INTERVAL = 5000;  // 5秒更新一次
 static constexpr unsigned long ERROR_RESET_THRESHOLD = 5;  // 5次錯誤後重置
-
-// HomeKit 模式轉換為空調模式
-static uint8_t convertHomeKitToACMode(uint8_t hapMode) {
-    switch (hapMode) {
-        case HAP_MODE_OFF:  return AC_MODE_AUTO;  // 關機狀態用自動模式
-        case HAP_MODE_HEAT: return AC_MODE_HEAT;  // 製熱
-        case HAP_MODE_COOL: return AC_MODE_COOL;  // 製冷
-        case HAP_MODE_AUTO: return AC_MODE_AUTO;  // 自動
-        default: return AC_MODE_AUTO;
-    }
-}
-
-// 空調模式轉換為 HomeKit 模式
-static uint8_t convertACToHomeKitMode(uint8_t acMode, bool isPowerOn) {
-    // 如果電源關閉，始終返回 OFF 模式
-    if (!isPowerOn) {
-        return HAP_MODE_OFF;
-    }
-    
-    // 只有在電源開啟時才進行正常的模式轉換
-    switch (acMode) {
-        case AC_MODE_HEAT: return HAP_MODE_HEAT;
-        case AC_MODE_COOL: return HAP_MODE_COOL;
-        case AC_MODE_AUTO: return HAP_MODE_AUTO;
-        case AC_MODE_DRY:  return HAP_MODE_COOL;  // 除濕模式映射為製冷
-        case AC_MODE_FAN:  return HAP_MODE_AUTO;  // 送風模式映射為自動
-        default: return HAP_MODE_AUTO;
-    }
-}
 
 ThermostatController::ThermostatController(S21Protocol& p) : 
     protocol(p),
@@ -143,9 +115,23 @@ void ThermostatController::update() {
     if (protocol.sendCommand('F', '1')) {
         if (protocol.parseResponse(cmd0, cmd1, payload, payloadLen)) {
             if (cmd0 == 'G' && cmd1 == '1' && payloadLen >= 4) {
-                power = payload[0] == '1';
-                mode = payload[1] - '0';
-                targetTemperature = s21_decode_target_temp(payload[2]);
+                bool newPower = payload[0] == '1';
+                uint8_t newMode = payload[1] - '0';
+                float newTargetTemp = s21_decode_target_temp(payload[2]);
+                
+                // 添加詳細的模式日誌
+                DEBUG_INFO_PRINT("========== 空調模式狀態 ==========\n");
+                DEBUG_INFO_PRINT("電源狀態：%s\n", newPower ? "開啟" : "關閉");
+                DEBUG_INFO_PRINT("大金模式：%d (%s)\n", newMode, getACModeText(newMode));
+                DEBUG_INFO_PRINT("HomeKit模式：%d (%s)\n", 
+                               convertACToHomeKitMode(newMode, newPower),
+                               getHomeKitModeText(convertACToHomeKitMode(newMode, newPower)));
+                DEBUG_INFO_PRINT("目標溫度：%.1f°C\n", newTargetTemp);
+                DEBUG_INFO_PRINT("================================\n");
+                
+                power = newPower;
+                mode = newMode;
+                targetTemperature = newTargetTemp;
                 
                 DEBUG_INFO_PRINT("[Controller] 狀態更新 - 電源：%s，模式：%d，目標溫度：%.1f°C\n",
                                power ? "開啟" : "關閉", mode, targetTemperature);
@@ -157,11 +143,47 @@ void ThermostatController::update() {
     if (protocol.sendCommand('R', 'H')) {
         if (protocol.parseResponse(cmd0, cmd1, payload, payloadLen)) {
             if (cmd0 == 'S' && cmd1 == 'H' && payloadLen >= 4) {
-                float newTemp = s21_decode_float_sensor(payload);
-                if (abs(newTemp - currentTemperature) >= 0.5) {
-                    currentTemperature = newTemp;
-                    DEBUG_INFO_PRINT("[Controller] 當前溫度更新為：%.1f°C\n", currentTemperature);
+                // 打印原始數據以便調試
+                DEBUG_INFO_PRINT("[Controller] 收到溫度數據：[%c%c%c%c]\n",
+                               payload[0], payload[1], payload[2], payload[3]);
+                
+                // 檢查數據格式
+                bool isValidFormat = true;
+                for (int i = 0; i < 3; i++) {
+                    if (payload[i] < '0' || payload[i] > '9') {
+                        isValidFormat = false;
+                        break;
+                    }
                 }
+                if (payload[3] != '-' && payload[3] != '+') {
+                    isValidFormat = false;
+                }
+                
+                if (!isValidFormat) {
+                    DEBUG_ERROR_PRINT("[Controller] 錯誤：無效的溫度數據格式\n");
+                    return;
+                }
+                
+                // 解析溫度
+                int rawTemp = s21_decode_int_sensor(payload);
+                float newTemp = (float)rawTemp * 0.1f;
+                
+                DEBUG_INFO_PRINT("[Controller] 溫度解析：原始值=%d，轉換後=%.1f°C\n",
+                               rawTemp, newTemp);
+                
+                // 檢查溫度是否在合理範圍內
+                if (newTemp < -50.0f || newTemp > 100.0f) {
+                    DEBUG_ERROR_PRINT("[Controller] 錯誤：溫度值超出合理範圍\n");
+                    return;
+                }
+                
+                // 更新溫度
+                currentTemperature = newTemp;
+                // if (abs(newTemp - currentTemperature) >= TEMP_THRESHOLD) {
+                //     DEBUG_INFO_PRINT("[Controller] 溫度變化：%.1f°C -> %.1f°C\n",
+                //                    currentTemperature, newTemp);
+                //     currentTemperature = newTemp;
+                // }
             }
         }
     }

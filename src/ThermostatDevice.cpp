@@ -151,14 +151,15 @@ void ThermostatDevice::loop() {
     
     // 同步目標溫度
     float newTargetTemp = controller.getTargetTemperature();
-    if (abs(targetTemp->getVal() - newTargetTemp) >= TEMP_THRESHOLD) {
+    if (abs(targetTemp->getVal<float>() - newTargetTemp) >= TEMP_THRESHOLD) {
         targetTemp->setVal(newTargetTemp);
         DEBUG_INFO_PRINT("[Device] 更新目標溫度：%.1f°C\n", newTargetTemp);
     }
     
     // 同步當前溫度
     float newCurrentTemp = controller.getCurrentTemperature();
-    if (abs(currentTemp->getVal() - newCurrentTemp) >= TEMP_THRESHOLD) {
+    if (abs(currentTemp->getVal<float>() - newCurrentTemp) >= TEMP_THRESHOLD) {
+        DEBUG_VERBOSE_PRINT("[Device] 原本溫度：%.1f°C, 新溫度：%.1f°C\n", currentTemp->getVal<float>(), newCurrentTemp);
         currentTemp->setVal(newCurrentTemp);
         DEBUG_INFO_PRINT("[Device] 更新當前溫度：%.1f°C\n", newCurrentTemp);
     }

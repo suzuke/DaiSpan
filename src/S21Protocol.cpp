@@ -273,30 +273,6 @@ bool S21Protocol::isFeatureSupported(const S21Features& feature) const {
     return memcmp(&features, &feature, sizeof(S21Features)) == 0;
 }
 
-// 模式映射函數
-uint8_t S21Protocol::mapDaikinMode(uint8_t daikinMode) {
-    switch (daikinMode) {
-        case 2: return AC_MODE_DRY;       // DRY
-        case 3: return AC_MODE_COOL;      // COOL
-        case 4: return AC_MODE_HEAT;      // HEAT
-        case 6: return AC_MODE_FAN;       // FAN
-        case 7: return AC_MODE_AUTO;      // AUTO
-        default: return AC_MODE_AUTO;     // 未知模式預設為 AUTO
-    }
-}
-
-// 獲取大金空調模式的文字描述
-const char* S21Protocol::getDaikinModeText(uint8_t daikinMode) {
-    switch (daikinMode) {
-        case 2: return "DRY";
-        case 3: return "COOL";
-        case 4: return "HEAT";
-        case 6: return "FAN";
-        case 7: return "AUTO";
-        default: return "UNKNOWN";
-    }
-}
-
 bool S21Protocol::parseResponse(uint8_t& cmd0, uint8_t& cmd1, uint8_t* payload, size_t& payloadLen) {
     static uint8_t rxBuffer[BUFFER_SIZE];
     size_t index = 0;
@@ -343,7 +319,7 @@ bool S21Protocol::parseResponse(uint8_t& cmd0, uint8_t& cmd1, uint8_t* payload, 
         return false;
     }
     
-    // 檢查數據��最小長度
+    // 檢查數據最小長度
     if (index < 5) {
         DEBUG_ERROR_PRINT("[S21] 錯誤：數據包太短（%d 字節）\n", index);
         return false;
@@ -370,14 +346,14 @@ bool S21Protocol::parseResponse(uint8_t& cmd0, uint8_t& cmd1, uint8_t* payload, 
     if (cmd0 == 'G' && cmd1 == '1' && payloadLen >= 4) {
         bool power = payload[0] == '1';
         uint8_t rawMode = payload[1] - '0';  // 將 ASCII 字符轉換為數字
-        uint8_t mappedMode = mapDaikinMode(rawMode);
+        uint8_t mappedMode = convertACToHomeKitMode(rawMode, power);
         float targetTemp = s21_decode_target_temp(payload[2]);
         uint8_t fanSpeed = s21_decode_fan(payload[3]);
         
-        DEBUG_INFO_PRINT("[S21] 空調狀態更新: 電源=%d 大金模式=%d(%s) -> HomeKit模式=%d 目標溫度=%.1f°C 風扇=%s\n",
-                        power, rawMode, getDaikinModeText(rawMode), mappedMode, targetTemp,
-                        fanSpeed == FAIKIN_FAN_AUTO ? "AUTO" :
-                        fanSpeed == FAIKIN_FAN_QUIET ? "QUIET" : "SPEED");
+        DEBUG_INFO_PRINT("[S21] 空調狀態更新: 電源=%d 大金模式=%d(%s) -> HomeKit模式=%d(%s) 目標溫度=%.1f°C 風扇=%s\n",
+                        power, rawMode, getACModeText(rawMode), 
+                        mappedMode, getHomeKitModeText(mappedMode),
+                        targetTemp, getFanSpeedText(fanSpeed));
     }
     
     DEBUG_VERBOSE_PRINT("[S21] 成功解析回應：cmd=%c%c，payload長度=%d\n",
