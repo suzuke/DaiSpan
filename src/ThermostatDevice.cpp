@@ -32,17 +32,17 @@ ThermostatDevice::ThermostatDevice(IThermostatControl& thermostatControl)
     targetTemp->setRange(MIN_TEMP, MAX_TEMP, 0.5);
     
     // 初始化模式
-    currentMode = new Characteristic::CurrentHeatingCoolingState(0);
+    currentMode = new Characteristic::CurrentHeatingCoolingState(HAP_MODE_OFF);
     currentMode->setRange(0, 2);  // 確保範圍在 0-2
     
-    targetMode = new Characteristic::TargetHeatingCoolingState(0);
+    targetMode = new Characteristic::TargetHeatingCoolingState(HAP_MODE_OFF);
     targetMode->setValidValues(0,1,2,3);
     
     // 添加溫度單位特性（攝氏度）
     new Characteristic::TemperatureDisplayUnits(0);  // 0 = 攝氏度
     
     DEBUG_INFO_PRINT("[Device] 初始化完成 - 當前溫度：%.1f°C，目標溫度：%.1f°C，當前模式：%d(%s)\n",
-                   currentTemp->getVal(), targetTemp->getVal(), 
+                   currentTemp->getVal<float>(), targetTemp->getVal<float>(), 
                    currentMode->getVal(), getHomeKitModeText(currentMode->getVal()));
 }
 
@@ -143,6 +143,10 @@ void ThermostatDevice::loop() {
     
     // 同步目標模式
     uint8_t newTargetMode = controller.getTargetMode();
+    // 確保模式值在有效範圍內
+    if (newTargetMode > HAP_MODE_AUTO) {
+        newTargetMode = HAP_MODE_OFF;
+    }
     if (targetMode->getVal() != newTargetMode) {
         targetMode->setVal(newTargetMode);
         DEBUG_INFO_PRINT("[Device] 更新目標模式：%d(%s)\n", 
@@ -169,22 +173,11 @@ void ThermostatDevice::loop() {
     if (!controller.getPower()) {
         newCurrentMode = HAP_MODE_OFF;
     } else {
-        uint8_t mode = controller.getTargetMode();
-        // if (mode == HAP_MODE_AUTO) {
-        //     // 在 AUTO 模式下，根據當前溫度和目標溫度決定實際狀態
-        //     float targetTemp = controller.getTargetTemperature();
-        //     float currentTemp = controller.getCurrentTemperature();
-        //     if (currentTemp < targetTemp - 0.5) {  // 添加溫差閾值
-        //         newCurrentMode = HAP_MODE_HEAT;
-        //     } else if (currentTemp > targetTemp + 0.5) {  // 添加溫差閾值
-        //         newCurrentMode = HAP_MODE_COOL;
-        //     } else {
-        //         newCurrentMode = HAP_MODE_OFF;
-        //     }
-        // } else {
-        //     newCurrentMode = mode;
-        // }
-        newCurrentMode = mode;
+        newCurrentMode = controller.getTargetMode();
+        // 確保模式值在有效範圍內
+        if (newCurrentMode > HAP_MODE_COOL) {
+            newCurrentMode = HAP_MODE_OFF;
+        }
     }
     
     // 只在實際狀態發生變化時更新

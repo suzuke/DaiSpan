@@ -5,9 +5,18 @@
 #include "common/Debug.h"
 #include "WiFi.h"
 
-// 使用ESP32的第二個串口（GPIO14=RX2, GPIO13=TX2）
+
+//根據platformio.ini的env選擇進行define
+#if defined(ESP32C3_SUPER_MINI)
+#define S21_RX_PIN 4
+#define S21_TX_PIN 3
+#elif defined(ESP32S3_SUPER_MINI)
+#define S21_RX_PIN 13
+#define S21_TX_PIN 12
+#else
 #define S21_RX_PIN 14
 #define S21_TX_PIN 13
+#endif
 
 // 全局變量
 S21Protocol* s21Protocol = nullptr;
@@ -25,37 +34,52 @@ void initializeDevice() {
   
   DEBUG_INFO_PRINT("[Main] 開始初始化串口通訊...\n");
   
-  // 配置S21通訊用的串口
-  Serial2.begin(2400, SERIAL_8E2, S21_RX_PIN, S21_TX_PIN);
-  delay(100);  // 等待串口穩定
-  DEBUG_INFO_PRINT("[Main] Serial2 初始化完成\n");
+  // 分步驟初始化，每步都加入延遲和檢查
+  Serial1.begin(2400, SERIAL_8E2, S21_RX_PIN, S21_TX_PIN);
+  delay(200);
   
-  // 創建S21協議和恆溫器控制器
-  s21Protocol = new S21Protocol(Serial2);
-  delay(100);  // 等待協議初始化
+  s21Protocol = new S21Protocol(Serial1);
+  if (!s21Protocol) {
+    DEBUG_ERROR_PRINT("[Main] S21Protocol 創建失敗\n");
+    return;
+  }
+  delay(200);
   
-  // 初始化S21協議
   if (!s21Protocol->begin()) {
     DEBUG_ERROR_PRINT("[Main] S21Protocol 初始化失敗\n");
-    return;  // 如果初始化失敗，不繼續後續步驟
+    return;
   }
-  DEBUG_INFO_PRINT("[Main] S21Protocol 初始化完成\n");
+  delay(200);
   
   thermostatController = new ThermostatController(*s21Protocol);
-  delay(100);  // 等待控制器初始化
-  DEBUG_INFO_PRINT("[Main] ThermostatController 初始化完成\n");
+  if (!thermostatController) {
+    DEBUG_ERROR_PRINT("[Main] ThermostatController 創建失敗\n");
+    return;
+  }
+  delay(200);
   
   // 創建 HomeSpan 配件
   accessory = new SpanAccessory();
-    new Service::AccessoryInformation();
-      new Characteristic::Name("智能恆溫器");
-      new Characteristic::Manufacturer("DaiSpan");
-      new Characteristic::SerialNumber("123-ABC");
-      new Characteristic::Model("恆溫器 v1.0");
-      new Characteristic::FirmwareRevision("1.0");
-      new Characteristic::Identify();
-    
-    thermostatDevice = new ThermostatDevice(*thermostatController);
+  if (!accessory) {
+    DEBUG_ERROR_PRINT("[Main] 創建 SpanAccessory 失敗\n");
+    return;
+  }
+
+  // 創建配件信息服務
+  new Service::AccessoryInformation();
+  new Characteristic::Name("智能恆溫器");
+  new Characteristic::Manufacturer("DaiSpan");
+  new Characteristic::SerialNumber("123-ABC");
+  new Characteristic::Model("恆溫器 v1.0");
+  new Characteristic::FirmwareRevision("1.0");
+  new Characteristic::Identify();
+
+  // 創建恆溫器設備
+  thermostatDevice = new ThermostatDevice(*thermostatController);
+  if (!thermostatDevice) {
+    DEBUG_ERROR_PRINT("[Main] 創建 ThermostatDevice 失敗\n");
+    return;
+  }
   
   DEBUG_INFO_PRINT("[Main] HomeSpan 配件初始化完成\n");
   deviceInitialized = true;
@@ -78,25 +102,46 @@ void setup() {
   Serial.begin(115200);  // 調試用串口
   DEBUG_INFO_PRINT("\n[Main] 開始啟動...\n");
   
-  // 先初始化 HomeSpan
+  #if defined(ESP32C3_SUPER_MINI)
+    WiFi.setTxPower(WIFI_POWER_8_5dBm);
+    // 監控記憶體使用情況
+    DEBUG_INFO_PRINT("[Main] 可用堆內存: %d bytes\n", ESP.getFreeHeap());
+  #endif
+
+  // 延遲初始化
+  delay(1000);  // 給系統一些穩定時間
+  
   homeSpan.setWifiCredentials("suzuke", "0978362789");
   homeSpan.setWifiCallback(wifiCallback);
   homeSpan.setPairingCode("11122333");
-  homeSpan.setStatusPin(2);  // 使用 LED 指示狀態
-  homeSpan.setHostNameSuffix("");  // 使用 MAC 地址作為後綴
-  homeSpan.setQRID("HSPN");  // 設置 Setup ID
-  homeSpan.enableWebLog(500,"pool.ntp.org","UTC-8","log");  // 啟用 web log，保存最近500條記錄
+  homeSpan.setStatusPin(2);
+  homeSpan.setHostNameSuffix("");
+  homeSpan.setQRID("HSPN");
+  homeSpan.enableWebLog(50,"pool.ntp.org","UTC-8","log");  // 進一步減少日誌條目數量
 
+  // 初始化 HomeSpan
   homeSpan.begin(Category::Thermostats, "DaiSpan Thermostat");
   
   DEBUG_INFO_PRINT("[Main] HomeSpan 初始化完成\n");
+  
+  // 延遲設備初始化並監控記憶體
+  delay(1000);
+  DEBUG_INFO_PRINT("[Main] 初始化前可用堆內存: %d bytes\n", ESP.getFreeHeap());
   initializeDevice();
+  DEBUG_INFO_PRINT("[Main] 初始化後可用堆內存: %d bytes\n", ESP.getFreeHeap());
 }
 
 void loop() {
   static unsigned long lastLoopTime = 0;
   unsigned long currentTime = millis();
   
+  #if defined(ESP32C3_SUPER_MINI)
+    if (WiFi.status() == WL_DISCONNECTED &&
+    WiFi.getTxPower() != WIFI_POWER_8_5dBm) {
+    WiFi.setTxPower(WIFI_POWER_8_5dBm);
+  }
+  #endif
+
   // 每5秒輸出一次心跳信息
   if (currentTime - lastLoopTime >= HEARTBEAT_INTERVAL) {
     DEBUG_INFO_PRINT("[Main] 主循環運行中... WiFi：%s，設備：%s，IP：%s\n", 

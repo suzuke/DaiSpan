@@ -39,7 +39,7 @@
 // HomeKit 模式轉換函數
 static uint8_t convertHomeKitToACMode(uint8_t hapMode) {
     switch (hapMode) {
-        case HAP_MODE_OFF:  return AC_MODE_AUTO;  // 關機狀態用自動模式
+        case HAP_MODE_OFF:  return AC_MODE_INVALID;  // 關機狀態用自動模式
         case HAP_MODE_HEAT: return AC_MODE_HEAT;  // 製熱
         case HAP_MODE_COOL: return AC_MODE_COOL;  // 製冷
         case HAP_MODE_AUTO: return AC_MODE_AUTO;  // 自動
@@ -58,7 +58,10 @@ static uint8_t convertACToHomeKitMode(uint8_t acMode, bool isPowerOn) {
     switch (acMode) {
         case AC_MODE_HEAT: return HAP_MODE_HEAT;  // 製熱
         case AC_MODE_COOL: return HAP_MODE_COOL;  // 製冷
-        case AC_MODE_AUTO: return HAP_MODE_AUTO;  // 自動
+        case AC_MODE_AUTO:   // 自動模式
+        case AC_MODE_AUTO_2: // 自動模式 2
+        case AC_MODE_AUTO_3: // 自動模式 3
+            return HAP_MODE_AUTO;  // 所有自動模式都映射為 HomeKit 自動
         case AC_MODE_DRY:  return HAP_MODE_AUTO;  // 除濕模式映射為自動
         case AC_MODE_FAN:  return HAP_MODE_AUTO;  // 送風模式映射為自動
         default: return HAP_MODE_AUTO;

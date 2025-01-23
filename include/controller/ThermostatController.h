@@ -12,6 +12,7 @@ private:
     uint8_t mode;
     float targetTemperature;
     float currentTemperature;
+    uint8_t fanSpeed;
     unsigned long consecutiveErrors;
     unsigned long lastUpdateTime;
 

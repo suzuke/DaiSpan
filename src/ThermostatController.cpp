@@ -15,6 +15,7 @@ ThermostatController::ThermostatController(S21Protocol& p) :
     mode(AC_MODE_AUTO),
     targetTemperature(21.0),
     currentTemperature(21.0),
+    fanSpeed(AC_FAN_AUTO),  // 初始化風扇速度為自動
     consecutiveErrors(0),
     lastUpdateTime(0) {
     
@@ -28,7 +29,7 @@ bool ThermostatController::setPower(bool on) {
     payload[0] = on ? '1' : '0';  // power
     payload[1] = '0' + mode;      // 當前模式
     payload[2] = s21_encode_target_temp(targetTemperature);
-    payload[3] = AC_FAN_AUTO;     // 風扇自動模式
+    payload[3] = fanSpeed;        // 使用當前風扇模式
     
     if (!protocol.sendCommand('D', '1', payload, 4)) {
         DEBUG_ERROR_PRINT("[Controller] 錯誤：無法設置電源狀態\n");
@@ -60,7 +61,7 @@ bool ThermostatController::setTargetMode(uint8_t newMode) {
     payload[0] = power ? '1' : '0';  // 保持當前電源狀態
     payload[1] = '0' + acMode;       // 新模式
     payload[2] = s21_encode_target_temp(targetTemperature);
-    payload[3] = AC_FAN_AUTO;        // 風扇自動模式
+    payload[3] = fanSpeed;           // 使用當前風扇模式
     
     if (!protocol.sendCommand('D', '1', payload, 4)) {
         DEBUG_ERROR_PRINT("[Controller] 錯誤：無法設置目標模式\n");
@@ -83,7 +84,7 @@ bool ThermostatController::setTargetTemperature(float temperature) {
     payload[0] = power ? '1' : '0';  // 保持當前電源狀態
     payload[1] = '0' + mode;         // 保持當前模式
     payload[2] = s21_encode_target_temp(temperature);
-    payload[3] = AC_FAN_AUTO;        // 風扇自動模式
+    payload[3] = fanSpeed;           // 使用當前風扇模式
     
     if (!protocol.sendCommand('D', '1', payload, 4)) {
         DEBUG_ERROR_PRINT("[Controller] 錯誤：無法設置目標溫度\n");
@@ -109,8 +110,8 @@ void ThermostatController::update() {
                 bool newPower = payload[0] == '1';
                 uint8_t newMode = payload[1] - '0';
                 float newTargetTemp = s21_decode_target_temp(payload[2]);
-                uint8_t fanSpeed = payload[3];
-                uint8_t fanSpeedValue = convertACToFanSpeed(fanSpeed);
+                uint8_t newFanSpeed = payload[3];  // 保存新的風扇速度
+                uint8_t fanSpeedValue = convertACToFanSpeed(newFanSpeed);
                 
                 // 添加詳細的狀態日誌
                 DEBUG_INFO_PRINT("========== 空調狀態 ==========\n");
@@ -121,12 +122,13 @@ void ThermostatController::update() {
                                getHomeKitModeText(convertACToHomeKitMode(newMode, newPower)));
                 DEBUG_INFO_PRINT("目標溫度：%.1f°C\n", newTargetTemp);
                 DEBUG_INFO_PRINT("風扇速度：原始字符='%c'(0x%02X), 轉換值=%d (%s)\n", 
-                               fanSpeed, fanSpeed, fanSpeedValue, getFanSpeedText(fanSpeedValue));
+                               newFanSpeed, newFanSpeed, fanSpeedValue, getFanSpeedText(fanSpeedValue));
                 DEBUG_INFO_PRINT("==============================\n");
                 
                 power = newPower;
                 mode = newMode;
                 targetTemperature = newTargetTemp;
+                fanSpeed = newFanSpeed;  // 更新當前風扇速度
                 
                 DEBUG_INFO_PRINT("[Controller] 狀態更新 - 電源：%s，模式：%d，目標溫度：%.1f°C\n",
                                power ? "開啟" : "關閉", mode, targetTemperature);
@@ -163,7 +165,7 @@ void ThermostatController::update() {
                 int rawTemp = s21_decode_int_sensor(payload);
                 float newTemp = (float)rawTemp * 0.1f;
                 
-                DEBUG_INFO_PRINT("[Controller] 溫度解析：原始值=%d，轉換後=%.1f°C\n",
+                DEBUG_VERBOSE_PRINT("[Controller] 溫度解析：原始值=%d，轉換後=%.1f°C\n",
                                rawTemp, newTemp);
                 
                 // 檢查溫度是否在合理範圍內
