@@ -78,6 +78,7 @@ void initializeMonitoring() {
     html += "</div>";
     html += "<div style=\"text-align:center;\">";
     html += "<a href=\"/status\" class=\"button\">📊 詳細狀態</a>";
+    html += "<a href=\"/wifi\" class=\"button\">📶 WiFi配置</a>";
     html += "<a href=\"/ota\" class=\"button\">🔄 OTA更新</a>";
     html += "</div></div></body></html>";
     webServer->send(200, "text/html", html);
@@ -116,6 +117,147 @@ void initializeMonitoring() {
     html += "<p><a href=\"/\">⬅️ 返回主頁</a></p>";
     html += "</div></body></html>";
     webServer->send(200, "text/html", html);
+  });
+  
+  // WiFi配置頁面
+  webServer->on("/wifi", [](){
+    String html = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">";
+    html += "<title>WiFi 配置</title>";
+    html += "<style>body{font-family:Arial,sans-serif;margin:20px;background:#f0f0f0;}";
+    html += ".container{max-width:500px;margin:0 auto;background:white;padding:20px;border-radius:10px;}";
+    html += ".network{background:#f8f9fa;border:1px solid #dee2e6;padding:10px;margin:5px 0;border-radius:5px;cursor:pointer;}";
+    html += ".network:hover{background:#e9ecef;}";
+    html += ".form-group{margin:15px 0;}";
+    html += "label{display:block;margin-bottom:5px;font-weight:bold;}";
+    html += "input[type=text],input[type=password]{width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;box-sizing:border-box;}";
+    html += ".button{background:#007cba;color:white;padding:10px 20px;border:none;border-radius:5px;cursor:pointer;}";
+    html += ".button:hover{background:#006ba6;}";
+    html += ".warning{background:#fff3cd;border:1px solid #ffeaa7;padding:15px;border-radius:5px;margin:15px 0;}";
+    html += "</style></head><body>";
+    html += "<div class=\"container\"><h1>📶 WiFi 配置</h1>";
+    html += "<div class=\"warning\">⚠️ 配置新WiFi後設備將重啟，HomeKit配對狀態會保持。</div>";
+    
+    // 掃描WiFi網路
+    html += "<h3>可用網路 <button type=\"button\" class=\"button\" onclick=\"rescanNetworks()\" style=\"font-size:12px;padding:5px 10px;\">🔄 重新掃描</button></h3>";
+    html += "<div id=\"networks\">";
+    
+    int networkCount = WiFi.scanNetworks();
+    if (networkCount > 0) {
+      for (int i = 0; i < networkCount && i < 10; i++) { // 最多顯示10個網路
+        String ssid = WiFi.SSID(i);
+        int rssi = WiFi.RSSI(i);
+        String security = (WiFi.encryptionType(i) == WIFI_AUTH_OPEN) ? "開放" : "加密";
+        
+        html += "<div class=\"network\" onclick=\"selectNetwork('" + ssid + "')\">";
+        html += "<strong>" + ssid + "</strong> (" + security + ") 信號: " + String(rssi) + "dBm";
+        html += "</div>";
+      }
+    } else {
+      html += "<div style=\"padding:15px;text-align:center;color:#666;\">沒有找到WiFi網路，請點擊重新掃描</div>";
+    }
+    
+    html += "</div>";
+    html += "<form action=\"/wifi-save\" method=\"POST\">";
+    html += "<div class=\"form-group\">";
+    html += "<label for=\"ssid\">網路名稱 (SSID):</label>";
+    html += "<input type=\"text\" id=\"ssid\" name=\"ssid\" required>";
+    html += "</div>";
+    html += "<div class=\"form-group\">";
+    html += "<label for=\"password\">密碼:</label>";
+    html += "<input type=\"password\" id=\"password\" name=\"password\">";
+    html += "</div>";
+    html += "<button type=\"submit\" class=\"button\">💾 保存並重啟</button>";
+    html += "</form>";
+    html += "<script>";
+    html += "function selectNetwork(ssid) {";
+    html += "  document.getElementById('ssid').value = ssid;";
+    html += "}";
+    html += "function rescanNetworks() {";
+    html += "  var btn = document.querySelector('button');";
+    html += "  btn.innerHTML = '⏳ 掃描中...';";
+    html += "  btn.disabled = true;";
+    html += "  fetch('/wifi-scan').then(response => response.text()).then(data => {";
+    html += "    document.getElementById('networks').innerHTML = data;";
+    html += "    btn.innerHTML = '🔄 重新掃描';";
+    html += "    btn.disabled = false;";
+    html += "  }).catch(error => {";
+    html += "    console.error('掃描失敗:', error);";
+    html += "    btn.innerHTML = '❌ 掃描失敗';";
+    html += "    setTimeout(() => {";
+    html += "      btn.innerHTML = '🔄 重新掃描';";
+    html += "      btn.disabled = false;";
+    html += "    }, 2000);";
+    html += "  });";
+    html += "}";
+    html += "</script>";
+    html += "<p><a href=\"/\">⬅️ 返回主頁</a></p>";
+    html += "</div></body></html>";
+    webServer->send(200, "text/html", html);
+  });
+  
+  // WiFi掃描API
+  webServer->on("/wifi-scan", [](){
+    String html = "";
+    
+    DEBUG_INFO_PRINT("[Main] 開始WiFi掃描...\n");
+    int networkCount = WiFi.scanNetworks();
+    DEBUG_INFO_PRINT("[Main] 掃描完成，找到 %d 個網路\n", networkCount);
+    
+    if (networkCount > 0) {
+      for (int i = 0; i < networkCount && i < 10; i++) { // 最多顯示10個網路
+        String ssid = WiFi.SSID(i);
+        int rssi = WiFi.RSSI(i);
+        String security = (WiFi.encryptionType(i) == WIFI_AUTH_OPEN) ? "開放" : "加密";
+        
+        html += "<div class=\"network\" onclick=\"selectNetwork('" + ssid + "')\">";
+        html += "<strong>" + ssid + "</strong> (" + security + ") 信號: " + String(rssi) + "dBm";
+        html += "</div>";
+      }
+    } else {
+      html += "<div style=\"padding:15px;text-align:center;color:#666;\">沒有找到WiFi網路，請重試</div>";
+    }
+    
+    webServer->send(200, "text/html", html);
+  });
+  
+  // WiFi配置保存處理
+  webServer->on("/wifi-save", HTTP_POST, [](){
+    String ssid = webServer->arg("ssid");
+    String password = webServer->arg("password");
+    
+    if (ssid.length() > 0) {
+      DEBUG_INFO_PRINT("[Main] 保存新WiFi配置: SSID=%s\n", ssid.c_str());
+      
+      // 保存新的WiFi配置
+      configManager.setWiFiCredentials(ssid, password);
+      
+      String html = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">";
+      html += "<title>配置已保存</title>";
+      html += "<style>body{font-family:Arial,sans-serif;margin:20px;background:#f0f0f0;}";
+      html += ".container{max-width:400px;margin:0 auto;background:white;padding:20px;border-radius:10px;text-align:center;}";
+      html += ".success{background:#d4edda;border:1px solid #c3e6cb;padding:15px;border-radius:5px;margin:15px 0;}";
+      html += "</style></head><body>";
+      html += "<div class=\"container\">";
+      html += "<h1>✅ 配置已保存</h1>";
+      html += "<div class=\"success\">";
+      html += "<p>新的WiFi配置已保存成功！</p>";
+      html += "<p>設備將在3秒後重啟並嘗試連接到：<br><strong>" + ssid + "</strong></p>";
+      html += "</div>";
+      html += "<p>重啟後請等待設備重新連接，然後訪問新的IP地址。</p>";
+      html += "</div>";
+      html += "<script>setTimeout(function(){window.location='/restart';}, 3000);</script>";
+      html += "</body></html>";
+      webServer->send(200, "text/html", html);
+    } else {
+      webServer->send(400, "text/plain", "SSID不能為空");
+    }
+  });
+  
+  // 重啟端點
+  webServer->on("/restart", [](){
+    webServer->send(200, "text/plain", "設備重啟中...");
+    delay(1000);
+    safeRestart();
   });
   
   webServer->begin();
