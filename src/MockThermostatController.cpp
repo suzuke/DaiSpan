@@ -31,6 +31,21 @@ bool MockThermostatController::getPower() const {
 }
 
 bool MockThermostatController::setTargetMode(uint8_t mode) {
+    // 與真實控制器邏輯保持一致
+    // 如果是切換到關機模式，直接關閉電源
+    if (mode == 0) { // HAP_MODE_OFF
+        DEBUG_INFO_PRINT("[MockController] 切換到關機模式，關閉電源\n");
+        return setPower(false);
+    }
+    
+    // 如果當前是關機狀態且不是切換到關機模式，需要先開機
+    if (!power && mode != 0) {
+        DEBUG_INFO_PRINT("[MockController] 設備關閉中，先開啟電源\n");
+        if (!setPower(true)) {
+            return false;
+        }
+    }
+    
     if (targetMode != mode) {
         targetMode = mode;
         DEBUG_INFO_PRINT("[MockController] 模式設置: %d(%s)\n", mode, getModeText(mode));
@@ -47,6 +62,15 @@ uint8_t MockThermostatController::getTargetMode() const {
 }
 
 bool MockThermostatController::setTargetTemperature(float temperature) {
+    // 與真實控制器邏輯保持一致 - 檢查溫度範圍
+    static constexpr float MIN_TEMP = 16.0f;
+    static constexpr float MAX_TEMP = 30.0f;
+    
+    if (temperature < MIN_TEMP || temperature > MAX_TEMP || isnan(temperature)) {
+        DEBUG_ERROR_PRINT("[MockController] 錯誤：無效的溫度值 %.1f°C\n", temperature);
+        return false;
+    }
+    
     if (abs(targetTemperature - temperature) >= 0.1f) {
         targetTemperature = temperature;
         DEBUG_INFO_PRINT("[MockController] 目標溫度設置: %.1f°C\n", temperature);
