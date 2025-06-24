@@ -18,6 +18,7 @@ namespace ConfigConstants {
     static constexpr const char* UPDATE_INTERVAL_KEY = "update_interval";
     static constexpr const char* HEARTBEAT_INTERVAL_KEY = "heartbeat_interval";
     static constexpr const char* SERIAL_BAUD_KEY = "serial_baud";
+    static constexpr const char* SIMULATION_MODE_KEY = "simulation_mode";
     
     // 溫度配置
     static constexpr const char* MIN_TEMP_KEY = "min_temp";
@@ -34,6 +35,7 @@ namespace ConfigConstants {
     static constexpr unsigned long DEFAULT_UPDATE_INTERVAL = 5000;
     static constexpr unsigned long DEFAULT_HEARTBEAT_INTERVAL = 30000;
     static constexpr unsigned long DEFAULT_SERIAL_BAUD = 2400;
+    static constexpr bool DEFAULT_SIMULATION_MODE = false;
     static constexpr float DEFAULT_MIN_TEMP = 16.0f;
     static constexpr float DEFAULT_MAX_TEMP = 30.0f;
     static constexpr float DEFAULT_TEMP_STEP = 0.5f;
@@ -133,6 +135,19 @@ public:
         bool success = preferences.putULong(ConfigConstants::UPDATE_INTERVAL_KEY, updateInterval);
         success &= preferences.putULong(ConfigConstants::HEARTBEAT_INTERVAL_KEY, heartbeatInterval);
         success &= preferences.putULong(ConfigConstants::SERIAL_BAUD_KEY, serialBaud);
+        return success;
+    }
+    
+    // 模擬模式配置
+    bool getSimulationMode() {
+        return preferences.getBool(ConfigConstants::SIMULATION_MODE_KEY, ConfigConstants::DEFAULT_SIMULATION_MODE);
+    }
+    
+    bool setSimulationMode(bool enabled) {
+        bool success = preferences.putBool(ConfigConstants::SIMULATION_MODE_KEY, enabled);
+        if (success) {
+            DEBUG_INFO_PRINT("[Config] 模擬模式設置: %s\n", enabled ? "啟用" : "停用");
+        }
         return success;
     }
     

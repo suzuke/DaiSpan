@@ -1,5 +1,6 @@
 #include "HomeSpan.h"
 #include "controller/ThermostatController.h"
+#include "controller/MockThermostatController.h"
 #include "device/ThermostatDevice.h"
 #include "protocol/S21Protocol.h"
 #include "common/Debug.h"
@@ -25,7 +26,8 @@
 
 // 全局變量
 S21Protocol* s21Protocol = nullptr;
-ThermostatController* thermostatController = nullptr;
+IThermostatControl* thermostatController = nullptr;
+MockThermostatController* mockController = nullptr;  // 模擬控制器專用指針
 ThermostatDevice* thermostatDevice = nullptr;
 SpanAccessory* accessory = nullptr;
 bool deviceInitialized = false;
@@ -74,12 +76,23 @@ void initializeMonitoring() {
     html += "<p>監控端口: 8080</p>";
     html += "<p>設備狀態: " + String(deviceInitialized ? "已初始化" : "未初始化") + "</p>";
     html += "<p>HomeKit狀態: " + String(homeKitInitialized ? "已就緒" : "未就緒") + "</p>";
+    html += "<p>運行模式: " + String(configManager.getSimulationMode() ? "🔧 模擬模式" : "🏭 真實模式") + "</p>";
     html += "<p>可用記憶體: " + String(ESP.getFreeHeap()) + " bytes</p>";
     html += "</div>";
     html += "<div style=\"text-align:center;\">";
     html += "<a href=\"/status\" class=\"button\">📊 詳細狀態</a>";
     html += "<a href=\"/wifi\" class=\"button\">📶 WiFi配置</a>";
     html += "<a href=\"/homekit\" class=\"button\">🏠 HomeKit設置</a>";
+    if (configManager.getSimulationMode()) {
+      html += "<a href=\"/simulation\" class=\"button\">🔧 模擬控制</a>";
+    }
+    html += "<a href=\"/simulation-toggle\" class=\"button\">";
+    if (configManager.getSimulationMode()) {
+      html += "🏭 切換到真實模式";
+    } else {
+      html += "🔧 切換到模擬模式";
+    }
+    html += "</a>";
     html += "<a href=\"/ota\" class=\"button\">🔄 OTA更新</a>";
     html += "</div></div></body></html>";
     webServer->send(200, "text/html", html);
@@ -620,9 +633,354 @@ void initializeMonitoring() {
     }
   });
   
+  // 模擬控制頁面（僅在模擬模式下可用）
+  webServer->on("/simulation", [](){
+    DEBUG_INFO_PRINT("[Web] 模擬控制頁面請求 - 模擬模式: %s, mockController: %s\n",
+                     configManager.getSimulationMode() ? "啟用" : "停用",
+                     mockController ? "有效" : "無效");
+    
+    if (!configManager.getSimulationMode()) {
+      DEBUG_ERROR_PRINT("[Web] 模擬功能未啟用\n");
+      webServer->send(403, "text/plain", "模擬功能未啟用");
+      return;
+    }
+    
+    if (!mockController) {
+      DEBUG_ERROR_PRINT("[Web] 模擬控制器不可用\n");
+      webServer->send(500, "text/plain", "模擬控制器不可用");
+      return;
+    }
+    
+    String html = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">";
+    html += "<title>模擬控制</title>";
+    html += "<style>body{font-family:Arial,sans-serif;margin:20px;background:#f0f0f0;}";
+    html += ".container{max-width:600px;margin:0 auto;background:white;padding:20px;border-radius:10px;}";
+    html += ".form-group{margin:15px 0;}";
+    html += "label{display:block;margin-bottom:5px;font-weight:bold;}";
+    html += "input[type=number],select{width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;box-sizing:border-box;}";
+    html += ".button{background:#007cba;color:white;padding:10px 20px;border:none;border-radius:5px;cursor:pointer;margin:5px;}";
+    html += ".button:hover{background:#006ba6;}";
+    html += ".status-card{background:#f8f9fa;border:1px solid #dee2e6;padding:15px;border-radius:8px;margin:15px 0;}";
+    html += ".warning{background:#fff3cd;border:1px solid #ffeaa7;padding:15px;border-radius:5px;margin:15px 0;}";
+    html += "</style></head><body>";
+    html += "<div class=\"container\">";
+    html += "<h1>🔧 模擬控制台</h1>";
+    
+    // 當前狀態顯示
+    html += "<div class=\"status-card\">";
+    html += "<h3>📊 當前狀態</h3>";
+    html += "<p><strong>電源：</strong>" + String(mockController->getPower() ? "開啟" : "關閉") + "</p>";
+    html += "<p><strong>模式：</strong>" + String(mockController->getTargetMode()) + " ";
+    switch(mockController->getTargetMode()) {
+      case 0: html += "(關閉)"; break;
+      case 1: html += "(制熱)"; break;
+      case 2: html += "(制冷)"; break;
+      case 3: html += "(自動)"; break;
+    }
+    html += "</p>";
+    html += "<p><strong>當前溫度：</strong>" + String(mockController->getCurrentTemperature(), 1) + "°C</p>";
+    html += "<p><strong>目標溫度：</strong>" + String(mockController->getTargetTemperature(), 1) + "°C</p>";
+    html += "<p><strong>環境溫度：</strong>" + String(mockController->getSimulatedRoomTemp(), 1) + "°C</p>";
+    html += "<p><strong>運行狀態：</strong>";
+    if (mockController->isSimulationHeating()) {
+      html += "🔥 加熱中";
+    } else if (mockController->isSimulationCooling()) {
+      html += "❄️ 制冷中";
+    } else {
+      html += "⏸️ 待機";
+    }
+    html += "</p>";
+    html += "</div>";
+    
+    html += "<div style=\"text-align:center;margin:15px 0;\">";
+    html += "<button onclick=\"window.location.reload()\" class=\"button\">🔄 刷新狀態</button>";
+    html += "</div>";
+    
+    html += "<div class=\"warning\">";
+    html += "<h3>💡 使用說明</h3>";
+    html += "<p><strong>模擬邏輯：</strong></p>";
+    html += "<ul>";
+    html += "<li>🔧 這是模擬模式，所有操作都是虛擬的</li>";
+    html += "<li>📱 HomeKit指令會即時反映在這裡</li>";
+    html += "<li>🌡️ 溫度會根據運行模式自動變化</li>";
+    html += "<li>🔄 點擊「刷新狀態」按鈕查看最新狀態</li>";
+    html += "<li>⚡ 可手動控制電源、模式和溫度參數</li>";
+    html += "</ul>";
+    html += "</div>";
+    
+    // 手動控制表單
+    html += "<form action=\"/simulation-control\" method=\"POST\">";
+    html += "<h3>🎛️ 手動控制</h3>";
+    
+    html += "<div class=\"form-group\">";
+    html += "<label for=\"power\">電源控制:</label>";
+    html += "<select id=\"power\" name=\"power\">";
+    html += "<option value=\"1\"" + String(mockController->getPower() ? " selected" : "") + ">開啟</option>";
+    html += "<option value=\"0\"" + String(!mockController->getPower() ? " selected" : "") + ">關閉</option>";
+    html += "</select>";
+    html += "</div>";
+    
+    html += "<div class=\"form-group\">";
+    html += "<label for=\"mode\">運行模式:</label>";
+    html += "<select id=\"mode\" name=\"mode\">";
+    html += "<option value=\"0\"" + String(mockController->getTargetMode() == 0 ? " selected" : "") + ">關閉</option>";
+    html += "<option value=\"1\"" + String(mockController->getTargetMode() == 1 ? " selected" : "") + ">制熱</option>";
+    html += "<option value=\"2\"" + String(mockController->getTargetMode() == 2 ? " selected" : "") + ">制冷</option>";
+    html += "<option value=\"3\"" + String(mockController->getTargetMode() == 3 ? " selected" : "") + ">自動</option>";
+    html += "</select>";
+    html += "</div>";
+    
+    html += "<div class=\"form-group\">";
+    html += "<label for=\"target_temp\">目標溫度 (°C):</label>";
+    html += "<input type=\"number\" id=\"target_temp\" name=\"target_temp\" ";
+    html += "min=\"16\" max=\"30\" step=\"0.5\" ";
+    html += "value=\"" + String(mockController->getTargetTemperature(), 1) + "\">";
+    html += "</div>";
+    
+    html += "<div class=\"form-group\">";
+    html += "<label for=\"current_temp\">設置當前溫度 (°C):</label>";
+    html += "<input type=\"number\" id=\"current_temp\" name=\"current_temp\" ";
+    html += "min=\"10\" max=\"40\" step=\"0.1\" ";
+    html += "value=\"" + String(mockController->getCurrentTemperature(), 1) + "\">";
+    html += "</div>";
+    
+    html += "<div class=\"form-group\">";
+    html += "<label for=\"room_temp\">設置環境溫度 (°C):</label>";
+    html += "<input type=\"number\" id=\"room_temp\" name=\"room_temp\" ";
+    html += "min=\"10\" max=\"40\" step=\"0.1\" ";
+    html += "value=\"" + String(mockController->getSimulatedRoomTemp(), 1) + "\">";
+    html += "</div>";
+    
+    html += "<div style=\"text-align:center;margin:20px 0;\">";
+    html += "<button type=\"submit\" class=\"button\">🔄 應用設置</button>";
+    html += "</div>";
+    html += "</form>";
+    
+    html += "<div style=\"text-align:center;margin:20px 0;\">";
+    html += "<a href=\"/\" style=\"color:#007cba;text-decoration:none;\">⬅️ 返回主頁</a> | ";
+    html += "<a href=\"/simulation-toggle\" style=\"color:#dc3545;text-decoration:none;\">🔄 切換到真實模式</a>";
+    html += "</div>";
+    
+    html += "</div></body></html>";
+    webServer->send(200, "text/html", html);
+  });
+  
+  // 模擬控制處理
+  webServer->on("/simulation-control", HTTP_POST, [](){
+    DEBUG_INFO_PRINT("[Web] 收到模擬控制請求\n");
+    
+    if (!configManager.getSimulationMode()) {
+      DEBUG_ERROR_PRINT("[Web] 模擬功能未啟用\n");
+      webServer->send(403, "text/plain", "模擬功能未啟用");
+      return;
+    }
+    
+    if (!mockController) {
+      DEBUG_ERROR_PRINT("[Web] 模擬控制器不可用 - mockController指針為空\n");
+      webServer->send(500, "text/plain", "模擬控制器不可用");
+      return;
+    }
+    
+    DEBUG_INFO_PRINT("[Web] 模擬控制器狀態檢查通過\n");
+    
+    String powerStr = webServer->arg("power");
+    String modeStr = webServer->arg("mode");
+    String targetTempStr = webServer->arg("target_temp");
+    String currentTempStr = webServer->arg("current_temp");
+    String roomTempStr = webServer->arg("room_temp");
+    
+    DEBUG_INFO_PRINT("[Web] 模擬控制請求 - 電源:%s 模式:%s 目標溫度:%s 當前溫度:%s 環境溫度:%s\n",
+                     powerStr.c_str(), modeStr.c_str(), targetTempStr.c_str(), 
+                     currentTempStr.c_str(), roomTempStr.c_str());
+    
+    // 電源控制
+    if (powerStr.length() > 0) {
+      bool power = (powerStr.toInt() == 1);
+      DEBUG_INFO_PRINT("[Web] 收到電源控制請求：%s -> %s\n", 
+                       mockController->getPower() ? "開啟" : "關閉",
+                       power ? "開啟" : "關閉");
+      mockController->setPower(power);
+      
+      // 重要：當電源關閉時，強制設置模式為關閉狀態
+      if (!power) {
+        DEBUG_INFO_PRINT("[Web] 電源關閉，強制設置模式為關閉狀態\n");
+        mockController->setTargetMode(0); // 0 = 關閉模式
+      }
+      
+      DEBUG_INFO_PRINT("[Web] 電源設置完成，當前狀態：%s，模式：%d\n", 
+                       mockController->getPower() ? "開啟" : "關閉",
+                       mockController->getTargetMode());
+    }
+    
+    // 模式控制（僅在電源開啟時才處理模式變更）
+    if (modeStr.length() > 0 && mockController->getPower()) {
+      uint8_t mode = modeStr.toInt();
+      if (mode >= 0 && mode <= 3) {
+        DEBUG_INFO_PRINT("[Web] 收到模式控制請求：%d -> %d\n", 
+                         mockController->getTargetMode(), mode);
+        mockController->setTargetMode(mode);
+        DEBUG_INFO_PRINT("[Web] 模式設置完成，當前模式：%d\n", 
+                         mockController->getTargetMode());
+      }
+    } else if (modeStr.length() > 0 && !mockController->getPower()) {
+      DEBUG_INFO_PRINT("[Web] 電源關閉時忽略模式變更請求\n");
+    }
+    
+    // 目標溫度（僅在電源開啟時才處理）
+    if (targetTempStr.length() > 0 && mockController->getPower()) {
+      float targetTemp = targetTempStr.toFloat();
+      if (targetTemp >= 16.0f && targetTemp <= 30.0f) {
+        DEBUG_INFO_PRINT("[Web] 收到目標溫度設置請求：%.1f°C\n", targetTemp);
+        mockController->setTargetTemperature(targetTemp);
+      }
+    } else if (targetTempStr.length() > 0 && !mockController->getPower()) {
+      DEBUG_INFO_PRINT("[Web] 電源關閉時忽略溫度設置請求\n");
+    }
+    
+    // 當前溫度
+    if (currentTempStr.length() > 0) {
+      float currentTemp = currentTempStr.toFloat();
+      if (currentTemp >= 10.0f && currentTemp <= 40.0f) {
+        mockController->setCurrentTemperature(currentTemp);
+      }
+    }
+    
+    // 環境溫度
+    if (roomTempStr.length() > 0) {
+      float roomTemp = roomTempStr.toFloat();
+      if (roomTemp >= 10.0f && roomTemp <= 40.0f) {
+        mockController->setSimulatedRoomTemp(roomTemp);
+      }
+    }
+    
+    String html = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">";
+    html += "<title>設置已更新</title>";
+    html += "<style>body{font-family:Arial,sans-serif;margin:20px;background:#f0f0f0;}";
+    html += ".container{max-width:500px;margin:0 auto;background:white;padding:20px;border-radius:10px;text-align:center;}";
+    html += ".success{background:#d4edda;border:1px solid #c3e6cb;padding:15px;border-radius:5px;margin:15px 0;}";
+    html += ".status-info{background:#f8f9fa;border:1px solid #dee2e6;padding:15px;border-radius:5px;margin:15px 0;}";
+    html += ".button{background:#007cba;color:white;padding:10px 20px;border:none;border-radius:5px;cursor:pointer;text-decoration:none;display:inline-block;margin:5px;}";
+    html += "</style></head><body>";
+    html += "<div class=\"container\">";
+    html += "<h1>✅ 設置已更新</h1>";
+    html += "<div class=\"success\">";
+    html += "<p>模擬參數已成功更新！</p>";
+    html += "</div>";
+    
+    // 顯示當前狀態
+    html += "<div class=\"status-info\">";
+    html += "<h3>📊 當前狀態</h3>";
+    html += "<p><strong>電源：</strong>" + String(mockController->getPower() ? "開啟" : "關閉") + "</p>";
+    html += "<p><strong>模式：</strong>" + String(mockController->getTargetMode());
+    switch(mockController->getTargetMode()) {
+      case 0: html += " (關閉)"; break;
+      case 1: html += " (制熱)"; break;
+      case 2: html += " (制冷)"; break;
+      case 3: html += " (自動)"; break;
+    }
+    html += "</p>";
+    html += "<p><strong>目標溫度：</strong>" + String(mockController->getTargetTemperature(), 1) + "°C</p>";
+    html += "<p><strong>當前溫度：</strong>" + String(mockController->getCurrentTemperature(), 1) + "°C</p>";
+    html += "</div>";
+    
+    html += "<div style=\"margin:20px 0;\">";
+    html += "<a href=\"/simulation\" class=\"button\">🔧 返回模擬控制</a>";
+    html += "<a href=\"/\" class=\"button\">🏠 返回主頁</a>";
+    html += "</div>";
+    html += "<p style=\"color:#666;font-size:14px;\">💡 提示：可以在HomeKit app中查看狀態變化</p>";
+    html += "</div>";
+    html += "</body></html>";
+    webServer->send(200, "text/html", html);
+  });
+  
+  // 模式切換頁面
+  webServer->on("/simulation-toggle", [](){
+    String html = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">";
+    html += "<title>切換運行模式</title>";
+    html += "<style>body{font-family:Arial,sans-serif;margin:20px;background:#f0f0f0;}";
+    html += ".container{max-width:500px;margin:0 auto;background:white;padding:20px;border-radius:10px;}";
+    html += ".button{background:#007cba;color:white;padding:10px 20px;border:none;border-radius:5px;cursor:pointer;margin:10px;text-decoration:none;display:inline-block;}";
+    html += ".danger{background:#dc3545;}";
+    html += ".warning{background:#fff3cd;border:1px solid #ffeaa7;padding:15px;border-radius:5px;margin:15px 0;}";
+    html += "</style></head><body>";
+    html += "<div class=\"container\">";
+    html += "<h1>🔄 切換運行模式</h1>";
+    
+    html += "<div class=\"warning\">";
+    html += "<h3>⚠️ 重要提醒</h3>";
+    html += "<p>當前模式：" + String(configManager.getSimulationMode() ? "🔧 模擬模式" : "🏭 真實模式") + "</p>";
+    html += "<p>切換模式將會：</p>";
+    html += "<ul>";
+    html += "<li>重新啟動設備</li>";
+    html += "<li>重新初始化控制器</li>";
+    if (configManager.getSimulationMode()) {
+      html += "<li>啟用真實空調通訊（需要連接S21協議線路）</li>";
+    } else {
+      html += "<li>停用真實空調通訊，啟用模擬功能</li>";
+    }
+    html += "</ul>";
+    html += "</div>";
+    
+    String targetMode = configManager.getSimulationMode() ? "真實模式" : "模擬模式";
+    String targetIcon = configManager.getSimulationMode() ? "🏭" : "🔧";
+    
+    html += "<div style=\"text-align:center;margin:20px 0;\">";
+    html += "<form action=\"/simulation-toggle-confirm\" method=\"POST\" style=\"display:inline;\">";
+    html += "<button type=\"submit\" class=\"button danger\">" + targetIcon + " 切換到" + targetMode + "</button>";
+    html += "</form>";
+    html += "</div>";
+    
+    html += "<div style=\"text-align:center;margin:20px 0;\">";
+    html += "<a href=\"/\" style=\"color:#007cba;text-decoration:none;\">⬅️ 取消並返回主頁</a>";
+    html += "</div>";
+    
+    html += "</div></body></html>";
+    webServer->send(200, "text/html", html);
+  });
+  
+  // 模式切換確認
+  webServer->on("/simulation-toggle-confirm", HTTP_POST, [](){
+    bool currentMode = configManager.getSimulationMode();
+    configManager.setSimulationMode(!currentMode);
+    
+    String html = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">";
+    html += "<title>模式切換中</title>";
+    html += "<style>body{font-family:Arial,sans-serif;margin:20px;background:#f0f0f0;}";
+    html += ".container{max-width:400px;margin:0 auto;background:white;padding:20px;border-radius:10px;text-align:center;}";
+    html += ".success{background:#d4edda;border:1px solid #c3e6cb;padding:15px;border-radius:5px;margin:15px 0;}";
+    html += "</style></head><body>";
+    html += "<div class=\"container\">";
+    html += "<h1>🔄 模式切換中</h1>";
+    html += "<div class=\"success\">";
+    html += "<p>運行模式已切換為：" + String(!currentMode ? "🔧 模擬模式" : "🏭 真實模式") + "</p>";
+    html += "<p>設備將在3秒後重啟...</p>";
+    html += "</div>";
+    html += "</div>";
+    html += "<script>setTimeout(function(){window.location='/restart';}, 3000);</script>";
+    html += "</body></html>";
+    webServer->send(200, "text/html", html);
+  });
+  
   // 重啟端點
   webServer->on("/restart", [](){
-    webServer->send(200, "text/plain", "設備重啟中...");
+    String html = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">";
+    html += "<title>設備重啟中</title>";
+    html += "<style>body{font-family:Arial,sans-serif;margin:20px;background:#f0f0f0;text-align:center;}";
+    html += ".container{max-width:400px;margin:0 auto;background:white;padding:20px;border-radius:10px;}";
+    html += ".info{background:#e8f4f8;border:1px solid #bee5eb;padding:15px;border-radius:5px;margin:15px 0;}";
+    html += "</style></head><body>";
+    html += "<div class=\"container\">";
+    html += "<h1>🔄 設備重啟中</h1>";
+    html += "<div class=\"info\">";
+    html += "<p>設備正在重新啟動，請稍候...</p>";
+    html += "<p>約30秒後可重新訪問設備。</p>";
+    html += "</div>";
+    html += "<p>重啟完成後請訪問：<br><a href=\"http://" + WiFi.localIP().toString() + ":8080\">http://" + WiFi.localIP().toString() + ":8080</a></p>";
+    html += "</div>";
+    html += "<script>setTimeout(function(){window.location='http://" + WiFi.localIP().toString() + ":8080';}, 30000);</script>";
+    html += "</body></html>";
+    
+    webServer->send(200, "text/html", html);
     delay(1000);
     safeRestart();
   });
@@ -693,34 +1051,53 @@ void initializeHardware() {
     return;
   }
   
-  DEBUG_INFO_PRINT("[Main] 開始初始化串口通訊...\n");
+  // 檢查是否啟用模擬模式
+  bool simulationMode = configManager.getSimulationMode();
   
-  // 初始化串口通訊
-  Serial1.begin(2400, SERIAL_8E2, S21_RX_PIN, S21_TX_PIN);
-  delay(200);
-  
-  s21Protocol = new S21Protocol(Serial1);
-  if (!s21Protocol) {
-    DEBUG_ERROR_PRINT("[Main] S21Protocol 創建失敗\n");
-    return;
+  if (simulationMode) {
+    DEBUG_INFO_PRINT("[Main] 啟用模擬模式 - 創建模擬控制器\n");
+    
+    // 創建模擬控制器
+    mockController = new MockThermostatController(25.0f);
+    if (!mockController) {
+      DEBUG_ERROR_PRINT("[Main] MockThermostatController 創建失敗\n");
+      return;
+    }
+    
+    thermostatController = static_cast<IThermostatControl*>(mockController);
+    deviceInitialized = true;
+    DEBUG_INFO_PRINT("[Main] 模擬模式初始化完成\n");
+    
+  } else {
+    DEBUG_INFO_PRINT("[Main] 啟用真實模式 - 初始化串口通訊...\n");
+    
+    // 初始化串口通訊
+    Serial1.begin(2400, SERIAL_8E2, S21_RX_PIN, S21_TX_PIN);
+    delay(200);
+    
+    s21Protocol = new S21Protocol(Serial1);
+    if (!s21Protocol) {
+      DEBUG_ERROR_PRINT("[Main] S21Protocol 創建失敗\n");
+      return;
+    }
+    delay(200);
+    
+    if (!s21Protocol->begin()) {
+      DEBUG_ERROR_PRINT("[Main] S21Protocol 初始化失敗\n");
+      return;
+    }
+    delay(200);
+    
+    thermostatController = new ThermostatController(*s21Protocol);
+    if (!thermostatController) {
+      DEBUG_ERROR_PRINT("[Main] ThermostatController 創建失敗\n");
+      return;
+    }
+    delay(200);
+    
+    deviceInitialized = true;
+    DEBUG_INFO_PRINT("[Main] 真實硬件初始化完成\n");
   }
-  delay(200);
-  
-  if (!s21Protocol->begin()) {
-    DEBUG_ERROR_PRINT("[Main] S21Protocol 初始化失敗\n");
-    return;
-  }
-  delay(200);
-  
-  thermostatController = new ThermostatController(*s21Protocol);
-  if (!thermostatController) {
-    DEBUG_ERROR_PRINT("[Main] ThermostatController 創建失敗\n");
-    return;
-  }
-  delay(200);
-  
-  deviceInitialized = true;
-  DEBUG_INFO_PRINT("[Main] 硬件初始化完成\n");
 }
 
 // WiFi 連接狀態回調函數
