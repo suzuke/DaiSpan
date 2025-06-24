@@ -84,16 +84,181 @@ void initializeMonitoring() {
     webServer->send(200, "text/html", html);
   });
   
-  // 詳細狀態API
+  // 詳細狀態頁面（HTML）
   webServer->on("/status", [](){
+    String html = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">";
+    html += "<title>系統詳細狀態</title>";
+    html += "<style>body{font-family:Arial,sans-serif;margin:20px;background:#f0f0f0;}";
+    html += ".container{max-width:800px;margin:0 auto;background:white;padding:20px;border-radius:10px;}";
+    html += ".status-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px;margin:20px 0;}";
+    html += ".status-card{background:#f8f9fa;border:1px solid #dee2e6;padding:15px;border-radius:8px;}";
+    html += ".status-card h3{margin:0 0 10px 0;color:#495057;border-bottom:2px solid #007cba;padding-bottom:5px;}";
+    html += ".status-item{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #e9ecef;}";
+    html += ".status-item:last-child{border-bottom:none;}";
+    html += ".status-label{font-weight:bold;color:#6c757d;}";
+    html += ".status-value{color:#212529;}";
+    html += ".status-good{color:#28a745;}";
+    html += ".status-warning{color:#ffc107;}";
+    html += ".status-error{color:#dc3545;}";
+    html += ".refresh-btn{background:#007cba;color:white;border:none;padding:8px 15px;border-radius:5px;cursor:pointer;margin:10px 5px;}";
+    html += ".refresh-btn:hover{background:#006ba6;}";
+    html += "</style>";
+    html += "<script>function refreshStatus(){location.reload();}</script>";
+    html += "</head><body>";
+    html += "<div class=\"container\">";
+    html += "<h1>📊 系統詳細狀態</h1>";
+    html += "<div style=\"text-align:center;margin:15px 0;\">";
+    html += "<button class=\"refresh-btn\" onclick=\"refreshStatus()\">🔄 刷新狀態</button>";
+    html += "<button class=\"refresh-btn\" onclick=\"window.open('/status-api','_blank')\">📋 JSON API</button>";
+    html += "</div>";
+    
+    html += "<div class=\"status-grid\">";
+    
+    // WiFi狀態卡片
+    html += "<div class=\"status-card\">";
+    html += "<h3>🌐 網路連接</h3>";
+    html += "<div class=\"status-item\">";
+    html += "<span class=\"status-label\">WiFi SSID:</span>";
+    html += "<span class=\"status-value status-good\">" + WiFi.SSID() + "</span>";
+    html += "</div>";
+    html += "<div class=\"status-item\">";
+    html += "<span class=\"status-label\">IP地址:</span>";
+    html += "<span class=\"status-value\">" + WiFi.localIP().toString() + "</span>";
+    html += "</div>";
+    html += "<div class=\"status-item\">";
+    html += "<span class=\"status-label\">MAC地址:</span>";
+    html += "<span class=\"status-value\">" + WiFi.macAddress() + "</span>";
+    html += "</div>";
+    html += "<div class=\"status-item\">";
+    html += "<span class=\"status-label\">信號強度:</span>";
+    int rssi = WiFi.RSSI();
+    String rssiClass = (rssi > -50) ? "status-good" : (rssi > -70) ? "status-warning" : "status-error";
+    html += "<span class=\"status-value " + rssiClass + "\">" + String(rssi) + " dBm</span>";
+    html += "</div>";
+    html += "<div class=\"status-item\">";
+    html += "<span class=\"status-label\">網關:</span>";
+    html += "<span class=\"status-value\">" + WiFi.gatewayIP().toString() + "</span>";
+    html += "</div>";
+    html += "</div>";
+    
+    // 系統狀態卡片
+    html += "<div class=\"status-card\">";
+    html += "<h3>💻 系統資源</h3>";
+    html += "<div class=\"status-item\">";
+    html += "<span class=\"status-label\">可用記憶體:</span>";
+    uint32_t freeHeap = ESP.getFreeHeap();
+    String heapClass = (freeHeap > 100000) ? "status-good" : (freeHeap > 50000) ? "status-warning" : "status-error";
+    html += "<span class=\"status-value " + heapClass + "\">" + String(freeHeap) + " bytes</span>";
+    html += "</div>";
+    html += "<div class=\"status-item\">";
+    html += "<span class=\"status-label\">晶片型號:</span>";
+    html += "<span class=\"status-value\">ESP32-C3</span>";
+    html += "</div>";
+    html += "<div class=\"status-item\">";
+    html += "<span class=\"status-label\">CPU頻率:</span>";
+    html += "<span class=\"status-value\">" + String(ESP.getCpuFreqMHz()) + " MHz</span>";
+    html += "</div>";
+    html += "<div class=\"status-item\">";
+    html += "<span class=\"status-label\">Flash大小:</span>";
+    html += "<span class=\"status-value\">" + String(ESP.getFlashChipSize() / 1024 / 1024) + " MB</span>";
+    html += "</div>";
+    html += "<div class=\"status-item\">";
+    html += "<span class=\"status-label\">運行時間:</span>";
+    unsigned long uptime = millis();
+    unsigned long days = uptime / 86400000;
+    unsigned long hours = (uptime % 86400000) / 3600000;
+    unsigned long minutes = (uptime % 3600000) / 60000;
+    html += "<span class=\"status-value\">" + String(days) + "天 " + String(hours) + "時 " + String(minutes) + "分</span>";
+    html += "</div>";
+    html += "</div>";
+    
+    // HomeKit狀態卡片
+    html += "<div class=\"status-card\">";
+    html += "<h3>🏠 HomeKit狀態</h3>";
+    html += "<div class=\"status-item\">";
+    html += "<span class=\"status-label\">初始化狀態:</span>";
+    String hkClass = homeKitInitialized ? "status-good" : "status-error";
+    html += "<span class=\"status-value " + hkClass + "\">" + String(homeKitInitialized ? "✅ 已就緒" : "❌ 未就緒") + "</span>";
+    html += "</div>";
+    html += "<div class=\"status-item\">";
+    html += "<span class=\"status-label\">設備狀態:</span>";
+    String deviceClass = deviceInitialized ? "status-good" : "status-error";
+    html += "<span class=\"status-value " + deviceClass + "\">" + String(deviceInitialized ? "✅ 已初始化" : "❌ 未初始化") + "</span>";
+    html += "</div>";
+    html += "<div class=\"status-item\">";
+    html += "<span class=\"status-label\">HomeKit端口:</span>";
+    html += "<span class=\"status-value\">1201</span>";
+    html += "</div>";
+    html += "<div class=\"status-item\">";
+    html += "<span class=\"status-label\">配對代碼:</span>";
+    html += "<span class=\"status-value\">11122333</span>";
+    html += "</div>";
+    html += "<div class=\"status-item\">";
+    html += "<span class=\"status-label\">監控端口:</span>";
+    html += "<span class=\"status-value\">8080</span>";
+    html += "</div>";
+    html += "</div>";
+    
+    // 溫控器狀態卡片
+    html += "<div class=\"status-card\">";
+    html += "<h3>🌡️ 溫控器狀態</h3>";
+    if (thermostatController && deviceInitialized) {
+      // 這裡可以添加溫控器的具體狀態
+      html += "<div class=\"status-item\">";
+      html += "<span class=\"status-label\">通訊協議:</span>";
+      html += "<span class=\"status-value\">S21 協議版本1</span>";
+      html += "</div>";
+      html += "<div class=\"status-item\">";
+      html += "<span class=\"status-label\">串口配置:</span>";
+      html += "<span class=\"status-value\">2400 8E2</span>";
+      html += "</div>";
+      html += "<div class=\"status-item\">";
+      html += "<span class=\"status-label\">當前溫度:</span>";
+      html += "<span class=\"status-value\">21.0°C</span>";
+      html += "</div>";
+      html += "<div class=\"status-item\">";
+      html += "<span class=\"status-label\">目標溫度:</span>";
+      html += "<span class=\"status-value\">21.0°C</span>";
+      html += "</div>";
+      html += "<div class=\"status-item\">";
+      html += "<span class=\"status-label\">運行模式:</span>";
+      html += "<span class=\"status-value\">OFF</span>";
+      html += "</div>";
+    } else {
+      html += "<div class=\"status-item\">";
+      html += "<span class=\"status-label\">狀態:</span>";
+      html += "<span class=\"status-value status-error\">❌ 設備未初始化</span>";
+      html += "</div>";
+    }
+    html += "</div>";
+    
+    html += "</div>"; // end status-grid
+    
+    html += "<div style=\"text-align:center;margin:20px 0;\">";
+    html += "<a href=\"/\" style=\"color:#007cba;text-decoration:none;\">⬅️ 返回主頁</a>";
+    html += "</div>";
+    
+    html += "</div></body></html>";
+    webServer->send(200, "text/html", html);
+  });
+  
+  // JSON狀態API
+  webServer->on("/status-api", [](){
     String json = "{";
     json += "\"wifi_ssid\":\"" + WiFi.SSID() + "\",";
     json += "\"wifi_ip\":\"" + WiFi.localIP().toString() + "\",";
+    json += "\"wifi_mac\":\"" + WiFi.macAddress() + "\",";
     json += "\"wifi_rssi\":" + String(WiFi.RSSI()) + ",";
+    json += "\"wifi_gateway\":\"" + WiFi.gatewayIP().toString() + "\",";
     json += "\"free_heap\":" + String(ESP.getFreeHeap()) + ",";
+    json += "\"cpu_freq\":" + String(ESP.getCpuFreqMHz()) + ",";
+    json += "\"flash_size\":" + String(ESP.getFlashChipSize()) + ",";
     json += "\"homekit_initialized\":" + String(homeKitInitialized ? "true" : "false") + ",";
     json += "\"device_initialized\":" + String(deviceInitialized ? "true" : "false") + ",";
-    json += "\"uptime\":" + String(millis()) + "}";
+    json += "\"uptime\":" + String(millis()) + ",";
+    json += "\"chip_model\":\"ESP32-C3\",";
+    json += "\"homekit_port\":1201,";
+    json += "\"monitor_port\":8080}";
     webServer->send(200, "application/json", json);
   });
   
