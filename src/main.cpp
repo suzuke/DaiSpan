@@ -3,6 +3,9 @@
 #include "device/ThermostatDevice.h"
 #include "protocol/S21Protocol.h"
 #include "common/Debug.h"
+#include "common/Config.h"
+#include "common/WiFiManager.h"
+#include "common/OTAManager.h"
 #include "WiFi.h"
 
 
@@ -24,17 +27,74 @@ ThermostatController* thermostatController = nullptr;
 ThermostatDevice* thermostatDevice = nullptr;
 SpanAccessory* accessory = nullptr;
 bool deviceInitialized = false;
+bool homeKitInitialized = false;
 
-// 初始化設備
-void initializeDevice() {
+// 配置和管理器
+ConfigManager configManager;
+WiFiManager* wifiManager = nullptr;
+OTAManager* otaManager = nullptr;
+
+// 安全重啟函數
+void safeRestart() {
+  DEBUG_INFO_PRINT("[Main] 開始安全重啟...\n");
+  delay(500);
+  ESP.restart();
+}
+
+// 初始化HomeKit功能（只有在WiFi穩定連接後調用）
+void initializeHomeKit() {
+  if (homeKitInitialized) {
+    return;
+  }
+  
+  DEBUG_INFO_PRINT("[Main] 開始初始化HomeKit...\n");
+  
+  // 使用固定的HomeKit配置
+  homeSpan.setPairingCode("11122333");
+  homeSpan.setStatusPin(2);
+  homeSpan.setHostNameSuffix("");
+  homeSpan.setQRID("HSPN");
+  homeSpan.enableWebLog(50,"pool.ntp.org","UTC-8","log");
+
+  // 初始化 HomeSpan
+  homeSpan.begin(Category::Thermostats, "DaiSpan Thermostat");
+  
+  // 立即創建 HomeSpan 配件和服務
+  accessory = new SpanAccessory();
+  new Service::AccessoryInformation();
+  new Characteristic::Name("智能恆溫器");
+  new Characteristic::Manufacturer("DaiSpan");
+  new Characteristic::SerialNumber("123-ABC");
+  new Characteristic::Model("恆溫器 v1.0");
+  new Characteristic::FirmwareRevision("1.0");
+  new Characteristic::Identify();
+  
+  // 創建ThermostatDevice（需要硬件已初始化）
+  if (deviceInitialized && thermostatController) {
+    thermostatDevice = new ThermostatDevice(*thermostatController);
+    if (!thermostatDevice) {
+      DEBUG_ERROR_PRINT("[Main] 創建 ThermostatDevice 失敗\n");
+    } else {
+      DEBUG_INFO_PRINT("[Main] ThermostatDevice 創建成功\n");
+    }
+  } else {
+    DEBUG_ERROR_PRINT("[Main] 硬件未初始化，無法創建ThermostatDevice\n");
+  }
+  
+  homeKitInitialized = true;
+  DEBUG_INFO_PRINT("[Main] HomeKit配件初始化完成\n");
+}
+
+// 初始化硬件組件
+void initializeHardware() {
   if (deviceInitialized) {
-    DEBUG_INFO_PRINT("[Main] 設備已經初始化\n");
+    DEBUG_INFO_PRINT("[Main] 硬件已經初始化\n");
     return;
   }
   
   DEBUG_INFO_PRINT("[Main] 開始初始化串口通訊...\n");
   
-  // 分步驟初始化，每步都加入延遲和檢查
+  // 初始化串口通訊
   Serial1.begin(2400, SERIAL_8E2, S21_RX_PIN, S21_TX_PIN);
   delay(200);
   
@@ -58,32 +118,8 @@ void initializeDevice() {
   }
   delay(200);
   
-  // 創建 HomeSpan 配件
-  accessory = new SpanAccessory();
-  if (!accessory) {
-    DEBUG_ERROR_PRINT("[Main] 創建 SpanAccessory 失敗\n");
-    return;
-  }
-
-  // 創建配件信息服務
-  new Service::AccessoryInformation();
-  new Characteristic::Name("智能恆溫器");
-  new Characteristic::Manufacturer("DaiSpan");
-  new Characteristic::SerialNumber("123-ABC");
-  new Characteristic::Model("恆溫器 v1.0");
-  new Characteristic::FirmwareRevision("1.0");
-  new Characteristic::Identify();
-
-  // 創建恆溫器設備
-  thermostatDevice = new ThermostatDevice(*thermostatController);
-  if (!thermostatDevice) {
-    DEBUG_ERROR_PRINT("[Main] 創建 ThermostatDevice 失敗\n");
-    return;
-  }
-  
-  DEBUG_INFO_PRINT("[Main] HomeSpan 配件初始化完成\n");
   deviceInitialized = true;
-  DEBUG_INFO_PRINT("[Main] 設備初始化完成\n");
+  DEBUG_INFO_PRINT("[Main] 硬件初始化完成\n");
 }
 
 // WiFi 連接狀態回調函數
@@ -108,27 +144,63 @@ void setup() {
     DEBUG_INFO_PRINT("[Main] 可用堆內存: %d bytes\n", ESP.getFreeHeap());
   #endif
 
-  // 延遲初始化
-  delay(1000);  // 給系統一些穩定時間
+  // 初始化配置管理器
+  configManager.begin();
   
-  homeSpan.setWifiCredentials("suzuke", "0978362789");
-  homeSpan.setWifiCallback(wifiCallback);
-  homeSpan.setPairingCode("11122333");
-  homeSpan.setStatusPin(2);
-  homeSpan.setHostNameSuffix("");
-  homeSpan.setQRID("HSPN");
-  homeSpan.enableWebLog(50,"pool.ntp.org","UTC-8","log");  // 進一步減少日誌條目數量
-
-  // 初始化 HomeSpan
-  homeSpan.begin(Category::Thermostats, "DaiSpan Thermostat");
+  // 初始化WiFi管理器
+  wifiManager = new WiFiManager(configManager);
   
-  DEBUG_INFO_PRINT("[Main] HomeSpan 初始化完成\n");
+  // 檢查WiFi配置狀態
+  if (!configManager.isWiFiConfigured()) {
+    DEBUG_INFO_PRINT("[Main] 未找到WiFi配置，啟動配置模式\n");
+    
+    // 啟動AP模式進行WiFi配置（不啟動HomeKit）
+    wifiManager->begin();
+    
+    DEBUG_INFO_PRINT("[Main] 請連接到 DaiSpan-Config 進行WiFi配置\n");
+    return; // 在配置模式下，不啟動HomeKit
+  }
   
-  // 延遲設備初始化並監控記憶體
-  delay(1000);
-  DEBUG_INFO_PRINT("[Main] 初始化前可用堆內存: %d bytes\n", ESP.getFreeHeap());
-  initializeDevice();
-  DEBUG_INFO_PRINT("[Main] 初始化後可用堆內存: %d bytes\n", ESP.getFreeHeap());
+  // 有WiFi配置，嘗試連接並啟動HomeKit
+  DEBUG_INFO_PRINT("[Main] 找到WiFi配置，嘗試連接...\n");
+  
+  String ssid = configManager.getWiFiSSID();
+  String password = configManager.getWiFiPassword();
+  
+  // 連接WiFi
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid.c_str(), password.c_str());
+  
+  // 等待WiFi連接
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+    delay(500);
+    DEBUG_VERBOSE_PRINT(".");
+    attempts++;
+  }
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    DEBUG_INFO_PRINT("\n[Main] WiFi連接成功: %s\n", WiFi.localIP().toString().c_str());
+    
+    // WiFi連接成功，不啟動Web服務器，專注於HomeKit功能
+    
+    // 先初始化硬件組件
+    initializeHardware();
+    
+    // 然後初始化HomeKit（硬件準備好後）
+    initializeHomeKit();
+    
+    // 清理WiFi管理器，避免干擾HomeKit
+    delete wifiManager;
+    wifiManager = nullptr;
+    
+    DEBUG_INFO_PRINT("[Main] HomeKit模式啟動，Web配置已停用\n");
+  } else {
+    DEBUG_ERROR_PRINT("\n[Main] WiFi連接失敗，啟動配置模式\n");
+    
+    // WiFi連接失敗，啟動AP模式
+    wifiManager->begin();
+  }
 }
 
 void loop() {
@@ -142,17 +214,31 @@ void loop() {
   }
   #endif
 
+  // 根據模式處理不同的邏輯
+  if (homeKitInitialized) {
+    // HomeKit模式：只處理HomeSpan
+    homeSpan.poll();
+  } else if (wifiManager) {
+    // 配置模式：處理WiFi管理器
+    wifiManager->loop();
+  }
+
   // 每5秒輸出一次心跳信息
   if (currentTime - lastLoopTime >= HEARTBEAT_INTERVAL) {
-    DEBUG_INFO_PRINT("[Main] 主循環運行中... WiFi：%s，設備：%s，IP：%s\n", 
+    String mode = "";
+    if (homeKitInitialized) {
+      mode = "HomeKit模式";
+    } else if (wifiManager && wifiManager->isInAPMode()) {
+      mode = "WiFi配置模式";
+    } else {
+      mode = "初始化中";
+    }
+    
+    DEBUG_INFO_PRINT("[Main] 主循環運行中... 模式：%s，WiFi：%s，設備：%s，IP：%s\n", 
+                     mode.c_str(),
                      WiFi.status() == WL_CONNECTED ? "已連接" : "未連接",
                      deviceInitialized ? "已初始化" : "未初始化",
                      WiFi.localIP().toString().c_str());
     lastLoopTime = currentTime;
-  }
-  
-  // 只有在設備初始化後才執行更新
-  if (deviceInitialized) {
-    homeSpan.poll();
   }
 }

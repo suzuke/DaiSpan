@@ -22,8 +22,8 @@ static inline float s21_decode_target_temp(unsigned char v) {
     return 18.0 + 0.5 * ((signed)v - AC_MIN_TEMP_VALUE);
 }
 
-static inline float s21_encode_target_temp(float temp) {
-    return lroundf((temp - 18.0) * 2) + AC_MIN_TEMP_VALUE;
+static inline uint8_t s21_encode_target_temp(float temp) {
+    return (uint8_t)(lroundf((temp - 18.0) * 2) + AC_MIN_TEMP_VALUE);
 }
 
 static inline int s21_decode_int_sensor(const unsigned char* payload) {
