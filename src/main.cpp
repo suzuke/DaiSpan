@@ -3,6 +3,8 @@
 #include "controller/MockThermostatController.h"
 #include "device/ThermostatDevice.h"
 #include "protocol/S21Protocol.h"
+#include "protocol/IACProtocol.h"
+#include "protocol/ACProtocolFactory.h"
 #include "common/Debug.h"
 #include "common/Config.h"
 #include "common/WiFiManager.h"
@@ -25,7 +27,7 @@
 #endif
 
 // 全局變量
-S21Protocol* s21Protocol = nullptr;
+std::unique_ptr<ACProtocolFactory> protocolFactory = nullptr;
 IThermostatControl* thermostatController = nullptr;
 MockThermostatController* mockController = nullptr;  // 模擬控制器專用指針
 ThermostatDevice* thermostatDevice = nullptr;
@@ -1075,20 +1077,27 @@ void initializeHardware() {
     Serial1.begin(2400, SERIAL_8E2, S21_RX_PIN, S21_TX_PIN);
     delay(200);
     
-    s21Protocol = new S21Protocol(Serial1);
-    if (!s21Protocol) {
-      DEBUG_ERROR_PRINT("[Main] S21Protocol 創建失敗\n");
+    // 初始化協議工廠
+    protocolFactory = ACProtocolFactory::createFactory();
+    if (!protocolFactory) {
+      DEBUG_ERROR_PRINT("[Main] 協議工廠創建失敗\n");
+      return;
+    }
+    
+    // 創建S21協議實例
+    auto protocol = protocolFactory->createProtocol(ACProtocolType::S21_DAIKIN, Serial1);
+    if (!protocol) {
+      DEBUG_ERROR_PRINT("[Main] S21協議創建失敗\n");
+      return;
+    }
+    
+    if (!protocol->begin()) {
+      DEBUG_ERROR_PRINT("[Main] 協議初始化失敗\n");
       return;
     }
     delay(200);
     
-    if (!s21Protocol->begin()) {
-      DEBUG_ERROR_PRINT("[Main] S21Protocol 初始化失敗\n");
-      return;
-    }
-    delay(200);
-    
-    thermostatController = new ThermostatController(*s21Protocol);
+    thermostatController = new ThermostatController(std::move(protocol));
     if (!thermostatController) {
       DEBUG_ERROR_PRINT("[Main] ThermostatController 創建失敗\n");
       return;

@@ -18,5 +18,6 @@
 #define DEBUG_BUFFER_SIZE 256
 
 #define DEBUG_ERROR_PRINT(...) do { if (DEBUG_LEVEL >= DEBUG_ERROR) { Serial.printf(__VA_ARGS__); char buffer[DEBUG_BUFFER_SIZE]; snprintf(buffer, DEBUG_BUFFER_SIZE, __VA_ARGS__); WEBLOG(buffer); } } while(0)
+#define DEBUG_WARN_PRINT(...) do { if (DEBUG_LEVEL >= DEBUG_ERROR) { Serial.printf(__VA_ARGS__); char buffer[DEBUG_BUFFER_SIZE]; snprintf(buffer, DEBUG_BUFFER_SIZE, __VA_ARGS__); WEBLOG(buffer); } } while(0)
 #define DEBUG_INFO_PRINT(...) do { if (DEBUG_LEVEL >= DEBUG_INFO) { Serial.printf(__VA_ARGS__); char buffer[DEBUG_BUFFER_SIZE]; snprintf(buffer, DEBUG_BUFFER_SIZE, __VA_ARGS__); WEBLOG(buffer); } } while(0)
 #define DEBUG_VERBOSE_PRINT(...) do { if (DEBUG_LEVEL >= DEBUG_VERBOSE) { Serial.printf(__VA_ARGS__); char buffer[DEBUG_BUFFER_SIZE]; snprintf(buffer, DEBUG_BUFFER_SIZE, __VA_ARGS__); WEBLOG(buffer); } } while(0)

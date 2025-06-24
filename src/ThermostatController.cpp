@@ -1,49 +1,117 @@
 #include "controller/ThermostatController.h"
-#include "protocol/S21Protocol.h"
-#include "protocol/S21Utils.h"
 #include "common/Debug.h"
 
-// 溫度範圍常量
-static constexpr float MIN_TEMP = 16.0;
-static constexpr float MAX_TEMP = 30.0;
-static constexpr float TEMP_STEP = 0.5;
-static constexpr float TEMP_THRESHOLD = 0.2f;
-
-ThermostatController::ThermostatController(S21Protocol& p) : 
-    protocol(p),
-    power(false),
-    mode(AC_MODE_AUTO),
-    targetTemperature(21.0),
-    currentTemperature(21.0),
-    fanSpeed(AC_FAN_AUTO),  // 初始化風扇速度為自動
-    consecutiveErrors(0),
-    lastUpdateTime(0) {
+ThermostatController::ThermostatController(std::unique_ptr<IACProtocol> p) 
+    : protocol(std::move(p)),
+      power(false),
+      mode(AC_MODE_AUTO),
+      targetTemperature(21.0),
+      currentTemperature(21.0),
+      fanSpeed(AC_FAN_AUTO),
+      consecutiveErrors(0),
+      lastUpdateTime(0),
+      lastSuccessfulUpdate(0) {
     
-    DEBUG_INFO_PRINT("[Controller] 開始初始化...\n");
-    update();  // 初始化時更新一次狀態
-    DEBUG_INFO_PRINT("[Controller] 初始化完成\n");
+    if (!protocol) {
+        DEBUG_ERROR_PRINT("[Controller] 錯誤：協議實例為空\n");
+        return;
+    }
+    
+    DEBUG_INFO_PRINT("[Controller] 開始初始化通用控制器 - 協議: %s\n", 
+                      protocol->getProtocolName());
+    
+    // 初始化協議
+    if (protocol->begin()) {
+        DEBUG_INFO_PRINT("[Controller] 協議初始化成功\n");
+        update(); // 初始化時更新一次狀態
+    } else {
+        DEBUG_ERROR_PRINT("[Controller] 協議初始化失敗\n");
+        consecutiveErrors = 1;
+    }
+    
+    DEBUG_INFO_PRINT("[Controller] 初始化完成 - 協議: %s v%s\n", 
+                      getProtocolName(), getProtocolVersion());
+}
+
+ThermostatController::ThermostatController(ThermostatController&& other) noexcept
+    : protocol(std::move(other.protocol)),
+      power(other.power),
+      mode(other.mode),
+      targetTemperature(other.targetTemperature),
+      currentTemperature(other.currentTemperature),
+      fanSpeed(other.fanSpeed),
+      consecutiveErrors(other.consecutiveErrors),
+      lastUpdateTime(other.lastUpdateTime),
+      lastSuccessfulUpdate(other.lastSuccessfulUpdate) {
+    
+    DEBUG_INFO_PRINT("[Controller] 移動構造函數執行\n");
+}
+
+ThermostatController& ThermostatController::operator=(ThermostatController&& other) noexcept {
+    if (this != &other) {
+        protocol = std::move(other.protocol);
+        power = other.power;
+        mode = other.mode;
+        targetTemperature = other.targetTemperature;
+        currentTemperature = other.currentTemperature;
+        fanSpeed = other.fanSpeed;
+        consecutiveErrors = other.consecutiveErrors;
+        lastUpdateTime = other.lastUpdateTime;
+        lastSuccessfulUpdate = other.lastSuccessfulUpdate;
+        
+        DEBUG_INFO_PRINT("[Controller] 移動賦值操作符執行\n");
+    }
+    return *this;
 }
 
 bool ThermostatController::setPower(bool on) {
-    uint8_t payload[4];
-    payload[0] = on ? '1' : '0';  // power
-    payload[1] = '0' + mode;      // 當前模式
-    payload[2] = s21_encode_target_temp(targetTemperature);
-    payload[3] = fanSpeed;        // 使用當前風扇模式
-    
-    if (!protocol.sendCommand('D', '1', payload, 4)) {
-        DEBUG_ERROR_PRINT("[Controller] 錯誤：無法設置電源狀態\n");
+    if (!protocol) {
+        DEBUG_ERROR_PRINT("[Controller] 錯誤：協議實例無效\n");
         return false;
     }
     
-    power = on;
-    DEBUG_INFO_PRINT("[Controller] 電源狀態設置為：%s\n", on ? "開啟" : "關閉");
-    return true;
+    if (isInErrorRecoveryMode()) {
+        DEBUG_WARN_PRINT("[Controller] 跳過操作：處於錯誤恢復模式\n");
+        return false;
+    }
+    
+    DEBUG_INFO_PRINT("[Controller] 設置電源狀態：%s\n", on ? "開啟" : "關閉");
+    
+    // 使用抽象協議介面設置電源和模式
+    bool success = protocol->setPowerAndMode(on, mode, targetTemperature, fanSpeed);
+    
+    if (success) {
+        power = on;
+        resetErrorCount();
+        DEBUG_INFO_PRINT("[Controller] 電源狀態設置成功\n");
+    } else {
+        handleProtocolError("setPower");
+    }
+    
+    return success;
 }
 
 bool ThermostatController::setTargetMode(uint8_t newMode) {
+    if (!protocol) {
+        DEBUG_ERROR_PRINT("[Controller] 錯誤：協議實例無效\n");
+        return false;
+    }
+    
+    if (isInErrorRecoveryMode()) {
+        DEBUG_WARN_PRINT("[Controller] 跳過操作：處於錯誤恢復模式\n");
+        return false;
+    }
+    
     // 將 HomeKit 模式轉換為空調模式
     uint8_t acMode = convertHomeKitToACMode(newMode);
+    
+    DEBUG_INFO_PRINT("[Controller] 設置目標模式：HomeKit=%d -> AC=%d\n", newMode, acMode);
+    
+    // 檢查協議是否支持該模式
+    if (!protocol->supportsMode(acMode)) {
+        DEBUG_ERROR_PRINT("[Controller] 錯誤：協議不支持模式 %d\n", acMode);
+        return false;
+    }
     
     // 如果是切換到關機模式，直接關閉電源
     if (newMode == HAP_MODE_OFF) {
@@ -57,131 +125,160 @@ bool ThermostatController::setTargetMode(uint8_t newMode) {
         }
     }
     
-    uint8_t payload[4];
-    payload[0] = power ? '1' : '0';  // 保持當前電源狀態
-    payload[1] = '0' + acMode;       // 新模式
-    payload[2] = s21_encode_target_temp(targetTemperature);
-    payload[3] = fanSpeed;           // 使用當前風扇模式
+    // 使用抽象協議介面設置模式
+    bool success = protocol->setPowerAndMode(power, acMode, targetTemperature, fanSpeed);
     
-    if (!protocol.sendCommand('D', '1', payload, 4)) {
-        DEBUG_ERROR_PRINT("[Controller] 錯誤：無法設置目標模式\n");
-        return false;
+    if (success) {
+        mode = acMode;
+        resetErrorCount();
+        DEBUG_INFO_PRINT("[Controller] 模式設置成功：%d\n", newMode);
+    } else {
+        handleProtocolError("setTargetMode");
     }
     
-    mode = acMode;
-    DEBUG_INFO_PRINT("[Controller] 模式設置為：%d\n", newMode);
-    return true;
+    return success;
 }
 
 bool ThermostatController::setTargetTemperature(float temperature) {
-    // 檢查溫度是否在有效範圍內
-    if (temperature < MIN_TEMP || temperature > MAX_TEMP || isnan(temperature)) {
-        DEBUG_ERROR_PRINT("[Controller] 錯誤：無效的溫度值 %.1f°C\n", temperature);
+    if (!protocol) {
+        DEBUG_ERROR_PRINT("[Controller] 錯誤：協議實例無效\n");
         return false;
     }
     
-    uint8_t payload[4];
-    payload[0] = power ? '1' : '0';  // 保持當前電源狀態
-    payload[1] = '0' + mode;         // 保持當前模式
-    payload[2] = s21_encode_target_temp(temperature);
-    payload[3] = fanSpeed;           // 使用當前風扇模式
-    
-    if (!protocol.sendCommand('D', '1', payload, 4)) {
-        DEBUG_ERROR_PRINT("[Controller] 錯誤：無法設置目標溫度\n");
+    if (isInErrorRecoveryMode()) {
+        DEBUG_WARN_PRINT("[Controller] 跳過操作：處於錯誤恢復模式\n");
         return false;
     }
     
-    targetTemperature = temperature;
-    DEBUG_INFO_PRINT("[Controller] 目標溫度設置為：%.1f°C\n", temperature);
-    return true;
+    // 檢查溫度範圍
+    auto tempRange = protocol->getTemperatureRange();
+    if (temperature < tempRange.first || temperature > tempRange.second || isnan(temperature)) {
+        DEBUG_ERROR_PRINT("[Controller] 錯誤：無效的溫度值 %.1f°C (範圍: %.1f-%.1f°C)\n", 
+                          temperature, tempRange.first, tempRange.second);
+        return false;
+    }
+    
+    DEBUG_INFO_PRINT("[Controller] 設置目標溫度：%.1f°C\n", temperature);
+    
+    // 使用抽象協議介面設置溫度
+    bool success = protocol->setTemperature(temperature);
+    
+    if (success) {
+        targetTemperature = temperature;
+        resetErrorCount();
+        DEBUG_INFO_PRINT("[Controller] 目標溫度設置成功\n");
+    } else {
+        handleProtocolError("setTargetTemperature");
+    }
+    
+    return success;
 }
 
 void ThermostatController::update() {
     unsigned long currentTime = millis();
-
-    uint8_t payload[4];
-    size_t payloadLen;
-    uint8_t cmd0, cmd1;
     
-    // 更新狀態
-    if (protocol.sendCommand('F', '1')) {
-        if (protocol.parseResponse(cmd0, cmd1, payload, payloadLen)) {
-            if (cmd0 == 'G' && cmd1 == '1' && payloadLen >= 4) {
-                bool newPower = payload[0] == '1';
-                uint8_t newMode = payload[1] - '0';
-                float newTargetTemp = s21_decode_target_temp(payload[2]);
-                uint8_t newFanSpeed = payload[3];  // 保存新的風扇速度
-                uint8_t fanSpeedValue = convertACToFanSpeed(newFanSpeed);
-                
-                // 添加詳細的狀態日誌
-                DEBUG_INFO_PRINT("========== 空調狀態 ==========\n");
-                DEBUG_INFO_PRINT("電源狀態：%s\n", newPower ? "開啟" : "關閉");
-                DEBUG_INFO_PRINT("大金模式：%d (%s)\n", newMode, getACModeText(newMode));
-                DEBUG_INFO_PRINT("HomeKit模式：%d (%s)\n", 
-                               convertACToHomeKitMode(newMode, newPower),
-                               getHomeKitModeText(convertACToHomeKitMode(newMode, newPower)));
-                DEBUG_INFO_PRINT("目標溫度：%.1f°C\n", newTargetTemp);
-                DEBUG_INFO_PRINT("風扇速度：原始字符='%c'(0x%02X), 轉換值=%d (%s)\n", 
-                               newFanSpeed, newFanSpeed, fanSpeedValue, getFanSpeedText(fanSpeedValue));
-                DEBUG_INFO_PRINT("==============================\n");
-                
-                power = newPower;
-                mode = newMode;
-                targetTemperature = newTargetTemp;
-                fanSpeed = newFanSpeed;  // 更新當前風扇速度
-                
-                DEBUG_INFO_PRINT("[Controller] 狀態更新 - 電源：%s，模式：%d，目標溫度：%.1f°C\n",
+    if (!protocol) {
+        DEBUG_ERROR_PRINT("[Controller] 錯誤：協議實例無效\n");
+        return;
+    }
+    
+    // 檢查更新間隔
+    if (currentTime - lastUpdateTime < UPDATE_INTERVAL) {
+        return;
+    }
+    
+    lastUpdateTime = currentTime;
+    
+    // 如果處於錯誤恢復模式，檢查是否可以恢復
+    if (isInErrorRecoveryMode()) {
+        if (currentTime - lastSuccessfulUpdate > ERROR_RECOVERY_INTERVAL) {
+            DEBUG_INFO_PRINT("[Controller] 嘗試從錯誤恢復模式恢復\n");
+            consecutiveErrors = MAX_CONSECUTIVE_ERRORS - 1; // 給一次機會
+        } else {
+            return; // 仍在恢復期間
+        }
+    }
+    
+    DEBUG_VERBOSE_PRINT("[Controller] 開始更新狀態\n");
+    
+    // 查詢設備狀態
+    ACStatus status;
+    if (protocol->queryStatus(status)) {
+        if (status.isValid) {
+            power = status.power;
+            mode = status.mode;
+            targetTemperature = status.targetTemperature;
+            fanSpeed = status.fanSpeed;
+            
+            DEBUG_VERBOSE_PRINT("[Controller] 狀態更新成功 - 電源：%s，模式：%d，目標溫度：%.1f°C\n",
                                power ? "開啟" : "關閉", mode, targetTemperature);
-            }
         }
+        resetErrorCount();
+    } else {
+        handleProtocolError("queryStatus");
     }
     
-    // 更新當前溫度
-    if (protocol.sendCommand('R', 'H')) {
-        if (protocol.parseResponse(cmd0, cmd1, payload, payloadLen)) {
-            if (cmd0 == 'S' && cmd1 == 'H' && payloadLen >= 4) {
-                // 打印原始數據以便調試
-                DEBUG_INFO_PRINT("[Controller] 收到溫度數據：[%c%c%c%c]\n",
-                               payload[0], payload[1], payload[2], payload[3]);
-                
-                // 檢查數據格式
-                bool isValidFormat = true;
-                for (int i = 0; i < 3; i++) {
-                    if (payload[i] < '0' || payload[i] > '9') {
-                        isValidFormat = false;
-                        break;
-                    }
-                }
-                if (payload[3] != '-' && payload[3] != '+') {
-                    isValidFormat = false;
-                }
-                
-                if (!isValidFormat) {
-                    DEBUG_ERROR_PRINT("[Controller] 錯誤：無效的溫度數據格式\n");
-                    return;
-                }
-                
-                // 解析溫度
-                int rawTemp = s21_decode_int_sensor(payload);
-                float newTemp = (float)rawTemp * 0.1f;
-                
-                DEBUG_VERBOSE_PRINT("[Controller] 溫度解析：原始值=%d，轉換後=%.1f°C\n",
-                               rawTemp, newTemp);
-                
-                // 檢查溫度是否在合理範圍內
-                if (newTemp < -50.0f || newTemp > 100.0f) {
-                    DEBUG_ERROR_PRINT("[Controller] 錯誤：溫度值超出合理範圍\n");
-                    return;
-                }
-                
-                // 更新溫度
-                currentTemperature = newTemp;
-                // if (abs(newTemp - currentTemperature) >= TEMP_THRESHOLD) {
-                //     DEBUG_INFO_PRINT("[Controller] 溫度變化：%.1f°C -> %.1f°C\n",
-                //                    currentTemperature, newTemp);
-                //     currentTemperature = newTemp;
-                // }
-            }
-        }
+    // 查詢當前溫度
+    float newTemperature;
+    if (protocol->queryTemperature(newTemperature)) {
+        currentTemperature = newTemperature;
+        DEBUG_VERBOSE_PRINT("[Controller] 溫度更新成功：%.1f°C\n", currentTemperature);
+        resetErrorCount();
+    } else {
+        handleProtocolError("queryTemperature");
     }
-} 
+    
+    // 如果所有操作都成功，更新成功時間
+    if (protocol->isLastOperationSuccessful()) {
+        lastSuccessfulUpdate = currentTime;
+    }
+}
+
+bool ThermostatController::supportsMode(uint8_t mode) const {
+    return protocol ? protocol->supportsMode(mode) : false;
+}
+
+bool ThermostatController::supportsFanSpeed(uint8_t fanSpeed) const {
+    return protocol ? protocol->supportsFanSpeed(fanSpeed) : false;
+}
+
+std::pair<float, float> ThermostatController::getTemperatureRange() const {
+    return protocol ? protocol->getTemperatureRange() : std::make_pair(16.0f, 30.0f);
+}
+
+const char* ThermostatController::getProtocolName() const {
+    return protocol ? protocol->getProtocolName() : "Unknown";
+}
+
+const char* ThermostatController::getProtocolVersion() const {
+    return protocol ? protocol->getProtocolVersion() : "Unknown";
+}
+
+// 私有輔助方法實現
+bool ThermostatController::handleProtocolError(const char* operation) {
+    consecutiveErrors++;
+    DEBUG_ERROR_PRINT("[Controller] 操作失敗：%s (連續錯誤: %lu)\n", 
+                      operation, consecutiveErrors);
+    
+    if (protocol) {
+        DEBUG_ERROR_PRINT("[Controller] 協議錯誤：%s\n", protocol->getLastError());
+    }
+    
+    if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+        DEBUG_ERROR_PRINT("[Controller] 進入錯誤恢復模式\n");
+        return false;
+    }
+    
+    return true;
+}
+
+bool ThermostatController::isInErrorRecoveryMode() const {
+    return consecutiveErrors >= MAX_CONSECUTIVE_ERRORS;
+}
+
+void ThermostatController::resetErrorCount() {
+    if (consecutiveErrors > 0) {
+        DEBUG_INFO_PRINT("[Controller] 重置錯誤計數（之前: %lu）\n", consecutiveErrors);
+        consecutiveErrors = 0;
+    }
+}
