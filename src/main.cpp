@@ -79,6 +79,7 @@ void initializeMonitoring() {
     html += "<div style=\"text-align:center;\">";
     html += "<a href=\"/status\" class=\"button\">📊 詳細狀態</a>";
     html += "<a href=\"/wifi\" class=\"button\">📶 WiFi配置</a>";
+    html += "<a href=\"/homekit\" class=\"button\">🏠 HomeKit設置</a>";
     html += "<a href=\"/ota\" class=\"button\">🔄 OTA更新</a>";
     html += "</div></div></body></html>";
     webServer->send(200, "text/html", html);
@@ -331,7 +332,7 @@ void initializeMonitoring() {
     html += "<label for=\"password\">密碼:</label>";
     html += "<input type=\"password\" id=\"password\" name=\"password\">";
     html += "</div>";
-    html += "<button type=\"submit\" class=\"button\">💾 保存並重啟</button>";
+    html += "<button type=\"submit\" class=\"button\">💾 保存WiFi並重啟</button>";
     html += "</form>";
     html += "<script>";
     html += "function selectNetwork(ssid) {";
@@ -397,16 +398,17 @@ void initializeMonitoring() {
       configManager.setWiFiCredentials(ssid, password);
       
       String html = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">";
-      html += "<title>配置已保存</title>";
+      html += "<title>WiFi配置已保存</title>";
       html += "<style>body{font-family:Arial,sans-serif;margin:20px;background:#f0f0f0;}";
       html += ".container{max-width:400px;margin:0 auto;background:white;padding:20px;border-radius:10px;text-align:center;}";
       html += ".success{background:#d4edda;border:1px solid #c3e6cb;padding:15px;border-radius:5px;margin:15px 0;}";
       html += "</style></head><body>";
       html += "<div class=\"container\">";
-      html += "<h1>✅ 配置已保存</h1>";
+      html += "<h1>✅ WiFi配置已保存</h1>";
       html += "<div class=\"success\">";
       html += "<p>新的WiFi配置已保存成功！</p>";
-      html += "<p>設備將在3秒後重啟並嘗試連接到：<br><strong>" + ssid + "</strong></p>";
+      html += "<p>設備將在3秒後重啟並嘗試連接到：</p>";
+      html += "<p><strong>" + ssid + "</strong></p>";
       html += "</div>";
       html += "<p>重啟後請等待設備重新連接，然後訪問新的IP地址。</p>";
       html += "</div>";
@@ -415,6 +417,206 @@ void initializeMonitoring() {
       webServer->send(200, "text/html", html);
     } else {
       webServer->send(400, "text/plain", "SSID不能為空");
+    }
+  });
+  
+  // HomeKit配置頁面
+  webServer->on("/homekit", [](){
+    String html = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">";
+    html += "<title>HomeKit 配置</title>";
+    html += "<style>body{font-family:Arial,sans-serif;margin:20px;background:#f0f0f0;}";
+    html += ".container{max-width:600px;margin:0 auto;background:white;padding:20px;border-radius:10px;}";
+    html += ".form-group{margin:15px 0;}";
+    html += "label{display:block;margin-bottom:5px;font-weight:bold;}";
+    html += "input[type=text]{width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;box-sizing:border-box;}";
+    html += ".button{background:#007cba;color:white;padding:10px 20px;border:none;border-radius:5px;cursor:pointer;}";
+    html += ".button:hover{background:#006ba6;}";
+    html += ".warning{background:#fff3cd;border:1px solid #ffeaa7;padding:15px;border-radius:5px;margin:15px 0;}";
+    html += ".info{background:#e8f4f8;border:1px solid #bee5eb;padding:15px;border-radius:5px;margin:15px 0;}";
+    html += ".current-config{background:#f8f9fa;border:1px solid #dee2e6;padding:15px;border-radius:5px;margin:15px 0;}";
+    html += "</style></head><body>";
+    html += "<div class=\"container\">";
+    html += "<h1>🏠 HomeKit 配置</h1>";
+    
+    // 當前配置顯示
+    String currentPairingCode = configManager.getHomeKitPairingCode();
+    String currentDeviceName = configManager.getHomeKitDeviceName();
+    String currentQRID = configManager.getHomeKitQRID();
+    
+    html += "<div class=\"current-config\">";
+    html += "<h3>📋 當前配置</h3>";
+    html += "<p><strong>配對碼：</strong>" + currentPairingCode + "</p>";
+    html += "<p><strong>設備名稱：</strong>" + currentDeviceName + "</p>";
+    html += "<p><strong>QR ID：</strong>" + currentQRID + "</p>";
+    html += "<p><strong>HomeKit端口：</strong>1201</p>";
+    html += "<p><strong>初始化狀態：</strong>" + String(homeKitInitialized ? "✅ 已就緒" : "❌ 未就緒") + "</p>";
+    html += "</div>";
+    
+    html += "<div class=\"warning\">";
+    html += "<h3>⚠️ 重要提醒</h3>";
+    html += "<p>修改HomeKit配置會中斷現有配對關係，您需要：</p>";
+    html += "<ul>";
+    html += "<li>從家庭App中移除現有設備</li>";
+    html += "<li>使用新的配對碼重新添加設備</li>";
+    html += "<li>重新配置自動化和場景</li>";
+    html += "</ul>";
+    html += "</div>";
+    
+    html += "<form action=\"/homekit-save\" method=\"POST\">";
+    html += "<h3>🔧 修改配置</h3>";
+    
+    html += "<div class=\"form-group\">";
+    html += "<label for=\"pairing_code\">配對碼 (8位數字):</label>";
+    html += "<input type=\"text\" id=\"pairing_code\" name=\"pairing_code\" ";
+    html += "placeholder=\"留空保持當前: " + currentPairingCode + "\" ";
+    html += "pattern=\"[0-9]{8}\" maxlength=\"8\" ";
+    html += "title=\"請輸入8位數字作為HomeKit配對碼\">";
+    html += "<small style=\"color:#666;display:block;margin-top:5px;\">";
+    html += "必須是8位純數字，例如：12345678";
+    html += "</small>";
+    html += "</div>";
+    
+    html += "<div class=\"form-group\">";
+    html += "<label for=\"device_name\">設備名稱:</label>";
+    html += "<input type=\"text\" id=\"device_name\" name=\"device_name\" ";
+    html += "placeholder=\"留空保持當前: " + currentDeviceName + "\" ";
+    html += "maxlength=\"50\">";
+    html += "<small style=\"color:#666;display:block;margin-top:5px;\">";
+    html += "在家庭App中顯示的設備名稱";
+    html += "</small>";
+    html += "</div>";
+    
+    html += "<div class=\"form-group\">";
+    html += "<label for=\"qr_id\">QR識別碼:</label>";
+    html += "<input type=\"text\" id=\"qr_id\" name=\"qr_id\" ";
+    html += "placeholder=\"留空保持當前: " + currentQRID + "\" ";
+    html += "maxlength=\"4\">";
+    html += "<small style=\"color:#666;display:block;margin-top:5px;\">";
+    html += "QR碼中的設備識別碼，通常為4個字符";
+    html += "</small>";
+    html += "</div>";
+    
+    html += "<div style=\"text-align:center;margin:20px 0;\">";
+    html += "<button type=\"submit\" class=\"button\">💾 保存HomeKit配置</button>";
+    html += "</div>";
+    html += "</form>";
+    
+    html += "<div class=\"info\">";
+    html += "<h3>💡 使用說明</h3>";
+    html += "<p><strong>配對流程：</strong></p>";
+    html += "<ol>";
+    html += "<li>修改配置後，設備會自動重啟</li>";
+    html += "<li>在家庭App中掃描新的QR碼</li>";
+    html += "<li>或手動輸入新的配對碼：<strong>" + currentPairingCode + "</strong></li>";
+    html += "<li>完成配對後即可正常使用</li>";
+    html += "</ol>";
+    html += "</div>";
+    
+    html += "<div style=\"text-align:center;margin:20px 0;\">";
+    html += "<a href=\"/\" style=\"color:#007cba;text-decoration:none;\">⬅️ 返回主頁</a>";
+    html += "</div>";
+    
+    html += "</div></body></html>";
+    webServer->send(200, "text/html", html);
+  });
+  
+  // HomeKit配置保存處理
+  webServer->on("/homekit-save", HTTP_POST, [](){
+    String pairingCode = webServer->arg("pairing_code");
+    String deviceName = webServer->arg("device_name");
+    String qrId = webServer->arg("qr_id");
+    
+    bool configChanged = false;
+    String currentPairingCode = configManager.getHomeKitPairingCode();
+    String currentDeviceName = configManager.getHomeKitDeviceName();
+    String currentQRID = configManager.getHomeKitQRID();
+    
+    // 檢查配對碼
+    if (pairingCode.length() > 0) {
+      if (pairingCode.length() == 8 && pairingCode != currentPairingCode) {
+        // 驗證是否為8位數字
+        bool validCode = true;
+        for (int i = 0; i < 8; i++) {
+          if (!isDigit(pairingCode.charAt(i))) {
+            validCode = false;
+            break;
+          }
+        }
+        if (validCode) {
+          currentPairingCode = pairingCode;
+          configChanged = true;
+          DEBUG_INFO_PRINT("[Main] 更新HomeKit配對碼\n");
+        } else {
+          webServer->send(400, "text/plain", "配對碼必須是8位數字");
+          return;
+        }
+      }
+    }
+    
+    // 檢查設備名稱
+    if (deviceName.length() > 0 && deviceName != currentDeviceName) {
+      currentDeviceName = deviceName;
+      configChanged = true;
+      DEBUG_INFO_PRINT("[Main] 更新設備名稱: %s\n", deviceName.c_str());
+    }
+    
+    // 檢查QR ID
+    if (qrId.length() > 0 && qrId != currentQRID) {
+      currentQRID = qrId;
+      configChanged = true;
+      DEBUG_INFO_PRINT("[Main] 更新QR ID: %s\n", qrId.c_str());
+    }
+    
+    if (configChanged) {
+      // 保存HomeKit配置
+      configManager.setHomeKitConfig(currentPairingCode, currentDeviceName, currentQRID);
+      
+      String html = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">";
+      html += "<title>HomeKit配置已保存</title>";
+      html += "<style>body{font-family:Arial,sans-serif;margin:20px;background:#f0f0f0;}";
+      html += ".container{max-width:500px;margin:0 auto;background:white;padding:20px;border-radius:10px;text-align:center;}";
+      html += ".success{background:#d4edda;border:1px solid #c3e6cb;padding:15px;border-radius:5px;margin:15px 0;}";
+      html += ".warning{background:#fff3cd;border:1px solid #ffeaa7;padding:15px;border-radius:5px;margin:15px 0;}";
+      html += "</style></head><body>";
+      html += "<div class=\"container\">";
+      html += "<h1>✅ HomeKit配置已保存</h1>";
+      html += "<div class=\"success\">";
+      html += "<p><strong>配置更新成功</strong></p>";
+      if (pairingCode.length() > 0) {
+        html += "<p>新配對碼：<strong>" + pairingCode + "</strong></p>";
+      }
+      if (deviceName.length() > 0) {
+        html += "<p>新設備名稱：<strong>" + deviceName + "</strong></p>";
+      }
+      if (qrId.length() > 0) {
+        html += "<p>新QR ID：<strong>" + qrId + "</strong></p>";
+      }
+      html += "</div>";
+      html += "<div class=\"warning\">";
+      html += "<p>⚠️ <strong>重新配對提醒</strong></p>";
+      html += "<p>設備將重啟並應用新配置</p>";
+      html += "<p>請從家庭App移除舊設備，然後重新添加</p>";
+      html += "</div>";
+      html += "<p>設備將在3秒後重啟...</p>";
+      html += "</div>";
+      html += "<script>setTimeout(function(){window.location='/restart';}, 3000);</script>";
+      html += "</body></html>";
+      webServer->send(200, "text/html", html);
+    } else {
+      String html = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">";
+      html += "<title>無變更</title>";
+      html += "<style>body{font-family:Arial,sans-serif;margin:20px;background:#f0f0f0;}";
+      html += ".container{max-width:400px;margin:0 auto;background:white;padding:20px;border-radius:10px;text-align:center;}";
+      html += ".info{background:#e8f4f8;border:1px solid #bee5eb;padding:15px;border-radius:5px;margin:15px 0;}";
+      html += "</style></head><body>";
+      html += "<div class=\"container\">";
+      html += "<h1>ℹ️ 無需更新</h1>";
+      html += "<div class=\"info\">";
+      html += "<p>您沒有修改任何配置，或輸入的值與當前配置相同。</p>";
+      html += "</div>";
+      html += "<p><a href=\"/homekit\">⬅️ 返回HomeKit配置</a></p>";
+      html += "</div></body></html>";
+      webServer->send(200, "text/html", html);
     }
   });
   
@@ -439,17 +641,24 @@ void initializeHomeKit() {
   
   DEBUG_INFO_PRINT("[Main] 開始初始化HomeKit...\n");
   
-  // 使用固定的HomeKit配置
-  homeSpan.setPairingCode("11122333");
+  // 使用配置管理器中的HomeKit設置
+  String pairingCode = configManager.getHomeKitPairingCode();
+  String deviceName = configManager.getHomeKitDeviceName();
+  String qrId = configManager.getHomeKitQRID();
+  
+  homeSpan.setPairingCode(pairingCode.c_str());
   homeSpan.setStatusPin(2);
   homeSpan.setHostNameSuffix("");
-  homeSpan.setQRID("HSPN");
+  homeSpan.setQRID(qrId.c_str());
   homeSpan.setPortNum(1201);        // 改變HomeSpan端口，讓WebServer使用8080
   // 注意：HomeSpan 2.1.2版本不支援setMaxConnections，使用預設TCP連接配置
   homeSpan.enableWebLog(50,"pool.ntp.org","UTC-8","log");
+  
+  DEBUG_INFO_PRINT("[Main] HomeKit配置 - 配對碼: %s, 設備名稱: %s\n", 
+                   pairingCode.c_str(), deviceName.c_str());
 
   // 初始化 HomeSpan
-  homeSpan.begin(Category::Thermostats, "DaiSpan Thermostat");
+  homeSpan.begin(Category::Thermostats, deviceName.c_str());
   
   // 立即創建 HomeSpan 配件和服務
   accessory = new SpanAccessory();
