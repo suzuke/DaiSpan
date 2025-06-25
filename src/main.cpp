@@ -8,6 +8,7 @@
 #include "common/Debug.h"
 #include "common/Config.h"
 #include "common/WiFiManager.h"
+#include <ArduinoOTA.h>
 #include "common/OTAManager.h"
 #include "WiFi.h"
 #include "WebServer.h"
@@ -168,7 +169,7 @@ void initializeMonitoring() {
     html += "</div>";
     html += "<div class=\"status-item\">";
     html += "<span class=\"status-label\">晶片型號:</span>";
-    html += "<span class=\"status-value\">ESP32-C3</span>";
+    html += "<span class=\"status-value\">" + String(ESP.getChipModel()) + "</span>";
     html += "</div>";
     html += "<div class=\"status-item\">";
     html += "<span class=\"status-label\">CPU頻率:</span>";
@@ -185,6 +186,10 @@ void initializeMonitoring() {
     unsigned long hours = (uptime % 86400000) / 3600000;
     unsigned long minutes = (uptime % 3600000) / 60000;
     html += "<span class=\"status-value\">" + String(days) + "天 " + String(hours) + "時 " + String(minutes) + "分</span>";
+    html += "</div>";
+    html += "<div class=\"status-item\">";
+    html += "<span class=\"status-label\">固件版本:</span>";
+    html += "<span class=\"status-value\">v3.0-OTA-FINAL</span>";
     html += "</div>";
     html += "</div>";
     
@@ -293,7 +298,7 @@ void initializeMonitoring() {
     json += "\"homekit_initialized\":" + String(homeKitInitialized ? "true" : "false") + ",";
     json += "\"device_initialized\":" + String(deviceInitialized ? "true" : "false") + ",";
     json += "\"uptime\":" + String(millis()) + ",";
-    json += "\"chip_model\":\"ESP32-C3\",";
+    json += "\"chip_model\":\"" + String(ESP.getChipModel()) + "\",";
     json += "\"homekit_port\":1201,";
     json += "\"monitor_port\":8080}";
     webServer->send(200, "application/json", json);
@@ -1033,25 +1038,27 @@ void initializeHomeKit() {
   homeSpan.setQRID(qrId.c_str());
   homeSpan.setPortNum(1201);        // 改變HomeSpan端口，讓WebServer使用8080
   // 注意：HomeSpan 2.1.2版本不支援setMaxConnections，使用預設TCP連接配置
-  homeSpan.enableWebLog(50,"pool.ntp.org","UTC-8","log");
+  // 暫時關閉WebLog以節省記憶體
+  // homeSpan.enableWebLog(50,"pool.ntp.org","UTC-8","log");
   
   DEBUG_INFO_PRINT("[Main] HomeKit配置 - 配對碼: %s, 設備名稱: %s\n", 
                    pairingCode.c_str(), deviceName.c_str());
 
-  // 初始化 HomeSpan（啟用詳細日誌和配對管理）
-  homeSpan.setLogLevel(2);  // 啟用詳細的HomeSpan日誌
+  // 初始化 HomeSpan（記憶體優化配置）
+  homeSpan.setLogLevel(0);  // 關閉詳細日誌以節省記憶體
   homeSpan.setControlPin(0);  // 設置控制引腳為Boot按鈕（用於重置配對）
   homeSpan.setStatusPin(2);   // 設置狀態引腳為內建LED
-  homeSpan.enableOTA();       // 啟用HomeSpan OTA更新
+  // 關閉HomeSpan OTA，使用Arduino OTA
+  // homeSpan.enableOTA();
   homeSpan.begin(Category::Thermostats, deviceName.c_str());
   
-  // 立即創建 HomeSpan 配件和服務（在同一作用域內）
+  // 立即創建 HomeSpan 配件和服務（記憶體優化）
   accessory = new SpanAccessory();
     new Service::AccessoryInformation();
-    new Characteristic::Name("智能恆溫器");
+    new Characteristic::Name("Thermostat");  // 使用短名稱節省記憶體
     new Characteristic::Manufacturer("DaiSpan");
-    new Characteristic::SerialNumber("123-ABC");
-    new Characteristic::Model("恆溫器 v1.0");
+    new Characteristic::SerialNumber("123");  // 縮短序列號
+    new Characteristic::Model("TH1.0");  // 縮短型號名稱
     new Characteristic::FirmwareRevision("1.0");
     new Characteristic::Identify();
     
@@ -1203,6 +1210,47 @@ void setup() {
   if (WiFi.status() == WL_CONNECTED) {
     DEBUG_INFO_PRINT("\n[Main] WiFi連接成功: %s\n", WiFi.localIP().toString().c_str());
     
+    // 初始化Arduino OTA
+    ArduinoOTA.setHostname("DaiSpan-Thermostat");
+    ArduinoOTA.setPassword("12345678");  // 設置OTA密碼
+    ArduinoOTA.setPort(3232);  // 標準OTA端口
+    
+    // OTA事件回調
+    ArduinoOTA.onStart([]() {
+      String type;
+      if (ArduinoOTA.getCommand() == U_FLASH) {
+        type = "sketch";
+      } else { // U_SPIFFS
+        type = "filesystem";
+      }
+      DEBUG_INFO_PRINT("[OTA] 開始更新 %s\n", type.c_str());
+    });
+    
+    ArduinoOTA.onEnd([]() {
+      DEBUG_INFO_PRINT("[OTA] 更新完成\n");
+    });
+    
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+      static unsigned int lastPercent = 0;
+      unsigned int percent = (progress / (total / 100));
+      if (percent != lastPercent && percent % 10 == 0) {
+        DEBUG_INFO_PRINT("[OTA] 進度: %u%%\n", percent);
+        lastPercent = percent;
+      }
+    });
+    
+    ArduinoOTA.onError([](ota_error_t error) {
+      DEBUG_ERROR_PRINT("[OTA] 錯誤[%u]: ", error);
+      if (error == OTA_AUTH_ERROR) DEBUG_ERROR_PRINT("認證失敗\n");
+      else if (error == OTA_BEGIN_ERROR) DEBUG_ERROR_PRINT("開始失敗\n");
+      else if (error == OTA_CONNECT_ERROR) DEBUG_ERROR_PRINT("連接失敗\n");
+      else if (error == OTA_RECEIVE_ERROR) DEBUG_ERROR_PRINT("接收失敗\n");
+      else if (error == OTA_END_ERROR) DEBUG_ERROR_PRINT("結束失敗\n");
+    });
+    
+    ArduinoOTA.begin();
+    DEBUG_INFO_PRINT("[Main] Arduino OTA已啟用 - 主機名: DaiSpan-Thermostat\n");
+    
     // WiFi連接成功，不啟動Web服務器，專注於HomeKit功能
     
     // 先初始化硬件組件
@@ -1243,6 +1291,11 @@ void loop() {
   }
   #endif
 
+  // 處理Arduino OTA（高優先級，頻繁調用）
+  if (WiFi.status() == WL_CONNECTED) {
+    ArduinoOTA.handle();
+  }
+  
   // 根據模式處理不同的邏輯
   if (homeKitInitialized) {
     // HomeKit模式：處理HomeSpan、WebServer和OTA

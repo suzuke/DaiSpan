@@ -10,14 +10,14 @@ DaiSpan is an ESP32-based HomeKit smart thermostat that controls Daikin air cond
 
 ### Build and Deploy
 ```bash
-# Build firmware (default target: ESP32-C3)
+# Build firmware (default target: ESP32-S3-USB)
 pio run
 
-# Upload via USB
+# Upload via USB (default method)
 pio run -t upload
 
-# Upload via OTA (replace with device IP)
-pio run -t upload --upload-port 192.168.x.x
+# Upload via OTA
+pio run -e esp32-s3-ota -t upload
 
 # Monitor serial output
 pio device monitor
@@ -26,13 +26,59 @@ pio device monitor
 pio run -t clean
 ```
 
-### Multi-Board Support
-```bash
-# Build for ESP32-S3 Super Mini
-pio run -e esp32s3supermini
+### Environment Configuration
+The project supports flexible upload methods via different environments:
 
-# Build for ESP32-S3 DevKitC
-pio run -e esp32s3devkitc1
+#### USB Upload (Default)
+```bash
+# Uses esp32-s3-usb environment (default)
+pio run -e esp32-s3-usb -t upload
+```
+
+#### OTA Upload
+```bash
+# Uses esp32-s3-ota environment
+pio run -e esp32-s3-ota -t upload
+```
+
+**Note**: For OTA uploads, ensure the device IP address is correctly set in `platformio.ini` under `[env:esp32-s3-ota]` section.
+
+### Multi-Board Support
+
+#### ESP32-S3 DevKitC-1 (Primary Target)
+```bash
+# USB Upload
+pio run -e esp32-s3-usb -t upload
+
+# OTA Upload  
+pio run -e esp32-s3-ota -t upload
+
+# Legacy environment (build only)
+pio run -e esp32-s3-devkitc-1-n16r8v
+```
+
+#### ESP32-C3 SuperMini
+```bash
+# USB Upload
+pio run -e esp32-c3-supermini-usb -t upload
+
+# OTA Upload
+pio run -e esp32-c3-supermini-ota -t upload
+
+# Legacy environment (build only)
+pio run -e esp32-c3-supermini
+```
+
+#### ESP32-S3 SuperMini
+```bash
+# USB Upload
+pio run -e esp32-s3-supermini-usb -t upload
+
+# OTA Upload
+pio run -e esp32-s3-supermini-ota -t upload
+
+# Legacy environment (build only)
+pio run -e esp32-s3-supermini
 ```
 
 ## Architecture Overview
