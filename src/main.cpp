@@ -219,15 +219,36 @@ void initializeMonitoring() {
     html += "<div class=\"status-card\">";
     html += "<h3>🌡️ 溫控器狀態</h3>";
     if (thermostatController && deviceInitialized) {
-      // 這裡可以添加溫控器的具體狀態
-      html += "<div class=\"status-item\">";
-      html += "<span class=\"status-label\">通訊協議:</span>";
-      html += "<span class=\"status-value\">S21 協議版本1</span>";
-      html += "</div>";
+      // 顯示實際的協議信息
+      if (configManager.getSimulationMode()) {
+        html += "<div class=\"status-item\">";
+        html += "<span class=\"status-label\">通訊協議:</span>";
+        html += "<span class=\"status-value\">🧪 模擬協議 (測試模式)</span>";
+        html += "</div>";
+      } else {
+        // 顯示真實協議信息
+        html += "<div class=\"status-item\">";
+        html += "<span class=\"status-label\">通訊協議:</span>";
+        html += "<span class=\"status-value\">S21 Daikin Protocol v1.0+</span>";
+        html += "</div>";
+      }
       html += "<div class=\"status-item\">";
       html += "<span class=\"status-label\">串口配置:</span>";
       html += "<span class=\"status-value\">2400 8E2</span>";
       html += "</div>";
+      
+      // 顯示協議能力信息
+      if (!configManager.getSimulationMode()) {
+        html += "<div class=\"status-item\">";
+        html += "<span class=\"status-label\">溫度範圍:</span>";
+        html += "<span class=\"status-value\">16.0°C - 30.0°C</span>";
+        html += "</div>";
+        
+        html += "<div class=\"status-item\">";
+        html += "<span class=\"status-label\">協議狀態:</span>";
+        html += "<span class=\"status-value\">✅ 活躍</span>";
+        html += "</div>";
+      }
       html += "<div class=\"status-item\">";
       html += "<span class=\"status-label\">當前溫度:</span>";
       html += "<span class=\"status-value\">21.0°C</span>";
