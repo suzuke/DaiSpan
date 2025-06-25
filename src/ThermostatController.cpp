@@ -20,13 +20,13 @@ ThermostatController::ThermostatController(std::unique_ptr<IACProtocol> p)
     DEBUG_INFO_PRINT("[Controller] 開始初始化通用控制器 - 協議: %s\n", 
                       protocol->getProtocolName());
     
-    // 初始化協議
-    if (protocol->begin()) {
-        DEBUG_INFO_PRINT("[Controller] 協議初始化成功\n");
+    // 協議已在工廠中初始化，直接檢查狀態
+    if (protocol->isLastOperationSuccessful()) {
+        DEBUG_INFO_PRINT("[Controller] 協議已就緒\n");
         update(); // 初始化時更新一次狀態
     } else {
-        DEBUG_ERROR_PRINT("[Controller] 協議初始化失敗\n");
-        consecutiveErrors = 1;
+        DEBUG_WARN_PRINT("[Controller] 協議可能未完全就緒，將在運行時嘗試恢復\n");
+        consecutiveErrors = 0; // 允許嘗試操作
     }
     
     DEBUG_INFO_PRINT("[Controller] 初始化完成 - 協議: %s v%s\n", 

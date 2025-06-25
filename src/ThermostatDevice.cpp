@@ -23,23 +23,26 @@ ThermostatDevice::ThermostatDevice(IThermostatControl& thermostatControl)
       lastUpdateTime(0),
       lastHeartbeatTime(0) {
     
-    // 初始化特性
-    active = new Characteristic::Active(0);
+    // 初始化特性（使用HomeSpan推薦方式，支持NVS存儲）
     currentTemp = new Characteristic::CurrentTemperature(21.0);
     currentTemp->setRange(0, 100);
     
     targetTemp = new Characteristic::TargetTemperature(21.0);
-    targetTemp->setRange(MIN_TEMP, MAX_TEMP, 0.5);
+    targetTemp->setRange(MIN_TEMP, MAX_TEMP, TEMP_STEP);
     
-    // 初始化模式
-    currentMode = new Characteristic::CurrentHeatingCoolingState(HAP_MODE_OFF);
-    currentMode->setRange(0, 2);  // 確保範圍在 0-2
+    // 初始化模式（CurrentHeatingCoolingState範圍是0-2，沒有AUTO）
+    currentMode = new Characteristic::CurrentHeatingCoolingState(HAP_STATE_OFF);
+    currentMode->setRange(0, 2);  // OFF, HEAT, COOL
     
+    // TargetHeatingCoolingState支持0-3（包含AUTO）
     targetMode = new Characteristic::TargetHeatingCoolingState(HAP_MODE_OFF);
-    targetMode->setValidValues(0,1,2,3);
+    targetMode->setValidValues(4, 0, 1, 2, 3);  // 數量, OFF, HEAT, COOL, AUTO
     
-    // 添加溫度單位特性（攝氏度）
-    new Characteristic::TemperatureDisplayUnits(0);  // 0 = 攝氏度
+    // 必需的溫度單位特性（對HomeKit正常運作至關重要）
+    displayUnits = new Characteristic::TemperatureDisplayUnits(0);  // 0 = 攝氏度
+    
+    // 確保特性能觸發 update() 回調
+    DEBUG_INFO_PRINT("[Device] 恆溫器特性已配置，等待 HomeKit 連接\n");
     
     DEBUG_INFO_PRINT("[Device] 初始化完成 - 當前溫度：%.1f°C，目標溫度：%.1f°C，當前模式：%d(%s)\n",
                    currentTemp->getVal<float>(), targetTemp->getVal<float>(), 
@@ -48,27 +51,12 @@ ThermostatDevice::ThermostatDevice(IThermostatControl& thermostatControl)
 
 // 用戶在 HomeKit 上設定溫度或模式時，會調用此函數（HomeKit → 設備）
 boolean ThermostatDevice::update() {
+    DEBUG_INFO_PRINT("[Device] *** HomeKit update() 回調被觸發 ***\n");
+    
     bool changed = false;
-    bool hasTemperatureChange = targetTemp->getNewVal() != targetTemp->getVal();
     
-    // 處理電源變更 (Active特徵值)
-    if (active->getNewVal() != active->getVal()) {
-        DEBUG_INFO_PRINT("[Device] 收到 HomeKit 電源變更請求：%s -> %s\n",
-                       active->getVal() ? "開啟" : "關閉",
-                       active->getNewVal() ? "開啟" : "關閉");
-        
-        bool newPowerState = active->getNewVal();
-        if (controller.setPower(newPowerState)) {
-            changed = true;
-            DEBUG_INFO_PRINT("[Device] 電源變更成功應用\n");
-        } else {
-            DEBUG_INFO_PRINT("[Device] 電源變更請求被拒絕\n");
-            return false;
-        }
-    }
-    
-    // 處理模式變更
-    if (targetMode->getNewVal() != targetMode->getVal()) {
+    // 檢查目標模式變更（使用updated()方法檢測變更）
+    if (targetMode->updated()) {
         DEBUG_INFO_PRINT("[Device] 收到 HomeKit 模式變更請求：%d(%s) -> %d(%s)\n",
                        targetMode->getVal(), getHomeKitModeText(targetMode->getVal()),
                        targetMode->getNewVal(), getHomeKitModeText(targetMode->getNewVal()));
@@ -79,8 +67,6 @@ boolean ThermostatDevice::update() {
         if (targetMode->getVal() == HAP_MODE_OFF && newMode != HAP_MODE_OFF) {
             DEBUG_INFO_PRINT("[Device] 檢測到從關閉模式切換到運行模式，自動開啟電源\n");
             if (controller.setPower(true)) {
-                active->setVal(true);
-                active->timeVal(); // 強制更新電源狀態
                 DEBUG_INFO_PRINT("[Device] 電源自動開啟成功\n");
             }
         }
@@ -88,14 +74,12 @@ boolean ThermostatDevice::update() {
         else if (newMode == HAP_MODE_OFF) {
             DEBUG_INFO_PRINT("[Device] 切換到關閉模式，自動關閉電源\n");
             if (controller.setPower(false)) {
-                active->setVal(false);
-                active->timeVal(); // 強制更新電源狀態
                 DEBUG_INFO_PRINT("[Device] 電源自動關閉成功\n");
             }
         }
         
         // 只在沒有收到溫度設定時才自動調整溫度
-        if (!hasTemperatureChange) {
+        if (!targetTemp->updated()) {
             float newTargetTemp = targetTemp->getVal();  // 使用當前的目標溫度作為基礎
             float currentTemp = controller.getCurrentTemperature();
             
@@ -133,8 +117,8 @@ boolean ThermostatDevice::update() {
         }
     }
     
-    // 處理溫度變更
-    if (hasTemperatureChange) {
+    // 檢查目標溫度變更
+    if (targetTemp->updated()) {
         DEBUG_INFO_PRINT("[Device] 收到 HomeKit 溫度變更請求：%.1f°C -> %.1f°C\n",
                        targetTemp->getVal(), targetTemp->getNewVal());
         
@@ -146,6 +130,12 @@ boolean ThermostatDevice::update() {
             DEBUG_INFO_PRINT("[Device] 溫度變更請求被拒絕\n");
             return false;
         }
+    }
+    
+    if (changed) {
+        DEBUG_INFO_PRINT("[Device] HomeKit 變更處理完成，已應用到設備\n");
+    } else {
+        DEBUG_INFO_PRINT("[Device] HomeKit update() 被調用但未檢測到變更\n");
     }
     
     return changed;
@@ -174,17 +164,8 @@ void ThermostatDevice::loop() {
     
     controller.update();
     
-    // 同步電源狀態並強制通知
-    bool newPowerState = controller.getPower();
-    if (active->getVal() != newPowerState) {
-        DEBUG_INFO_PRINT("[Device] 檢測到電源狀態變化：HomeKit=%s, 控制器=%s\n", 
-                         active->getVal() ? "開啟" : "關閉",
-                         newPowerState ? "開啟" : "關閉");
-        active->setVal(newPowerState);
-        active->timeVal(); // 強制更新時間戳，觸發HomeKit通知
-        DEBUG_INFO_PRINT("[Device] 更新電源狀態：%s (強制通知)\n", newPowerState ? "開啟" : "關閉");
-        changed = true; // 標記有變更，確保HomeKit客戶端收到通知
-    }
+    // 在Thermostat服務中，電源狀態通過TargetHeatingCoolingState反映
+    // 不需要單獨的電源狀態同步
     
     // 同步目標模式 - 電源關閉時強制設為關閉模式
     uint8_t newTargetMode;

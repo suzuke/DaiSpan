@@ -28,11 +28,12 @@
 class ThermostatDevice : public Service::Thermostat {
 private:
     IThermostatControl& controller;
-    SpanCharacteristic* active;
+    // 使用直接實例而非指針（HomeSpan推薦方式）
     SpanCharacteristic* currentTemp;
     SpanCharacteristic* targetTemp;
     SpanCharacteristic* currentMode;
     SpanCharacteristic* targetMode;
+    SpanCharacteristic* displayUnits;  // 必需的溫度單位特性
     unsigned long lastUpdateTime;     // 最後狀態更新時間
     unsigned long lastHeartbeatTime;  // 最後心跳時間
     

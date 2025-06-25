@@ -1038,33 +1038,46 @@ void initializeHomeKit() {
   DEBUG_INFO_PRINT("[Main] HomeKit配置 - 配對碼: %s, 設備名稱: %s\n", 
                    pairingCode.c_str(), deviceName.c_str());
 
-  // 初始化 HomeSpan
+  // 初始化 HomeSpan（啟用詳細日誌和配對管理）
+  homeSpan.setLogLevel(2);  // 啟用詳細的HomeSpan日誌
+  homeSpan.setControlPin(0);  // 設置控制引腳為Boot按鈕（用於重置配對）
+  homeSpan.setStatusPin(2);   // 設置狀態引腳為內建LED
+  homeSpan.enableOTA();       // 啟用HomeSpan OTA更新
   homeSpan.begin(Category::Thermostats, deviceName.c_str());
   
-  // 立即創建 HomeSpan 配件和服務
+  // 立即創建 HomeSpan 配件和服務（在同一作用域內）
   accessory = new SpanAccessory();
-  new Service::AccessoryInformation();
-  new Characteristic::Name("智能恆溫器");
-  new Characteristic::Manufacturer("DaiSpan");
-  new Characteristic::SerialNumber("123-ABC");
-  new Characteristic::Model("恆溫器 v1.0");
-  new Characteristic::FirmwareRevision("1.0");
-  new Characteristic::Identify();
-  
-  // 創建ThermostatDevice（需要硬件已初始化）
-  if (deviceInitialized && thermostatController) {
-    thermostatDevice = new ThermostatDevice(*thermostatController);
-    if (!thermostatDevice) {
-      DEBUG_ERROR_PRINT("[Main] 創建 ThermostatDevice 失敗\n");
+    new Service::AccessoryInformation();
+    new Characteristic::Name("智能恆溫器");
+    new Characteristic::Manufacturer("DaiSpan");
+    new Characteristic::SerialNumber("123-ABC");
+    new Characteristic::Model("恆溫器 v1.0");
+    new Characteristic::FirmwareRevision("1.0");
+    new Characteristic::Identify();
+    
+    // 創建ThermostatDevice（在同一作用域內以確保正確註冊到HomeKit）
+    if (deviceInitialized && thermostatController) {
+      DEBUG_INFO_PRINT("[Main] 硬件已初始化，創建ThermostatDevice\n");
+      thermostatDevice = new ThermostatDevice(*thermostatController);
+      if (!thermostatDevice) {
+        DEBUG_ERROR_PRINT("[Main] 創建 ThermostatDevice 失敗\n");
+      } else {
+        DEBUG_INFO_PRINT("[Main] ThermostatDevice 創建成功並註冊到HomeKit\n");
+      }
     } else {
-      DEBUG_INFO_PRINT("[Main] ThermostatDevice 創建成功\n");
+      DEBUG_ERROR_PRINT("[Main] 硬件未初始化，無法創建ThermostatDevice\n");
+      DEBUG_ERROR_PRINT("[Main] deviceInitialized=%s, thermostatController=%s\n",
+                        deviceInitialized ? "true" : "false",
+                        thermostatController ? "valid" : "null");
     }
-  } else {
-    DEBUG_ERROR_PRINT("[Main] 硬件未初始化，無法創建ThermostatDevice\n");
-  }
   
   homeKitInitialized = true;
+  
+  // 輸出 HomeSpan 狀態和配對資訊
   DEBUG_INFO_PRINT("[Main] HomeKit配件初始化完成\n");
+  DEBUG_INFO_PRINT("[Main] HomeSpan狀態 - 網路狀態: %s\n", WiFi.status() == WL_CONNECTED ? "已連接" : "未連接");
+  DEBUG_INFO_PRINT("[Main] HomeSpan狀態 - 設備IP: %s\n", WiFi.localIP().toString().c_str());
+  DEBUG_INFO_PRINT("[Main] HomeSpan狀態 - 啟用狀態指示燈和控制按鈕\n");
 }
 
 // 初始化硬件組件
@@ -1259,6 +1272,11 @@ void loop() {
                      WiFi.status() == WL_CONNECTED ? "已連接" : "未連接",
                      deviceInitialized ? "已初始化" : "未初始化",
                      WiFi.localIP().toString().c_str());
+    
+    // 如果是HomeKit模式，顯示網路狀態
+    if (homeKitInitialized) {
+      DEBUG_INFO_PRINT("[Main] HomeKit狀態 - WiFi信號強度: %d dBm\n", WiFi.RSSI());
+    }
     lastLoopTime = currentTime;
   }
 }
