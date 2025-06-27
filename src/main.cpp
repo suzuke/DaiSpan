@@ -13,6 +13,8 @@
 #include "WiFi.h"
 #include "WebServer.h"
 #include "ArduinoOTA.h"
+#include "common/WebUI.h"
+#include "common/WebTemplates.h"
 
 
 //根據platformio.ini的env選擇進行define
@@ -44,6 +46,7 @@ OTAManager* otaManager = nullptr;
 // WebServer用於HomeKit模式下的只讀監控
 WebServer* webServer = nullptr;
 bool monitoringEnabled = false;
+bool homeKitPairingActive = false; // 配對期間暫停WebServer
 
 // 安全重啟函數
 void safeRestart() {
@@ -59,372 +62,135 @@ void initializeMonitoring() {
   }
   
   DEBUG_INFO_PRINT("[Main] 啟動WebServer監控功能...\n");
+  DEBUG_INFO_PRINT("[Main] 可用記憶體: %d bytes\n", ESP.getFreeHeap());
+  
+  // 檢查記憶體是否足夠 (降低門檻至80KB)
+  if (ESP.getFreeHeap() < 80000) {
+    DEBUG_ERROR_PRINT("[Main] 記憶體不足(%d bytes)，跳過WebServer啟動\n", ESP.getFreeHeap());
+    return;
+  }
+  
+  DEBUG_INFO_PRINT("[Main] 記憶體檢查通過，開始啟動WebServer\n");
   
   webServer = new WebServer(8080); // 使用8080端口避免與HomeSpan衝突
   
-  // 首頁 - 系統狀態  
+  // 首頁 - 系統狀態 (優化版本，快速響應)
   webServer->on("/", [](){
-    String html = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">";
-    html += "<title>DaiSpan 監控</title>";
-    html += "<style>body{font-family:Arial,sans-serif;margin:20px;background:#f0f0f0;}";
-    html += ".container{max-width:600px;margin:0 auto;background:white;padding:20px;border-radius:10px;}";
-    html += ".status{background:#e8f4f8;padding:15px;border-radius:5px;margin:10px 0;}";
-    html += ".button{display:inline-block;padding:10px 20px;margin:10px 5px;background:#007cba;color:white;text-decoration:none;border-radius:5px;}";
-    html += "</style><meta http-equiv=\"refresh\" content=\"30\"></head><body>";
-    html += "<div class=\"container\"><h1>🌡️ DaiSpan 智能恆溫器</h1>";
-    html += "<div class=\"status\"><h3>系統狀態</h3>";
-    html += "<p>模式: HomeKit運行模式</p>";
-    html += "<p>WiFi: " + WiFi.SSID() + "</p>";
-    html += "<p>IP地址: " + WiFi.localIP().toString() + "</p>";
-    html += "<p>監控端口: 8080</p>";
-    html += "<p>設備狀態: " + String(deviceInitialized ? "已初始化" : "未初始化") + "</p>";
-    html += "<p>HomeKit狀態: " + String(homeKitInitialized ? "已就緒" : "未就緒") + "</p>";
-    html += "<p>運行模式: " + String(configManager.getSimulationMode() ? "🔧 模擬模式" : "🏭 真實模式") + "</p>";
-    html += "<p>可用記憶體: " + String(ESP.getFreeHeap()) + " bytes</p>";
-    html += "</div>";
+    // 檢查配對狀態，配對期間返回簡化頁面
+    if (homeKitPairingActive) {
+      String simpleHtml = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
+      simpleHtml += "<title>DaiSpan - 配對中</title></head><body>";
+      simpleHtml += "<h1>HomeKit 配對進行中</h1>";
+      simpleHtml += "<p>設備正在進行HomeKit配對，請稍候...</p>";
+      simpleHtml += "<script>setTimeout(function(){location.reload();}, 5000);</script>";
+      simpleHtml += "</body></html>";
+      webServer->send(200, "text/html", simpleHtml);
+      return;
+    }
+    
+    webServer->sendHeader("Cache-Control", "no-cache, must-revalidate");
+    webServer->sendHeader("Pragma", "no-cache");
+    webServer->sendHeader("Connection", "close"); // 確保連接關閉
+    
+    // 簡化的HTML生成，減少String操作
+    String html = WebUI::getPageHeader("DaiSpan 監控", true, 30);
+    html.reserve(800); // 預分配緩衝區
+    html += "<div class=\"container\"><h1>DaiSpan 智能恆溫器</h1>";
+    html += "<div class=\"status\"><h3>HomeKit 運行模式</h3>";
+    html += "<p><strong>WiFi:</strong> " + WiFi.SSID() + "</p>";
+    html += "<p><strong>IP:</strong> " + WiFi.localIP().toString() + "</p>";
+    html += "<p><strong>記憶體:</strong> " + String(ESP.getFreeHeap()) + "B</p></div>";
     html += "<div style=\"text-align:center;\">";
-    html += "<a href=\"/status\" class=\"button\">📊 詳細狀態</a>";
-    html += "<a href=\"/wifi\" class=\"button\">📶 WiFi配置</a>";
-    html += "<a href=\"/homekit\" class=\"button\">🏠 HomeKit設置</a>";
+    html += "<a href=\"/status\" class=\"button\">狀態</a>";
+    html += "<a href=\"/wifi\" class=\"button\">WiFi</a>";
+    html += "<a href=\"/homekit\" class=\"button\">HomeKit</a>";
     if (configManager.getSimulationMode()) {
-      html += "<a href=\"/simulation\" class=\"button\">🔧 模擬控制</a>";
+      html += "<a href=\"/simulation\" class=\"button\">模擬</a>";
     }
     html += "<a href=\"/simulation-toggle\" class=\"button\">";
-    if (configManager.getSimulationMode()) {
-      html += "🏭 切換到真實模式";
-    } else {
-      html += "🔧 切換到模擬模式";
-    }
-    html += "</a>";
-    html += "<a href=\"/ota\" class=\"button\">🔄 OTA更新</a>";
-    html += "</div></div></body></html>";
+    html += configManager.getSimulationMode() ? "真實" : "模擬";
+    html += "</a><a href=\"/ota\" class=\"button\">OTA</a></div></div>";
+    html += WebUI::getPageFooter();
+    
     webServer->send(200, "text/html", html);
   });
   
-  // 詳細狀態頁面（HTML）
+  // 詳細狀態頁面（簡化版，避免記憶體碎片）
   webServer->on("/status", [](){
-    String html = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">";
-    html += "<title>系統詳細狀態</title>";
-    html += "<style>body{font-family:Arial,sans-serif;margin:20px;background:#f0f0f0;}";
-    html += ".container{max-width:800px;margin:0 auto;background:white;padding:20px;border-radius:10px;}";
-    html += ".status-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px;margin:20px 0;}";
-    html += ".status-card{background:#f8f9fa;border:1px solid #dee2e6;padding:15px;border-radius:8px;}";
-    html += ".status-card h3{margin:0 0 10px 0;color:#495057;border-bottom:2px solid #007cba;padding-bottom:5px;}";
-    html += ".status-item{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #e9ecef;}";
-    html += ".status-item:last-child{border-bottom:none;}";
-    html += ".status-label{font-weight:bold;color:#6c757d;}";
-    html += ".status-value{color:#212529;}";
-    html += ".status-good{color:#28a745;}";
-    html += ".status-warning{color:#ffc107;}";
-    html += ".status-error{color:#dc3545;}";
-    html += ".refresh-btn{background:#007cba;color:white;border:none;padding:8px 15px;border-radius:5px;cursor:pointer;margin:10px 5px;}";
-    html += ".refresh-btn:hover{background:#006ba6;}";
-    html += "</style>";
-    html += "<script>function refreshStatus(){location.reload();}</script>";
-    html += "</head><body>";
-    html += "<div class=\"container\">";
-    html += "<h1>📊 系統詳細狀態</h1>";
+    // 使用 WebUI 的現有方法但進行優化
+    String html = WebUI::getPageHeader("系統詳細狀態");
+    html.reserve(1200); // 預分配緩衝區
+    html += "<div class=\"container\"><h1>系統詳細狀態</h1>";
     html += "<div style=\"text-align:center;margin:15px 0;\">";
-    html += "<button class=\"refresh-btn\" onclick=\"refreshStatus()\">🔄 刷新狀態</button>";
-    html += "<button class=\"refresh-btn\" onclick=\"window.open('/status-api','_blank')\">📋 JSON API</button>";
+    html += "<button class=\"button\" onclick=\"location.reload()\">刷新狀態</button>";
+    html += "<button class=\"button\" onclick=\"window.open('/status-api','_blank')\">JSON API</button>";
     html += "</div>";
     
-    html += "<div class=\"status-grid\">";
-    
-    // WiFi狀態卡片
-    html += "<div class=\"status-card\">";
-    html += "<h3>🌐 網路連接</h3>";
-    html += "<div class=\"status-item\">";
-    html += "<span class=\"status-label\">WiFi SSID:</span>";
-    html += "<span class=\"status-value status-good\">" + WiFi.SSID() + "</span>";
-    html += "</div>";
-    html += "<div class=\"status-item\">";
-    html += "<span class=\"status-label\">IP地址:</span>";
-    html += "<span class=\"status-value\">" + WiFi.localIP().toString() + "</span>";
-    html += "</div>";
-    html += "<div class=\"status-item\">";
-    html += "<span class=\"status-label\">MAC地址:</span>";
-    html += "<span class=\"status-value\">" + WiFi.macAddress() + "</span>";
-    html += "</div>";
-    html += "<div class=\"status-item\">";
-    html += "<span class=\"status-label\">信號強度:</span>";
-    int rssi = WiFi.RSSI();
-    String rssiClass = (rssi > -50) ? "status-good" : (rssi > -70) ? "status-warning" : "status-error";
-    html += "<span class=\"status-value " + rssiClass + "\">" + String(rssi) + " dBm</span>";
-    html += "</div>";
-    html += "<div class=\"status-item\">";
-    html += "<span class=\"status-label\">網關:</span>";
-    html += "<span class=\"status-value\">" + WiFi.gatewayIP().toString() + "</span>";
-    html += "</div>";
-    html += "</div>";
-    
-    // 系統狀態卡片
-    html += "<div class=\"status-card\">";
-    html += "<h3>💻 系統資源</h3>";
-    html += "<div class=\"status-item\">";
-    html += "<span class=\"status-label\">可用記憶體:</span>";
-    uint32_t freeHeap = ESP.getFreeHeap();
-    String heapClass = (freeHeap > 100000) ? "status-good" : (freeHeap > 50000) ? "status-warning" : "status-error";
-    html += "<span class=\"status-value " + heapClass + "\">" + String(freeHeap) + " bytes</span>";
-    html += "</div>";
-    html += "<div class=\"status-item\">";
-    html += "<span class=\"status-label\">晶片型號:</span>";
-    html += "<span class=\"status-value\">" + String(ESP.getChipModel()) + "</span>";
-    html += "</div>";
-    html += "<div class=\"status-item\">";
-    html += "<span class=\"status-label\">CPU頻率:</span>";
-    html += "<span class=\"status-value\">" + String(ESP.getCpuFreqMHz()) + " MHz</span>";
-    html += "</div>";
-    html += "<div class=\"status-item\">";
-    html += "<span class=\"status-label\">Flash大小:</span>";
-    html += "<span class=\"status-value\">" + String(ESP.getFlashChipSize() / 1024 / 1024) + " MB</span>";
-    html += "</div>";
-    html += "<div class=\"status-item\">";
-    html += "<span class=\"status-label\">運行時間:</span>";
-    unsigned long uptime = millis();
-    unsigned long days = uptime / 86400000;
-    unsigned long hours = (uptime % 86400000) / 3600000;
-    unsigned long minutes = (uptime % 3600000) / 60000;
-    html += "<span class=\"status-value\">" + String(days) + "天 " + String(hours) + "時 " + String(minutes) + "分</span>";
-    html += "</div>";
-    html += "<div class=\"status-item\">";
-    html += "<span class=\"status-label\">固件版本:</span>";
-    html += "<span class=\"status-value\">v3.0-OTA-FINAL</span>";
-    html += "</div>";
-    html += "</div>";
-    
-    // HomeKit狀態卡片
-    html += "<div class=\"status-card\">";
-    html += "<h3>🏠 HomeKit狀態</h3>";
-    html += "<div class=\"status-item\">";
-    html += "<span class=\"status-label\">初始化狀態:</span>";
-    String hkClass = homeKitInitialized ? "status-good" : "status-error";
-    html += "<span class=\"status-value " + hkClass + "\">" + String(homeKitInitialized ? "✅ 已就緒" : "❌ 未就緒") + "</span>";
-    html += "</div>";
-    html += "<div class=\"status-item\">";
-    html += "<span class=\"status-label\">設備狀態:</span>";
-    String deviceClass = deviceInitialized ? "status-good" : "status-error";
-    html += "<span class=\"status-value " + deviceClass + "\">" + String(deviceInitialized ? "✅ 已初始化" : "❌ 未初始化") + "</span>";
-    html += "</div>";
-    html += "<div class=\"status-item\">";
-    html += "<span class=\"status-label\">HomeKit端口:</span>";
-    html += "<span class=\"status-value\">1201</span>";
-    html += "</div>";
-    html += "<div class=\"status-item\">";
-    html += "<span class=\"status-label\">配對代碼:</span>";
-    html += "<span class=\"status-value\">11122333</span>";
-    html += "</div>";
-    html += "<div class=\"status-item\">";
-    html += "<span class=\"status-label\">監控端口:</span>";
-    html += "<span class=\"status-value\">8080</span>";
-    html += "</div>";
-    html += "</div>";
-    
-    // 溫控器狀態卡片
-    html += "<div class=\"status-card\">";
-    html += "<h3>🌡️ 溫控器狀態</h3>";
-    if (thermostatController && deviceInitialized) {
-      // 顯示實際的協議信息
-      if (configManager.getSimulationMode()) {
-        html += "<div class=\"status-item\">";
-        html += "<span class=\"status-label\">通訊協議:</span>";
-        html += "<span class=\"status-value\">🧪 模擬協議 (測試模式)</span>";
-        html += "</div>";
-      } else {
-        // 顯示真實協議信息
-        html += "<div class=\"status-item\">";
-        html += "<span class=\"status-label\">通訊協議:</span>";
-        html += "<span class=\"status-value\">S21 Daikin Protocol v1.0+</span>";
-        html += "</div>";
-      }
-      html += "<div class=\"status-item\">";
-      html += "<span class=\"status-label\">串口配置:</span>";
-      html += "<span class=\"status-value\">2400 8E2</span>";
-      html += "</div>";
-      
-      // 顯示協議能力信息
-      if (!configManager.getSimulationMode()) {
-        html += "<div class=\"status-item\">";
-        html += "<span class=\"status-label\">溫度範圍:</span>";
-        html += "<span class=\"status-value\">16.0°C - 30.0°C</span>";
-        html += "</div>";
-        
-        html += "<div class=\"status-item\">";
-        html += "<span class=\"status-label\">協議狀態:</span>";
-        html += "<span class=\"status-value\">✅ 活躍</span>";
-        html += "</div>";
-      }
-      html += "<div class=\"status-item\">";
-      html += "<span class=\"status-label\">當前溫度:</span>";
-      html += "<span class=\"status-value\">21.0°C</span>";
-      html += "</div>";
-      html += "<div class=\"status-item\">";
-      html += "<span class=\"status-label\">目標溫度:</span>";
-      html += "<span class=\"status-value\">21.0°C</span>";
-      html += "</div>";
-      html += "<div class=\"status-item\">";
-      html += "<span class=\"status-label\">運行模式:</span>";
-      html += "<span class=\"status-value\">OFF</span>";
-      html += "</div>";
-    } else {
-      html += "<div class=\"status-item\">";
-      html += "<span class=\"status-label\">狀態:</span>";
-      html += "<span class=\"status-value status-error\">❌ 設備未初始化</span>";
-      html += "</div>";
-    }
-    html += "</div>";
-    
-    html += "</div>"; // end status-grid
+    // 使用 WebUI 的系統狀態卡片
+    html += WebUI::getSystemStatusCard();
     
     html += "<div style=\"text-align:center;margin:20px 0;\">";
-    html += "<a href=\"/\" style=\"color:#007cba;text-decoration:none;\">⬅️ 返回主頁</a>";
-    html += "</div>";
+    html += "<a href=\"/\" style=\"color:#007cba;text-decoration:none;\">返回主頁</a>";
+    html += "</div></div></body></html>";
     
-    html += "</div></body></html>";
     webServer->send(200, "text/html", html);
   });
-  
-  // JSON狀態API
+    
+  // JSON狀態API (使用預編譯模板 - 唯一成功的記憶體優化)
   webServer->on("/status-api", [](){
-    String json = "{";
-    json += "\"wifi_ssid\":\"" + WiFi.SSID() + "\",";
-    json += "\"wifi_ip\":\"" + WiFi.localIP().toString() + "\",";
-    json += "\"wifi_mac\":\"" + WiFi.macAddress() + "\",";
-    json += "\"wifi_rssi\":" + String(WiFi.RSSI()) + ",";
-    json += "\"wifi_gateway\":\"" + WiFi.gatewayIP().toString() + "\",";
-    json += "\"free_heap\":" + String(ESP.getFreeHeap()) + ",";
-    json += "\"cpu_freq\":" + String(ESP.getCpuFreqMHz()) + ",";
-    json += "\"flash_size\":" + String(ESP.getFlashChipSize()) + ",";
-    json += "\"homekit_initialized\":" + String(homeKitInitialized ? "true" : "false") + ",";
-    json += "\"device_initialized\":" + String(deviceInitialized ? "true" : "false") + ",";
-    json += "\"uptime\":" + String(millis()) + ",";
-    json += "\"chip_model\":\"" + String(ESP.getChipModel()) + "\",";
-    json += "\"homekit_port\":1201,";
-    json += "\"monitor_port\":8080}";
+    // 使用預編譯模板生成JSON，避免String拼接
+    String json = WebTemplates::generateJsonApi(
+        WiFi.SSID(),
+        WiFi.localIP().toString(),
+        WiFi.macAddress(),
+        WiFi.RSSI(),
+        WiFi.gatewayIP().toString(),
+        ESP.getFreeHeap(),
+        homeKitInitialized,
+        deviceInitialized,
+        millis()
+    );
+    
     webServer->send(200, "application/json", json);
-  });
-  
-  // OTA頁面
-  webServer->on("/ota", [](){
-    String html = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">";
-    html += "<title>OTA 更新</title>";
-    html += "<style>body{font-family:Arial,sans-serif;margin:20px;background:#f0f0f0;}";
-    html += ".container{max-width:500px;margin:0 auto;background:white;padding:20px;border-radius:10px;}";
-    html += ".info{background:#fff3cd;border:1px solid #ffeaa7;padding:15px;border-radius:5px;margin:15px 0;}";
-    html += "</style></head><body>";
-    html += "<div class=\"container\"><h1>🔄 OTA 無線更新</h1>";
-    html += "<div class=\"info\"><h3>📝 使用說明</h3>";
-    html += "<p>使用 PlatformIO 進行 OTA 更新：</p>";
-    html += "<code>pio run -t upload --upload-port " + WiFi.localIP().toString() + "</code>";
-    html += "<p style=\"margin-top:15px;\">設備信息：</p>";
-    html += "<p>主機名: DaiSpan-" + WiFi.macAddress() + "</p>";
-    html += "<p>IP地址: " + WiFi.localIP().toString() + "</p>";
-    html += "<p>監控端口: 8080</p>";
-    html += "</div>";
-    html += "<p><a href=\"/\">⬅️ 返回主頁</a></p>";
-    html += "</div></body></html>";
-    webServer->send(200, "text/html", html);
   });
   
   // WiFi配置頁面
   webServer->on("/wifi", [](){
-    String html = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">";
-    html += "<title>WiFi 配置</title>";
-    html += "<style>body{font-family:Arial,sans-serif;margin:20px;background:#f0f0f0;}";
-    html += ".container{max-width:500px;margin:0 auto;background:white;padding:20px;border-radius:10px;}";
-    html += ".network{background:#f8f9fa;border:1px solid #dee2e6;padding:10px;margin:5px 0;border-radius:5px;cursor:pointer;}";
-    html += ".network:hover{background:#e9ecef;}";
-    html += ".form-group{margin:15px 0;}";
-    html += "label{display:block;margin-bottom:5px;font-weight:bold;}";
-    html += "input[type=text],input[type=password]{width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;box-sizing:border-box;}";
-    html += ".button{background:#007cba;color:white;padding:10px 20px;border:none;border-radius:5px;cursor:pointer;}";
-    html += ".button:hover{background:#006ba6;}";
-    html += ".warning{background:#fff3cd;border:1px solid #ffeaa7;padding:15px;border-radius:5px;margin:15px 0;}";
-    html += "</style></head><body>";
-    html += "<div class=\"container\"><h1>📶 WiFi 配置</h1>";
-    html += "<div class=\"warning\">⚠️ 配置新WiFi後設備將重啟，HomeKit配對狀態會保持。</div>";
-    
-    // 掃描WiFi網路
-    html += "<h3>可用網路 <button type=\"button\" class=\"button\" onclick=\"rescanNetworks()\" style=\"font-size:12px;padding:5px 10px;\">🔄 重新掃描</button></h3>";
-    html += "<div id=\"networks\">";
-    
-    int networkCount = WiFi.scanNetworks();
-    if (networkCount > 0) {
-      for (int i = 0; i < networkCount && i < 10; i++) { // 最多顯示10個網路
-        String ssid = WiFi.SSID(i);
-        int rssi = WiFi.RSSI(i);
-        String security = (WiFi.encryptionType(i) == WIFI_AUTH_OPEN) ? "開放" : "加密";
-        
-        html += "<div class=\"network\" onclick=\"selectNetwork('" + ssid + "')\">";
-        html += "<strong>" + ssid + "</strong> (" + security + ") 信號: " + String(rssi) + "dBm";
-        html += "</div>";
-      }
-    } else {
-      html += "<div style=\"padding:15px;text-align:center;color:#666;\">沒有找到WiFi網路，請點擊重新掃描</div>";
-    }
-    
-    html += "</div>";
-    html += "<form action=\"/wifi-save\" method=\"POST\">";
-    html += "<div class=\"form-group\">";
-    html += "<label for=\"ssid\">網路名稱 (SSID):</label>";
-    html += "<input type=\"text\" id=\"ssid\" name=\"ssid\" required>";
-    html += "</div>";
-    html += "<div class=\"form-group\">";
-    html += "<label for=\"password\">密碼:</label>";
-    html += "<input type=\"password\" id=\"password\" name=\"password\">";
-    html += "</div>";
-    html += "<button type=\"submit\" class=\"button\">💾 保存WiFi並重啟</button>";
-    html += "</form>";
-    html += "<script>";
-    html += "function selectNetwork(ssid) {";
-    html += "  document.getElementById('ssid').value = ssid;";
-    html += "}";
-    html += "function rescanNetworks() {";
-    html += "  var btn = document.querySelector('button');";
-    html += "  btn.innerHTML = '⏳ 掃描中...';";
-    html += "  btn.disabled = true;";
-    html += "  fetch('/wifi-scan').then(response => response.text()).then(data => {";
-    html += "    document.getElementById('networks').innerHTML = data;";
-    html += "    btn.innerHTML = '🔄 重新掃描';";
-    html += "    btn.disabled = false;";
-    html += "  }).catch(error => {";
-    html += "    console.error('掃描失敗:', error);";
-    html += "    btn.innerHTML = '❌ 掃描失敗';";
-    html += "    setTimeout(() => {";
-    html += "      btn.innerHTML = '🔄 重新掃描';";
-    html += "      btn.disabled = false;";
-    html += "    }, 2000);";
-    html += "  });";
-    html += "}";
-    html += "</script>";
-    html += "<p><a href=\"/\">⬅️ 返回主頁</a></p>";
-    html += "</div></body></html>";
+    String html = WebUI::getSimpleWiFiConfigPage();
     webServer->send(200, "text/html", html);
   });
   
-  // WiFi掃描API
+  // WiFi掃描API（返回JSON格式）
   webServer->on("/wifi-scan", [](){
-    String html = "";
-    
     DEBUG_INFO_PRINT("[Main] 開始WiFi掃描...\n");
     int networkCount = WiFi.scanNetworks();
     DEBUG_INFO_PRINT("[Main] 掃描完成，找到 %d 個網路\n", networkCount);
     
+    String json = "[";
+    int validNetworks = 0;
+    
     if (networkCount > 0) {
-      for (int i = 0; i < networkCount && i < 10; i++) { // 最多顯示10個網路
+      for (int i = 0; i < networkCount && i < 15; i++) { // 最多顯示15個網路
         String ssid = WiFi.SSID(i);
-        int rssi = WiFi.RSSI(i);
-        String security = (WiFi.encryptionType(i) == WIFI_AUTH_OPEN) ? "開放" : "加密";
+        if (ssid.length() == 0) continue; // 跳過空SSID
         
-        html += "<div class=\"network\" onclick=\"selectNetwork('" + ssid + "')\">";
-        html += "<strong>" + ssid + "</strong> (" + security + ") 信號: " + String(rssi) + "dBm";
-        html += "</div>";
+        int rssi = WiFi.RSSI(i);
+        bool secure = (WiFi.encryptionType(i) != WIFI_AUTH_OPEN);
+        
+        if (validNetworks > 0) json += ",";
+        json += "{";
+        json += "\"ssid\":\"" + ssid + "\",";
+        json += "\"rssi\":" + String(rssi) + ",";
+        json += "\"secure\":" + String(secure ? "true" : "false");
+        json += "}";
+        validNetworks++;
       }
-    } else {
-      html += "<div style=\"padding:15px;text-align:center;color:#666;\">沒有找到WiFi網路，請重試</div>";
     }
     
-    webServer->send(200, "text/html", html);
+    json += "]";
+    
+    DEBUG_INFO_PRINT("[Main] 返回 %d 個有效網路\n", validNetworks);
+    webServer->send(200, "application/json", json);
   });
   
   // WiFi配置保存處理
@@ -438,23 +204,10 @@ void initializeMonitoring() {
       // 保存新的WiFi配置
       configManager.setWiFiCredentials(ssid, password);
       
-      String html = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">";
-      html += "<title>WiFi配置已保存</title>";
-      html += "<style>body{font-family:Arial,sans-serif;margin:20px;background:#f0f0f0;}";
-      html += ".container{max-width:400px;margin:0 auto;background:white;padding:20px;border-radius:10px;text-align:center;}";
-      html += ".success{background:#d4edda;border:1px solid #c3e6cb;padding:15px;border-radius:5px;margin:15px 0;}";
-      html += "</style></head><body>";
-      html += "<div class=\"container\">";
-      html += "<h1>✅ WiFi配置已保存</h1>";
-      html += "<div class=\"success\">";
-      html += "<p>新的WiFi配置已保存成功！</p>";
-      html += "<p>設備將在3秒後重啟並嘗試連接到：</p>";
-      html += "<p><strong>" + ssid + "</strong></p>";
-      html += "</div>";
-      html += "<p>重啟後請等待設備重新連接，然後訪問新的IP地址。</p>";
-      html += "</div>";
-      html += "<script>setTimeout(function(){window.location='/restart';}, 3000);</script>";
-      html += "</body></html>";
+      String message = "新的WiFi配置已保存成功！<br>";
+      message += "設備將重啟並嘗試連接到：<strong>" + ssid + "</strong><br>";
+      message += "重啟後請等待設備重新連接，然後訪問新的IP地址。";
+      String html = WebUI::getSuccessPage("WiFi配置已保存", message, 3, "/restart");
       webServer->send(200, "text/html", html);
     } else {
       webServer->send(400, "text/plain", "SSID不能為空");
@@ -463,101 +216,12 @@ void initializeMonitoring() {
   
   // HomeKit配置頁面
   webServer->on("/homekit", [](){
-    String html = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">";
-    html += "<title>HomeKit 配置</title>";
-    html += "<style>body{font-family:Arial,sans-serif;margin:20px;background:#f0f0f0;}";
-    html += ".container{max-width:600px;margin:0 auto;background:white;padding:20px;border-radius:10px;}";
-    html += ".form-group{margin:15px 0;}";
-    html += "label{display:block;margin-bottom:5px;font-weight:bold;}";
-    html += "input[type=text]{width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;box-sizing:border-box;}";
-    html += ".button{background:#007cba;color:white;padding:10px 20px;border:none;border-radius:5px;cursor:pointer;}";
-    html += ".button:hover{background:#006ba6;}";
-    html += ".warning{background:#fff3cd;border:1px solid #ffeaa7;padding:15px;border-radius:5px;margin:15px 0;}";
-    html += ".info{background:#e8f4f8;border:1px solid #bee5eb;padding:15px;border-radius:5px;margin:15px 0;}";
-    html += ".current-config{background:#f8f9fa;border:1px solid #dee2e6;padding:15px;border-radius:5px;margin:15px 0;}";
-    html += "</style></head><body>";
-    html += "<div class=\"container\">";
-    html += "<h1>🏠 HomeKit 配置</h1>";
-    
-    // 當前配置顯示
+    // 當前配置資訊
     String currentPairingCode = configManager.getHomeKitPairingCode();
     String currentDeviceName = configManager.getHomeKitDeviceName();
     String currentQRID = configManager.getHomeKitQRID();
     
-    html += "<div class=\"current-config\">";
-    html += "<h3>📋 當前配置</h3>";
-    html += "<p><strong>配對碼：</strong>" + currentPairingCode + "</p>";
-    html += "<p><strong>設備名稱：</strong>" + currentDeviceName + "</p>";
-    html += "<p><strong>QR ID：</strong>" + currentQRID + "</p>";
-    html += "<p><strong>HomeKit端口：</strong>1201</p>";
-    html += "<p><strong>初始化狀態：</strong>" + String(homeKitInitialized ? "✅ 已就緒" : "❌ 未就緒") + "</p>";
-    html += "</div>";
-    
-    html += "<div class=\"warning\">";
-    html += "<h3>⚠️ 重要提醒</h3>";
-    html += "<p>修改HomeKit配置會中斷現有配對關係，您需要：</p>";
-    html += "<ul>";
-    html += "<li>從家庭App中移除現有設備</li>";
-    html += "<li>使用新的配對碼重新添加設備</li>";
-    html += "<li>重新配置自動化和場景</li>";
-    html += "</ul>";
-    html += "</div>";
-    
-    html += "<form action=\"/homekit-save\" method=\"POST\">";
-    html += "<h3>🔧 修改配置</h3>";
-    
-    html += "<div class=\"form-group\">";
-    html += "<label for=\"pairing_code\">配對碼 (8位數字):</label>";
-    html += "<input type=\"text\" id=\"pairing_code\" name=\"pairing_code\" ";
-    html += "placeholder=\"留空保持當前: " + currentPairingCode + "\" ";
-    html += "pattern=\"[0-9]{8}\" maxlength=\"8\" ";
-    html += "title=\"請輸入8位數字作為HomeKit配對碼\">";
-    html += "<small style=\"color:#666;display:block;margin-top:5px;\">";
-    html += "必須是8位純數字，例如：12345678";
-    html += "</small>";
-    html += "</div>";
-    
-    html += "<div class=\"form-group\">";
-    html += "<label for=\"device_name\">設備名稱:</label>";
-    html += "<input type=\"text\" id=\"device_name\" name=\"device_name\" ";
-    html += "placeholder=\"留空保持當前: " + currentDeviceName + "\" ";
-    html += "maxlength=\"50\">";
-    html += "<small style=\"color:#666;display:block;margin-top:5px;\">";
-    html += "在家庭App中顯示的設備名稱";
-    html += "</small>";
-    html += "</div>";
-    
-    html += "<div class=\"form-group\">";
-    html += "<label for=\"qr_id\">QR識別碼:</label>";
-    html += "<input type=\"text\" id=\"qr_id\" name=\"qr_id\" ";
-    html += "placeholder=\"留空保持當前: " + currentQRID + "\" ";
-    html += "maxlength=\"4\">";
-    html += "<small style=\"color:#666;display:block;margin-top:5px;\">";
-    html += "QR碼中的設備識別碼，通常為4個字符";
-    html += "</small>";
-    html += "</div>";
-    
-    html += "<div style=\"text-align:center;margin:20px 0;\">";
-    html += "<button type=\"submit\" class=\"button\">💾 保存HomeKit配置</button>";
-    html += "</div>";
-    html += "</form>";
-    
-    html += "<div class=\"info\">";
-    html += "<h3>💡 使用說明</h3>";
-    html += "<p><strong>配對流程：</strong></p>";
-    html += "<ol>";
-    html += "<li>修改配置後，設備會自動重啟</li>";
-    html += "<li>在家庭App中掃描新的QR碼</li>";
-    html += "<li>或手動輸入新的配對碼：<strong>" + currentPairingCode + "</strong></li>";
-    html += "<li>完成配對後即可正常使用</li>";
-    html += "</ol>";
-    html += "</div>";
-    
-    html += "<div style=\"text-align:center;margin:20px 0;\">";
-    html += "<a href=\"/\" style=\"color:#007cba;text-decoration:none;\">⬅️ 返回主頁</a>";
-    html += "</div>";
-    
-    html += "</div></body></html>";
+    String html = WebUI::getHomeKitConfigPage("/homekit-save", currentPairingCode, currentDeviceName, currentQRID, homeKitInitialized);
     webServer->send(200, "text/html", html);
   });
   
@@ -612,51 +276,25 @@ void initializeMonitoring() {
       // 保存HomeKit配置
       configManager.setHomeKitConfig(currentPairingCode, currentDeviceName, currentQRID);
       
-      String html = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">";
-      html += "<title>HomeKit配置已保存</title>";
-      html += "<style>body{font-family:Arial,sans-serif;margin:20px;background:#f0f0f0;}";
-      html += ".container{max-width:500px;margin:0 auto;background:white;padding:20px;border-radius:10px;text-align:center;}";
-      html += ".success{background:#d4edda;border:1px solid #c3e6cb;padding:15px;border-radius:5px;margin:15px 0;}";
-      html += ".warning{background:#fff3cd;border:1px solid #ffeaa7;padding:15px;border-radius:5px;margin:15px 0;}";
-      html += "</style></head><body>";
-      html += "<div class=\"container\">";
-      html += "<h1>✅ HomeKit配置已保存</h1>";
-      html += "<div class=\"success\">";
-      html += "<p><strong>配置更新成功</strong></p>";
+      String message = "<strong>配置更新成功！</strong><br>";
       if (pairingCode.length() > 0) {
-        html += "<p>新配對碼：<strong>" + pairingCode + "</strong></p>";
+        message += "新配對碼：<strong>" + pairingCode + "</strong><br>";
       }
       if (deviceName.length() > 0) {
-        html += "<p>新設備名稱：<strong>" + deviceName + "</strong></p>";
+        message += "新設備名稱：<strong>" + deviceName + "</strong><br>";
       }
       if (qrId.length() > 0) {
-        html += "<p>新QR ID：<strong>" + qrId + "</strong></p>";
+        message += "新QR ID：<strong>" + qrId + "</strong><br>";
       }
-      html += "</div>";
-      html += "<div class=\"warning\">";
-      html += "<p>⚠️ <strong>重新配對提醒</strong></p>";
-      html += "<p>設備將重啟並應用新配置</p>";
-      html += "<p>請從家庭App移除舊設備，然後重新添加</p>";
-      html += "</div>";
-      html += "<p>設備將在3秒後重啟...</p>";
-      html += "</div>";
-      html += "<script>setTimeout(function(){window.location='/restart';}, 3000);</script>";
-      html += "</body></html>";
+      message += "<br>⚠️ <strong>重新配對提醒</strong><br>";
+      message += "設備將重啟並應用新配置<br>";
+      message += "請從家庭App移除舊設備，然後重新添加";
+      String html = WebUI::getSuccessPage("HomeKit配置已保存", message, 3, "/restart");
       webServer->send(200, "text/html", html);
     } else {
-      String html = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">";
-      html += "<title>無變更</title>";
-      html += "<style>body{font-family:Arial,sans-serif;margin:20px;background:#f0f0f0;}";
-      html += ".container{max-width:400px;margin:0 auto;background:white;padding:20px;border-radius:10px;text-align:center;}";
-      html += ".info{background:#e8f4f8;border:1px solid #bee5eb;padding:15px;border-radius:5px;margin:15px 0;}";
-      html += "</style></head><body>";
-      html += "<div class=\"container\">";
-      html += "<h1>ℹ️ 無需更新</h1>";
-      html += "<div class=\"info\">";
-      html += "<p>您沒有修改任何配置，或輸入的值與當前配置相同。</p>";
-      html += "</div>";
-      html += "<p><a href=\"/homekit\">⬅️ 返回HomeKit配置</a></p>";
-      html += "</div></body></html>";
+      String message = "您沒有修改任何配置，或輸入的值與當前配置相同。<br><br>";
+      message += "<a href=\"/homekit\" class=\"button\">⬅️ 返回HomeKit配置</a>";
+      String html = WebUI::getSuccessPage("無需更新", message, 0);
       webServer->send(200, "text/html", html);
     }
   });
@@ -679,117 +317,14 @@ void initializeMonitoring() {
       return;
     }
     
-    String html = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">";
-    html += "<title>模擬控制</title>";
-    html += "<style>body{font-family:Arial,sans-serif;margin:20px;background:#f0f0f0;}";
-    html += ".container{max-width:600px;margin:0 auto;background:white;padding:20px;border-radius:10px;}";
-    html += ".form-group{margin:15px 0;}";
-    html += "label{display:block;margin-bottom:5px;font-weight:bold;}";
-    html += "input[type=number],select{width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;box-sizing:border-box;}";
-    html += ".button{background:#007cba;color:white;padding:10px 20px;border:none;border-radius:5px;cursor:pointer;margin:5px;}";
-    html += ".button:hover{background:#006ba6;}";
-    html += ".status-card{background:#f8f9fa;border:1px solid #dee2e6;padding:15px;border-radius:8px;margin:15px 0;}";
-    html += ".warning{background:#fff3cd;border:1px solid #ffeaa7;padding:15px;border-radius:5px;margin:15px 0;}";
-    html += "</style></head><body>";
-    html += "<div class=\"container\">";
-    html += "<h1>🔧 模擬控制台</h1>";
-    
-    // 當前狀態顯示
-    html += "<div class=\"status-card\">";
-    html += "<h3>📊 當前狀態</h3>";
-    html += "<p><strong>電源：</strong>" + String(mockController->getPower() ? "開啟" : "關閉") + "</p>";
-    html += "<p><strong>模式：</strong>" + String(mockController->getTargetMode()) + " ";
-    switch(mockController->getTargetMode()) {
-      case 0: html += "(關閉)"; break;
-      case 1: html += "(制熱)"; break;
-      case 2: html += "(制冷)"; break;
-      case 3: html += "(自動)"; break;
-    }
-    html += "</p>";
-    html += "<p><strong>當前溫度：</strong>" + String(mockController->getCurrentTemperature(), 1) + "°C</p>";
-    html += "<p><strong>目標溫度：</strong>" + String(mockController->getTargetTemperature(), 1) + "°C</p>";
-    html += "<p><strong>環境溫度：</strong>" + String(mockController->getSimulatedRoomTemp(), 1) + "°C</p>";
-    html += "<p><strong>運行狀態：</strong>";
-    if (mockController->isSimulationHeating()) {
-      html += "🔥 加熱中";
-    } else if (mockController->isSimulationCooling()) {
-      html += "❄️ 制冷中";
-    } else {
-      html += "⏸️ 待機";
-    }
-    html += "</p>";
-    html += "</div>";
-    
-    html += "<div style=\"text-align:center;margin:15px 0;\">";
-    html += "<button onclick=\"window.location.reload()\" class=\"button\">🔄 刷新狀態</button>";
-    html += "</div>";
-    
-    html += "<div class=\"warning\">";
-    html += "<h3>💡 使用說明</h3>";
-    html += "<p><strong>模擬邏輯：</strong></p>";
-    html += "<ul>";
-    html += "<li>🔧 這是模擬模式，所有操作都是虛擬的</li>";
-    html += "<li>📱 HomeKit指令會即時反映在這裡</li>";
-    html += "<li>🌡️ 溫度會根據運行模式自動變化</li>";
-    html += "<li>🔄 點擊「刷新狀態」按鈕查看最新狀態</li>";
-    html += "<li>⚡ 可手動控制電源、模式和溫度參數</li>";
-    html += "</ul>";
-    html += "</div>";
-    
-    // 手動控制表單
-    html += "<form action=\"/simulation-control\" method=\"POST\">";
-    html += "<h3>🎛️ 手動控制</h3>";
-    
-    html += "<div class=\"form-group\">";
-    html += "<label for=\"power\">電源控制:</label>";
-    html += "<select id=\"power\" name=\"power\">";
-    html += "<option value=\"1\"" + String(mockController->getPower() ? " selected" : "") + ">開啟</option>";
-    html += "<option value=\"0\"" + String(!mockController->getPower() ? " selected" : "") + ">關閉</option>";
-    html += "</select>";
-    html += "</div>";
-    
-    html += "<div class=\"form-group\">";
-    html += "<label for=\"mode\">運行模式:</label>";
-    html += "<select id=\"mode\" name=\"mode\">";
-    html += "<option value=\"0\"" + String(mockController->getTargetMode() == 0 ? " selected" : "") + ">關閉</option>";
-    html += "<option value=\"1\"" + String(mockController->getTargetMode() == 1 ? " selected" : "") + ">制熱</option>";
-    html += "<option value=\"2\"" + String(mockController->getTargetMode() == 2 ? " selected" : "") + ">制冷</option>";
-    html += "<option value=\"3\"" + String(mockController->getTargetMode() == 3 ? " selected" : "") + ">自動</option>";
-    html += "</select>";
-    html += "</div>";
-    
-    html += "<div class=\"form-group\">";
-    html += "<label for=\"target_temp\">目標溫度 (°C):</label>";
-    html += "<input type=\"number\" id=\"target_temp\" name=\"target_temp\" ";
-    html += "min=\"16\" max=\"30\" step=\"0.5\" ";
-    html += "value=\"" + String(mockController->getTargetTemperature(), 1) + "\">";
-    html += "</div>";
-    
-    html += "<div class=\"form-group\">";
-    html += "<label for=\"current_temp\">設置當前溫度 (°C):</label>";
-    html += "<input type=\"number\" id=\"current_temp\" name=\"current_temp\" ";
-    html += "min=\"10\" max=\"40\" step=\"0.1\" ";
-    html += "value=\"" + String(mockController->getCurrentTemperature(), 1) + "\">";
-    html += "</div>";
-    
-    html += "<div class=\"form-group\">";
-    html += "<label for=\"room_temp\">設置環境溫度 (°C):</label>";
-    html += "<input type=\"number\" id=\"room_temp\" name=\"room_temp\" ";
-    html += "min=\"10\" max=\"40\" step=\"0.1\" ";
-    html += "value=\"" + String(mockController->getSimulatedRoomTemp(), 1) + "\">";
-    html += "</div>";
-    
-    html += "<div style=\"text-align:center;margin:20px 0;\">";
-    html += "<button type=\"submit\" class=\"button\">🔄 應用設置</button>";
-    html += "</div>";
-    html += "</form>";
-    
-    html += "<div style=\"text-align:center;margin:20px 0;\">";
-    html += "<a href=\"/\" style=\"color:#007cba;text-decoration:none;\">⬅️ 返回主頁</a> | ";
-    html += "<a href=\"/simulation-toggle\" style=\"color:#dc3545;text-decoration:none;\">🔄 切換到真實模式</a>";
-    html += "</div>";
-    
-    html += "</div></body></html>";
+    String html = WebUI::getSimulationControlPage("/simulation-control",
+                                                 mockController->getPower(),
+                                                 mockController->getTargetMode(),
+                                                 mockController->getTargetTemperature(),
+                                                 mockController->getCurrentTemperature(),
+                                                 mockController->getSimulatedRoomTemp(),
+                                                 mockController->isSimulationHeating(),
+                                                 mockController->isSimulationCooling());
     webServer->send(200, "text/html", html);
   });
   
@@ -881,88 +416,34 @@ void initializeMonitoring() {
       }
     }
     
-    String html = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">";
-    html += "<title>設置已更新</title>";
-    html += "<style>body{font-family:Arial,sans-serif;margin:20px;background:#f0f0f0;}";
-    html += ".container{max-width:500px;margin:0 auto;background:white;padding:20px;border-radius:10px;text-align:center;}";
-    html += ".success{background:#d4edda;border:1px solid #c3e6cb;padding:15px;border-radius:5px;margin:15px 0;}";
-    html += ".status-info{background:#f8f9fa;border:1px solid #dee2e6;padding:15px;border-radius:5px;margin:15px 0;}";
-    html += ".button{background:#007cba;color:white;padding:10px 20px;border:none;border-radius:5px;cursor:pointer;text-decoration:none;display:inline-block;margin:5px;}";
-    html += "</style></head><body>";
-    html += "<div class=\"container\">";
-    html += "<h1>✅ 設置已更新</h1>";
-    html += "<div class=\"success\">";
-    html += "<p>模擬參數已成功更新！</p>";
-    html += "</div>";
-    
-    // 顯示當前狀態
-    html += "<div class=\"status-info\">";
-    html += "<h3>📊 當前狀態</h3>";
-    html += "<p><strong>電源：</strong>" + String(mockController->getPower() ? "開啟" : "關閉") + "</p>";
-    html += "<p><strong>模式：</strong>" + String(mockController->getTargetMode());
+    // 建立狀態信息
+    String statusInfo = "<h3>📊 當前狀態</h3>";
+    statusInfo += "<p><strong>電源：</strong>" + String(mockController->getPower() ? "開啟" : "關閉") + "</p>";
+    statusInfo += "<p><strong>模式：</strong>" + String(mockController->getTargetMode());
     switch(mockController->getTargetMode()) {
-      case 0: html += " (關閉)"; break;
-      case 1: html += " (制熱)"; break;
-      case 2: html += " (制冷)"; break;
-      case 3: html += " (自動)"; break;
+      case 0: statusInfo += " (關閉)"; break;
+      case 1: statusInfo += " (制熱)"; break;
+      case 2: statusInfo += " (制冷)"; break;
+      case 3: statusInfo += " (自動)"; break;
     }
-    html += "</p>";
-    html += "<p><strong>目標溫度：</strong>" + String(mockController->getTargetTemperature(), 1) + "°C</p>";
-    html += "<p><strong>當前溫度：</strong>" + String(mockController->getCurrentTemperature(), 1) + "°C</p>";
-    html += "</div>";
+    statusInfo += "</p>";
+    statusInfo += "<p><strong>目標溫度：</strong>" + String(mockController->getTargetTemperature(), 1) + "°C</p>";
+    statusInfo += "<p><strong>當前溫度：</strong>" + String(mockController->getCurrentTemperature(), 1) + "°C</p>";
     
-    html += "<div style=\"margin:20px 0;\">";
-    html += "<a href=\"/simulation\" class=\"button\">🔧 返回模擬控制</a>";
-    html += "<a href=\"/\" class=\"button\">🏠 返回主頁</a>";
-    html += "</div>";
-    html += "<p style=\"color:#666;font-size:14px;\">💡 提示：可以在HomeKit app中查看狀態變化</p>";
-    html += "</div>";
-    html += "</body></html>";
+    String message = "模擬參數已成功更新！<br><br>" + statusInfo;
+    message += "<br><div style=\"margin:20px 0;\">";
+    message += "<a href=\"/simulation\" class=\"button\">🔧 返回模擬控制</a>";
+    message += "<a href=\"/\" class=\"button\">🏠 返回主頁</a>";
+    message += "</div>";
+    message += "<p style=\"color:#666;font-size:14px;\">💡 提示：可以在HomeKit app中查看狀態變化</p>";
+    
+    String html = WebUI::getSuccessPage("設置已更新", message, 0);
     webServer->send(200, "text/html", html);
   });
   
   // 模式切換頁面
   webServer->on("/simulation-toggle", [](){
-    String html = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">";
-    html += "<title>切換運行模式</title>";
-    html += "<style>body{font-family:Arial,sans-serif;margin:20px;background:#f0f0f0;}";
-    html += ".container{max-width:500px;margin:0 auto;background:white;padding:20px;border-radius:10px;}";
-    html += ".button{background:#007cba;color:white;padding:10px 20px;border:none;border-radius:5px;cursor:pointer;margin:10px;text-decoration:none;display:inline-block;}";
-    html += ".danger{background:#dc3545;}";
-    html += ".warning{background:#fff3cd;border:1px solid #ffeaa7;padding:15px;border-radius:5px;margin:15px 0;}";
-    html += "</style></head><body>";
-    html += "<div class=\"container\">";
-    html += "<h1>🔄 切換運行模式</h1>";
-    
-    html += "<div class=\"warning\">";
-    html += "<h3>⚠️ 重要提醒</h3>";
-    html += "<p>當前模式：" + String(configManager.getSimulationMode() ? "🔧 模擬模式" : "🏭 真實模式") + "</p>";
-    html += "<p>切換模式將會：</p>";
-    html += "<ul>";
-    html += "<li>重新啟動設備</li>";
-    html += "<li>重新初始化控制器</li>";
-    if (configManager.getSimulationMode()) {
-      html += "<li>啟用真實空調通訊（需要連接S21協議線路）</li>";
-    } else {
-      html += "<li>停用真實空調通訊，啟用模擬功能</li>";
-    }
-    html += "</ul>";
-    html += "</div>";
-    
-    String targetMode = configManager.getSimulationMode() ? "真實模式" : "模擬模式";
-    String targetIcon = configManager.getSimulationMode() ? "🏭" : "🔧";
-    
-    html += "<div style=\"text-align:center;margin:20px 0;\">";
-    html += "<form action=\"/simulation-toggle-confirm\" method=\"POST\" style=\"display:inline;\">";
-    html += "<button type=\"submit\" class=\"button danger\">" + targetIcon + " 切換到" + targetMode + "</button>";
-    html += "</form>";
-    html += "</div>";
-    
-    html += "<div style=\"text-align:center;margin:20px 0;\">";
-    html += "<a href=\"/\" style=\"color:#007cba;text-decoration:none;\">⬅️ 取消並返回主頁</a>";
-    html += "</div>";
-    
-    html += "</div></body></html>";
+    String html = WebUI::getSimulationTogglePage("/simulation-toggle-confirm", configManager.getSimulationMode());
     webServer->send(200, "text/html", html);
   });
   
@@ -971,52 +452,31 @@ void initializeMonitoring() {
     bool currentMode = configManager.getSimulationMode();
     configManager.setSimulationMode(!currentMode);
     
-    String html = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">";
-    html += "<title>模式切換中</title>";
-    html += "<style>body{font-family:Arial,sans-serif;margin:20px;background:#f0f0f0;}";
-    html += ".container{max-width:400px;margin:0 auto;background:white;padding:20px;border-radius:10px;text-align:center;}";
-    html += ".success{background:#d4edda;border:1px solid #c3e6cb;padding:15px;border-radius:5px;margin:15px 0;}";
-    html += "</style></head><body>";
-    html += "<div class=\"container\">";
-    html += "<h1>🔄 模式切換中</h1>";
-    html += "<div class=\"success\">";
-    html += "<p>運行模式已切換為：" + String(!currentMode ? "🔧 模擬模式" : "🏭 真實模式") + "</p>";
-    html += "<p>設備將在3秒後重啟...</p>";
-    html += "</div>";
-    html += "</div>";
-    html += "<script>setTimeout(function(){window.location='/restart';}, 3000);</script>";
-    html += "</body></html>";
+    String message = "運行模式已切換為：<strong>" + String(!currentMode ? "🔧 模擬模式" : "🏭 真實模式") + "</strong><br>";
+    message += "設備將重啟並應用新設定...";
+    String html = WebUI::getSuccessPage("模式切換中", message, 3, "/restart");
     webServer->send(200, "text/html", html);
   });
   
   // 重啟端點
   webServer->on("/restart", [](){
-    String html = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">";
-    html += "<title>設備重啟中</title>";
-    html += "<style>body{font-family:Arial,sans-serif;margin:20px;background:#f0f0f0;text-align:center;}";
-    html += ".container{max-width:400px;margin:0 auto;background:white;padding:20px;border-radius:10px;}";
-    html += ".info{background:#e8f4f8;border:1px solid #bee5eb;padding:15px;border-radius:5px;margin:15px 0;}";
-    html += "</style></head><body>";
-    html += "<div class=\"container\">";
-    html += "<h1>🔄 設備重啟中</h1>";
-    html += "<div class=\"info\">";
-    html += "<p>設備正在重新啟動，請稍候...</p>";
-    html += "<p>約30秒後可重新訪問設備。</p>";
-    html += "</div>";
-    html += "<p>重啟完成後請訪問：<br><a href=\"http://" + WiFi.localIP().toString() + ":8080\">http://" + WiFi.localIP().toString() + ":8080</a></p>";
-    html += "</div>";
-    html += "<script>setTimeout(function(){window.location='http://" + WiFi.localIP().toString() + ":8080';}, 30000);</script>";
-    html += "</body></html>";
-    
+    String html = WebUI::getRestartPage(WiFi.localIP().toString() + ":8080");
     webServer->send(200, "text/html", html);
     delay(1000);
     safeRestart();
+  });
+  
+  // 設置WebServer超時和連接限制
+  webServer->onNotFound([](){
+    webServer->sendHeader("Connection", "close");
+    webServer->send(404, "text/plain", "Not Found");
   });
   
   webServer->begin();
   monitoringEnabled = true;
   
   DEBUG_INFO_PRINT("[Main] WebServer監控功能已啟動: http://%s:8080\n", WiFi.localIP().toString().c_str());
+  DEBUG_INFO_PRINT("[Main] 注意：HomeKit配對期間WebServer將暫停響應\n");
 }
 
 // 初始化HomeKit功能（只有在WiFi穩定連接後調用）
@@ -1045,12 +505,15 @@ void initializeHomeKit() {
                    pairingCode.c_str(), deviceName.c_str());
 
   // 初始化 HomeSpan（記憶體優化配置）
-  homeSpan.setLogLevel(0);  // 關閉詳細日誌以節省記憶體
+  homeSpan.setLogLevel(1);  // 啟用基本日誌以診斷配對問題
   homeSpan.setControlPin(0);  // 設置控制引腳為Boot按鈕（用於重置配對）
   homeSpan.setStatusPin(2);   // 設置狀態引腳為內建LED
   // 關閉HomeSpan OTA，使用Arduino OTA
   // homeSpan.enableOTA();
+  
+  DEBUG_INFO_PRINT("[Main] 開始HomeSpan初始化...\n");
   homeSpan.begin(Category::Thermostats, deviceName.c_str());
+  DEBUG_INFO_PRINT("[Main] HomeSpan初始化完成\n");
   
   // 立即創建 HomeSpan 配件和服務（記憶體優化）
   accessory = new SpanAccessory();
@@ -1167,7 +630,15 @@ void setup() {
   DEBUG_INFO_PRINT("\n[Main] 開始啟動...\n");
   
   #if defined(ESP32C3_SUPER_MINI)
-    WiFi.setTxPower(WIFI_POWER_8_5dBm);
+    // WiFi 功率設定 (可根據性能需求調整)
+    #ifdef HIGH_PERFORMANCE_WIFI
+      WiFi.setTxPower(WIFI_POWER_19_5dBm);  // 高性能模式
+      DEBUG_INFO_PRINT("[Main] WiFi 高性能模式已啟用\n");
+    #else
+      WiFi.setTxPower(WIFI_POWER_8_5dBm);   // 節能模式 (預設)
+      DEBUG_INFO_PRINT("[Main] WiFi 節能模式已啟用\n");
+    #endif
+    
     // 監控記憶體使用情況
     DEBUG_INFO_PRINT("[Main] 可用堆內存: %d bytes\n", ESP.getFreeHeap());
   #endif
@@ -1259,6 +730,12 @@ void setup() {
     // 然後初始化HomeKit（硬件準備好後）
     initializeHomeKit();
     
+    // 先停止 AP 模式（如果正在運行），防止干擾HomeKit
+    if (wifiManager && wifiManager->isInAPMode()) {
+      wifiManager->stopAPMode();
+      delay(500); // 等待 AP 模式完全停止
+    }
+    
     // 清理WiFi管理器，避免干擾HomeKit
     delete wifiManager;
     wifiManager = nullptr;
@@ -1267,11 +744,8 @@ void setup() {
     ArduinoOTA.setHostname("DaiSpan-Thermostat");
     ArduinoOTA.begin();
     
-    // 等待HomeKit完全穩定後再啟動監控
-    delay(2000);
-    initializeMonitoring();
-    
-    DEBUG_INFO_PRINT("[Main] HomeKit模式啟動，WebServer監控已啟用\n");
+    // WebServer監控將在loop()中非阻塞啟動
+    DEBUG_INFO_PRINT("[Main] HomeKit模式啟動，WebServer監控將延遲啟動\n");
   } else {
     DEBUG_ERROR_PRINT("\n[Main] WiFi連接失敗，啟動配置模式\n");
     
@@ -1299,14 +773,118 @@ void loop() {
   // 根據模式處理不同的邏輯
   if (homeKitInitialized) {
     // HomeKit模式：處理HomeSpan、WebServer和OTA
-    homeSpan.poll();
-    if (monitoringEnabled && webServer) {
-      webServer->handleClient();  // 處理Web請求
+    // 優化處理順序，避免資源競爭
+    
+    // 檢查是否需要延遲啟動WebServer（針對setup()路徑）
+    static unsigned long homeKitReadyTime = 0;
+    static bool webServerStartScheduled = false;
+    static bool homeKitStabilized = false;
+    
+    if (!webServerStartScheduled && !monitoringEnabled) {
+      homeKitReadyTime = millis();
+      webServerStartScheduled = true;
+      DEBUG_INFO_PRINT("[Main] WebServer將在HomeKit穩定後啟動（延遲5秒）\n");
     }
-    ArduinoOTA.handle();
+    
+    // 等待5秒讓HomeKit完全穩定，然後再啟動WebServer
+    if (webServerStartScheduled && !monitoringEnabled && 
+        millis() - homeKitReadyTime >= 5000 && !homeKitPairingActive) {
+      DEBUG_INFO_PRINT("[Main] HomeKit已穩定，開始啟動WebServer（setup路徑）\n");
+      initializeMonitoring();
+      homeKitStabilized = true;
+    }
+    
+    // 優先處理 HomeKit (最重要)
+    homeSpan.poll();
+    
+    // 檢測 HomeKit 配對狀態 (更準確的檢測方法)
+    static unsigned long lastPairingCheck = 0;
+    static bool wasPairing = false;
+    
+    if (currentTime - lastPairingCheck >= 2000) { // 每2秒檢查一次
+      // 檢查HomeSpan的配對狀態
+      // 當有新配對請求時，TCP連接數會增加
+      static uint32_t baseMemory = ESP.getFreeHeap();
+      uint32_t currentMemory = ESP.getFreeHeap();
+      
+      // 配對活動檢測：記憶體使用變化 + TCP活動
+      bool memoryActivity = (baseMemory > currentMemory + 15000) || (currentMemory > baseMemory + 15000);
+      homeKitPairingActive = memoryActivity;
+      
+      // 記錄配對狀態變化
+      if (homeKitPairingActive != wasPairing) {
+        DEBUG_INFO_PRINT("[Main] HomeKit配對狀態變化: %s\n", 
+                         homeKitPairingActive ? "配對中" : "空閒");
+        if (homeKitPairingActive) {
+          DEBUG_INFO_PRINT("[Main] 配對期間暫停WebServer處理以確保穩定性\n");
+        } else {
+          DEBUG_INFO_PRINT("[Main] 配對完成，恢復WebServer處理\n");
+        }
+        wasPairing = homeKitPairingActive;
+      }
+      
+      baseMemory = currentMemory; // 更新基準值
+      lastPairingCheck = currentTime;
+    }
+    
+    // 配對期間完全暫停WebServer，確保HomeKit穩定
+    if (!homeKitPairingActive && monitoringEnabled && webServer) {
+      static unsigned long lastWebServerHandle = 0;
+      // 正常情況下限制WebServer頻率
+      if (currentTime - lastWebServerHandle >= 50) {
+        webServer->handleClient();
+        lastWebServerHandle = currentTime;
+      }
+    }
+    
+    // OTA 處理（低優先級）
+    static unsigned long lastOTAHandle = 0;
+    if (currentTime - lastOTAHandle >= 100) { // 限制每100ms處理一次
+      ArduinoOTA.handle();
+      lastOTAHandle = currentTime;
+    }
   } else if (wifiManager) {
-    // 配置模式：處理WiFi管理器
-    wifiManager->loop();
+    // 檢查是否WiFi已連接但HomeKit未初始化（需要啟動HomeKit）
+    if (WiFi.status() == WL_CONNECTED && !homeKitInitialized && !deviceInitialized) {
+      DEBUG_INFO_PRINT("[Main] WiFi已連接，開始初始化HomeKit...\n");
+      
+      // 先停止 AP 模式，防止模式衝突
+      if (wifiManager->isInAPMode()) {
+        wifiManager->stopAPMode();
+        delay(500); // 等待 AP 模式完全停止
+      }
+      
+      // 清理WiFi管理器
+      delete wifiManager;
+      wifiManager = nullptr;
+      
+      // 初始化硬件組件
+      initializeHardware();
+      
+      // 初始化HomeKit
+      initializeHomeKit();
+      
+      // 延遲啟動監控以避免阻塞 (使用非阻塞方式)
+      static unsigned long homeKitInitTime = 0;
+      static bool monitoringScheduled = false;
+      
+      if (!monitoringScheduled) {
+        homeKitInitTime = millis();
+        monitoringScheduled = true;
+        DEBUG_INFO_PRINT("[Main] WebServer監控將在HomeKit穩定後啟動（延遲5秒）\n");
+      }
+      
+      // 5秒後非阻塞啟動監控，確保HomeKit完全穩定
+      if (monitoringScheduled && millis() - homeKitInitTime >= 5000 && !monitoringEnabled) {
+        DEBUG_INFO_PRINT("[Main] HomeKit已穩定，開始啟動WebServer監控\n");
+        initializeMonitoring();
+      }
+      
+      DEBUG_INFO_PRINT("[Main] HomeKit初始化完成\n");
+    } else {
+      // 配置模式：處理WiFi管理器
+      wifiManager->loop();
+    }
   }
 
   // 每5秒輸出一次心跳信息
@@ -1326,9 +904,28 @@ void loop() {
                      deviceInitialized ? "已初始化" : "未初始化",
                      WiFi.localIP().toString().c_str());
     
-    // 如果是HomeKit模式，顯示網路狀態
+    // 如果是HomeKit模式，顯示詳細狀態
     if (homeKitInitialized) {
-      DEBUG_INFO_PRINT("[Main] HomeKit狀態 - WiFi信號強度: %d dBm\n", WiFi.RSSI());
+      // 記憶體監控和分析
+      static uint32_t minMemory = ESP.getFreeHeap();
+      static uint32_t maxMemory = ESP.getFreeHeap();
+      uint32_t currentMemory = ESP.getFreeHeap();
+      
+      if (currentMemory < minMemory) minMemory = currentMemory;
+      if (currentMemory > maxMemory) maxMemory = currentMemory;
+      
+      DEBUG_INFO_PRINT("[Main] HomeKit狀態 - WiFi: %d dBm, 記憶體: %d bytes (最小:%d, 最大:%d), WebServer: %s, 配對中: %s\n", 
+                       WiFi.RSSI(), 
+                       currentMemory,
+                       minMemory,
+                       maxMemory,
+                       monitoringEnabled ? "啟用" : "停用",
+                       homeKitPairingActive ? "是" : "否");
+      
+      // 記憶體警告
+      if (currentMemory < 80000) {
+        DEBUG_ERROR_PRINT("[Main] ⚠️ 記憶體不足警告: %d bytes\n", currentMemory);
+      }
     }
     lastLoopTime = currentTime;
   }

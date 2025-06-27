@@ -21,9 +21,9 @@
 #define MAX_TEMP         30.0f   // 最高溫度限制
 #define TEMP_STEP        0.5f    // 溫度調節步長
 
-// 更新間隔設定（毫秒）
-#define UPDATE_INTERVAL    5000   // 狀態更新間隔（3秒）
-#define HEARTBEAT_INTERVAL 5000   // 心跳日誌間隔（5秒）
+// 更新間隔設定（毫秒）- 與 ThermostatController 保持一致
+#define UPDATE_INTERVAL    8000   // 狀態更新間隔（8秒，減少協議查詢頻率）
+#define HEARTBEAT_INTERVAL 8000   // 心跳日誌間隔（8秒）
 
 class ThermostatDevice : public Service::Thermostat {
 private:

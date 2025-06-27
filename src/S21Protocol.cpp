@@ -192,18 +192,18 @@ bool S21Protocol::sendCommandInternal(char cmd0, char cmd1, const uint8_t* paylo
     txBuffer[index++] = s21_checksum(txBuffer, index + 2);  // +2 for checksum and ETX
     txBuffer[index++] = ETX;
     
-    // 發送數據前等待一段時間
-    delay(50);
+    // 發送數據前等待一段時間（縮短延遲）
+    delay(10);  // 從 50ms 減少到 10ms
     
     // 發送數據
     serial.write(txBuffer, index);
     serial.flush();
     
-    // 等待確認
-    bool result = waitForAck(200);  // 增加等待時間到 200ms
+    // 等待確認（縮短超時時間）
+    bool result = waitForAck(100);  // 從 200ms 減少到 100ms
     
-    // 送後等待一段時間
-    delay(50);
+    // 發送後等待一段時間（大幅縮短）
+    delay(5);   // 從 50ms 減少到 5ms
     
     return result;
 }
@@ -220,7 +220,8 @@ bool S21Protocol::waitForAck(unsigned long timeout) {
                 return false;
             }
         }
-        delay(1);
+        // 減少內部延遲，提高響應速度
+        yield();  // 讓其他任務有機會運行，而不是阻塞延遲
     }
     DEBUG_ERROR_PRINT("[S21] 錯誤：等待 ACK 超時\n");
     return false;

@@ -8,6 +8,8 @@
 #include "Debug.h"
 #include "OTAManager.h"
 #include "LogManager.h"
+#include "WebUI.h"
+#include "esp_wifi.h"
 
 // 前向聲明
 extern void safeRestart();
@@ -70,14 +72,25 @@ public:
             return startAPMode();
         }
         
-        // 嘗試連接已配置的 WiFi
-        if (connectToWiFi(ssid, password)) {
-            this->isConfigured = true;
-            return true;
+        // 嘗試連接已配置的 WiFi（實現重試邏輯）
+        connectionAttempts = 0; // 重置計數器
+        
+        while (connectionAttempts < MAX_CONNECTION_ATTEMPTS) {
+            if (connectToWiFi(ssid, password)) {
+                this->isConfigured = true;
+                return true;
+            }
+            
+            // 如果還有重試次數，等待一段時間後再試
+            if (connectionAttempts < MAX_CONNECTION_ATTEMPTS) {
+                DEBUG_INFO_PRINT("[WiFiManager] 等待 2 秒後重試...\n");
+                delay(2000);
+            }
         }
         
-        // 連接失敗，啟動 AP 模式
-        DEBUG_ERROR_PRINT("[WiFiManager] WiFi 連接失敗，啟動 AP 模式\n");
+        // 所有重試都失敗，啟動 AP 模式
+        DEBUG_ERROR_PRINT("[WiFiManager] WiFi 連接失敗 (%d/%d 次嘗試)，啟動 AP 模式\n", 
+                         connectionAttempts, MAX_CONNECTION_ATTEMPTS);
         return startAPMode();
     }
     
@@ -85,7 +98,92 @@ public:
     bool connectToWiFi(const String& ssid, const String& password) {
         DEBUG_INFO_PRINT("[WiFiManager] 嘗試連接 WiFi: %s\n", ssid.c_str());
         
+        // 輸入驗證
+        if (ssid.length() == 0) {
+            DEBUG_ERROR_PRINT("[WiFiManager] SSID 為空，無法連接\n");
+            return false;
+        }
+        
+        if (ssid.length() > 32) {
+            DEBUG_ERROR_PRINT("[WiFiManager] SSID 過長：%d 字符\n", ssid.length());
+            return false;
+        }
+        
+        if (password.length() > 63) {
+            DEBUG_ERROR_PRINT("[WiFiManager] 密碼過長：%d 字符\n", password.length());
+            return false;
+        }
+        
+        DEBUG_INFO_PRINT("[WiFiManager] 連接參數 - SSID: '%s', 密碼長度: %d\n", 
+                         ssid.c_str(), password.length());
+        
+        // 如果正在 AP 模式，先停止相關服務
+        if (isAPMode) {
+            // 停止 DNS 服務器
+            if (dnsServer) {
+                dnsServer->stop();
+                delete dnsServer;
+                dnsServer = nullptr;
+            }
+            
+            // 停止 Web 服務器
+            if (webServer) {
+                webServer->stop();
+                delete webServer;
+                webServer = nullptr;
+            }
+            
+            // 停止 SoftAP
+            WiFi.softAPdisconnect(true);
+            delay(100);
+            
+            isAPMode = false;
+            DEBUG_INFO_PRINT("[WiFiManager] 已停止 AP 模式以進行 STA 連接\n");
+        }
+        
+        // 確保WiFi狀態乾淨
+        WiFi.disconnect(true);
+        delay(100);
         WiFi.mode(WIFI_STA);
+        delay(100); // 等待模式切換完成
+        
+        // 驗證模式切換成功
+        wifi_mode_t currentMode = WiFi.getMode();
+        if (currentMode != WIFI_STA) {
+            DEBUG_WARN_PRINT("[WiFiManager] WiFi 模式切換失敗，當前模式: %d\n", currentMode);
+        }
+        
+        DEBUG_INFO_PRINT("[WiFiManager] 開始連接 WiFi...\n");
+        
+        // 先檢查網路是否可見
+        int n = WiFi.scanNetworks();
+        bool networkFound = false;
+        int networkRSSI = 0;
+        String networkEncryption = "";
+        
+        for (int i = 0; i < n; i++) {
+            if (WiFi.SSID(i) == ssid) {
+                networkFound = true;
+                networkRSSI = WiFi.RSSI(i);
+                wifi_auth_mode_t encType = WiFi.encryptionType(i);
+                networkEncryption = (encType == WIFI_AUTH_OPEN) ? "開放" : 
+                                  (encType == WIFI_AUTH_WPA_PSK) ? "WPA" :
+                                  (encType == WIFI_AUTH_WPA2_PSK) ? "WPA2" :
+                                  (encType == WIFI_AUTH_WPA_WPA2_PSK) ? "WPA/WPA2" : "其他";
+                break;
+            }
+        }
+        
+        if (!networkFound) {
+            DEBUG_ERROR_PRINT("[WiFiManager] 錯誤：找不到網路 '%s'，可能信號太弱或名稱錯誤\n", ssid.c_str());
+            WiFi.scanDelete(); // 清理掃描結果
+            return false;
+        }
+        
+        DEBUG_INFO_PRINT("[WiFiManager] 找到網路 '%s' - 信號: %d dBm, 加密: %s\n", 
+                         ssid.c_str(), networkRSSI, networkEncryption.c_str());
+        WiFi.scanDelete(); // 清理掃描結果
+        
         WiFi.begin(ssid.c_str(), password.c_str());
         
         unsigned long startTime = millis();
@@ -109,8 +207,34 @@ public:
         }
         
         connectionAttempts++;
-        DEBUG_ERROR_PRINT("\n[WiFiManager] WiFi 連接失敗 (嘗試 %d/%d)\n", 
-                         connectionAttempts, MAX_CONNECTION_ATTEMPTS);
+        
+        // 詳細的錯誤診斷
+        wl_status_t status = WiFi.status();
+        DEBUG_ERROR_PRINT("\n[WiFiManager] WiFi 連接失敗 (嘗試 %d/%d)，狀態碼：%d\n", 
+                         connectionAttempts, MAX_CONNECTION_ATTEMPTS, status);
+        
+        switch(status) {
+            case WL_NO_SSID_AVAIL:
+                DEBUG_ERROR_PRINT("[WiFiManager] 錯誤：找不到 SSID '%s'\n", ssid.c_str());
+                break;
+            case WL_CONNECT_FAILED:
+                DEBUG_ERROR_PRINT("[WiFiManager] 錯誤：連接失敗，可能是密碼錯誤或網路問題\n");
+                DEBUG_ERROR_PRINT("[WiFiManager] SSID: '%s', 密碼長度: %d\n", ssid.c_str(), password.length());
+                break;
+            case WL_CONNECTION_LOST:
+                DEBUG_ERROR_PRINT("[WiFiManager] 錯誤：連接丟失\n");
+                break;
+            case WL_DISCONNECTED:
+                DEBUG_ERROR_PRINT("[WiFiManager] 錯誤：未連接\n");
+                break;
+            case WL_IDLE_STATUS:
+                DEBUG_ERROR_PRINT("[WiFiManager] 錯誤：連接空閒狀態\n");
+                break;
+            default:
+                DEBUG_ERROR_PRINT("[WiFiManager] 錯誤：未知狀態 %d\n", status);
+                break;
+        }
+        
         return false;
     }
     
@@ -118,21 +242,57 @@ public:
     bool startAPMode() {
         DEBUG_INFO_PRINT("[WiFiManager] 啟動 AP 模式...\n");
         
-        WiFi.mode(WIFI_AP);
-        IPAddress apIP(192, 168, 4, 1);
-        WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
+        // 先斷開任何現有連接
+        WiFi.disconnect(true);
+        delay(100);
         
-        if (!WiFi.softAP(AP_SSID)) {
+        // 設置AP模式並增強兼容性
+        WiFi.mode(WIFI_AP);
+        
+        // 等待模式切換完成
+        delay(100);
+        
+        // 設置 WiFi 功率和協議以提高兼容性
+        WiFi.setTxPower(WIFI_POWER_19_5dBm);  // 設置較高的發射功率
+        
+        // 確保使用兼容的協議
+        esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
+        
+        // 配置IP地址
+        IPAddress apIP(192, 168, 4, 1);
+        IPAddress gateway(192, 168, 4, 1);  
+        IPAddress subnet(255, 255, 255, 0);
+        
+        if (!WiFi.softAPConfig(apIP, gateway, subnet)) {
+            DEBUG_ERROR_PRINT("[WiFiManager] AP IP 配置失敗\n");
+        }
+        
+        // 使用更兼容的AP配置
+        // 參數：SSID, 密碼, 頻道, 隱藏, 最大連接數, FTM響應器
+        if (!WiFi.softAP(AP_SSID, nullptr, 6, 0, 8, false)) {  // 頻道6, 開放網路, 最大8連接
             DEBUG_ERROR_PRINT("[WiFiManager] AP 模式啟動失敗\n");
             return false;
         }
         
+        // 等待AP完全穩定
+        delay(1000);
+        
+        // 驗證AP狀態
+        IPAddress apActualIP = WiFi.softAPIP();
+        wifi_mode_t currentMode = WiFi.getMode();
+        
         DEBUG_INFO_PRINT("[WiFiManager] AP 模式已啟動\n");
         DEBUG_INFO_PRINT("SSID: %s\n", AP_SSID);
-        DEBUG_INFO_PRINT("開放網路 (無密碼)\n");
-        DEBUG_INFO_PRINT("IP: %s\n", WiFi.softAPIP().toString().c_str());
+        DEBUG_INFO_PRINT("頻道: 6, 開放網路 (無密碼)\n");
+        DEBUG_INFO_PRINT("IP: %s\n", apActualIP.toString().c_str());
+        DEBUG_INFO_PRINT("WiFi 模式: %d (1=STA, 2=AP, 3=STA+AP)\n", currentMode);
+        DEBUG_INFO_PRINT("最大連接數: 8\n");
+        DEBUG_INFO_PRINT("MAC 地址: %s\n", WiFi.softAPmacAddress().c_str());
         
-        // 認證功能已暫時移除
+        // 檢查AP是否真的可用
+        if (apActualIP == IPAddress(0, 0, 0, 0)) {
+            DEBUG_ERROR_PRINT("[WiFiManager] 警告：AP IP 地址為 0.0.0.0，可能配置失敗\n");
+        }
         
         isAPMode = true;
         startWebServer();
@@ -192,8 +352,28 @@ public:
             handleRestart();
         });
         
+        // 清除WiFi配置（調試用）
+        webServer->on("/clear-wifi", [this]() {
+            handleClearWiFi();
+        });
+        
+        // 處理常見的瀏覽器請求
+        webServer->on("/favicon.ico", [this]() {
+            webServer->send(404, "text/plain", "Not Found");
+        });
+        
+        webServer->on("/apple-touch-icon.png", [this]() {
+            webServer->send(404, "text/plain", "Not Found");
+        });
+        
+        webServer->on("/robots.txt", [this]() {
+            webServer->send(200, "text/plain", "User-agent: *\nDisallow: /");
+        });
+        
         // 404 處理（重定向到主頁）
         webServer->onNotFound([this]() {
+            String uri = webServer->uri();
+            DEBUG_INFO_PRINT("[WiFiManager] 404請求: %s\n", uri.c_str());
             webServer->sendHeader("Location", "/", true);
             webServer->send(302, "text/plain", "");
         });
@@ -246,6 +426,30 @@ public:
         return true;
     }
     
+    // URL 解碼函數
+    String urlDecode(const String& encoded) {
+        String decoded = "";
+        for (size_t i = 0; i < encoded.length(); i++) {
+            if (encoded[i] == '%' && i + 2 < encoded.length()) {
+                // 解析十六進制字符
+                char hex[3] = {encoded[i+1], encoded[i+2], '\0'};
+                char* endPtr;
+                long value = strtol(hex, &endPtr, 16);
+                if (*endPtr == '\0') {
+                    decoded += (char)value;
+                    i += 2; // 跳過已處理的字符
+                } else {
+                    decoded += encoded[i]; // 無效的編碼，保持原樣
+                }
+            } else if (encoded[i] == '+') {
+                decoded += ' '; // '+' 代表空格
+            } else {
+                decoded += encoded[i];
+            }
+        }
+        return decoded;
+    }
+
     // 處理保存配置請求
     void handleSave() {
         String ssid = webServer->arg("ssid");
@@ -253,7 +457,19 @@ public:
         String deviceName = webServer->arg("deviceName");
         String pairingCode = webServer->arg("pairingCode");
         
-        DEBUG_INFO_PRINT("[WiFiManager] 保存配置: SSID=%s\n", ssid.c_str());
+        // URL 解碼處理
+        ssid = urlDecode(ssid);
+        password = urlDecode(password);
+        deviceName = urlDecode(deviceName);
+        
+        // 清理字符串
+        ssid.trim();
+        password.trim();
+        deviceName.trim();
+        pairingCode.trim();
+        
+        DEBUG_INFO_PRINT("[WiFiManager] 保存配置: SSID=%s, 密碼長度=%d\n", 
+                         ssid.c_str(), password.length());
         
         // 驗證配對碼
         if (pairingCode.length() > 0 && !isValidPairingCode(pairingCode)) {
@@ -264,9 +480,46 @@ public:
             return;
         }
         
+        // 驗證 WiFi 配置
+        if (ssid.length() == 0) {
+            String html = getErrorPageHTML("SSID 無效", "SSID 不能為空");
+            webServer->send(400, "text/html", html);
+            return;
+        }
+        
+        if (ssid.length() > 32) {
+            String html = getErrorPageHTML("SSID 過長", "SSID 長度不能超過 32 個字符");
+            webServer->send(400, "text/html", html);
+            return;
+        }
+        
+        if (password.length() > 63) {
+            String html = getErrorPageHTML("密碼過長", "WiFi 密碼長度不能超過 63 個字符");
+            webServer->send(400, "text/html", html);
+            return;
+        }
+        
+        // 檢查密碼中的不可見字符
+        bool hasInvalidChars = false;
+        for (size_t i = 0; i < password.length(); i++) {
+            if (password[i] < 32 && password[i] != 9) { // 允許 Tab 字符
+                hasInvalidChars = true;
+                break;
+            }
+        }
+        
+        if (hasInvalidChars) {
+            String html = getErrorPageHTML("密碼包含無效字符", 
+                "密碼包含不可見字符，請重新輸入");
+            webServer->send(400, "text/html", html);
+            return;
+        }
+        
         // 保存 WiFi 配置
         if (ssid.length() > 0) {
             config.setWiFiCredentials(ssid, password);
+            DEBUG_INFO_PRINT("[WiFiManager] 配置驗證通過，SSID: '%s', 密碼長度: %d\n", 
+                           ssid.c_str(), password.length());
         }
         
         // 保存 HomeKit 配置
@@ -287,8 +540,14 @@ public:
     
     // 處理掃描 WiFi 請求
     void handleScan() {
+        // 設置更長的超時時間，避免客戶端斷開
+        webServer->sendHeader("Connection", "keep-alive");
+        webServer->sendHeader("Cache-Control", "no-cache");
+        
+        DEBUG_INFO_PRINT("[WiFiManager] 處理掃描請求...\n");
         String networks = scanWiFiNetworks();
         webServer->send(200, "application/json", networks);
+        DEBUG_INFO_PRINT("[WiFiManager] 掃描請求處理完成\n");
     }
     
     // 處理 OTA 狀態請求
@@ -311,51 +570,24 @@ public:
         auto stats = LOG_MANAGER.getStats();
         auto logs = LOG_MANAGER.getLogs();
         
-        String html = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">";
-        html += "<title>DaiSpan Logs</title>";
-        html += "<style>body{font-family:monospace;margin:20px;background:#f0f0f0;}";
-        html += ".container{max-width:800px;margin:0 auto;background:white;padding:20px;border-radius:10px;}";
-        html += "h1{color:#333;text-align:center;}.button{padding:8px 16px;margin:5px;background:#007cba;color:white;text-decoration:none;border-radius:5px;}";
-        html += ".stats{background:#e8f4f8;padding:15px;border-radius:5px;margin:15px 0;}";
-        html += ".log-container{background:#000;color:#00ff00;padding:15px;border-radius:5px;max-height:400px;overflow-y:auto;font-size:12px;}";
-        html += ".log-entry{margin:2px 0;}";
-        html += "</style></head><body><div class=\"container\">";
-        html += "<h1>DaiSpan System Logs</h1>";
-        html += "<div style=\"text-align:center;\">";
-        html += "<a href=\"/api/logs\" class=\"button\">View JSON</a>";
-        html += "<button onclick=\"clearLogs()\" class=\"button\">Clear</button>";
-        html += "<a href=\"/\" class=\"button\">Back</a>";
-        html += "</div>";
-        html += "<div class=\"stats\"><h3>Statistics</h3>";
-        html += "<p>Total: " + String(stats.totalEntries) + " entries";
-        if (logs.size() < stats.totalEntries) {
-            html += " (showing latest " + String(logs.size()) + ")";
-        }
-        html += "</p>";
-        html += "<p>INFO: " + String(stats.infoCount) + " | WARNING: " + String(stats.warningCount) + " | ERROR: " + String(stats.errorCount) + "</p>";
-        html += "</div>";
-        
-        // 顯示最新的日誌條目
-        html += "<div class=\"log-container\">";
+        // 建構日誌內容
+        String logContent = "";
         if (logs.size() > 0) {
             // 顯示最新的10條日誌
             size_t startIndex = logs.size() > 10 ? logs.size() - 10 : 0;
+            size_t shownEntries = logs.size() - startIndex;
             for (size_t i = startIndex; i < logs.size(); i++) {
                 const auto& entry = logs[i];
                 String timeStr = String(entry.timestamp / 1000) + "." + String(entry.timestamp % 1000);
-                html += "<div class=\"log-entry\">";
-                html += "[" + timeStr + "] [" + String(LOG_MANAGER.getLevelString(entry.level)) + "] [" + entry.component + "] " + entry.message;
-                html += "</div>";
+                logContent += "<div class=\"log-entry\">";
+                logContent += "[" + timeStr + "] [" + String(LOG_MANAGER.getLevelString(entry.level)) + "] [" + entry.component + "] " + entry.message;
+                logContent += "</div>";
             }
-        } else {
-            html += "<p style=\"color:#666;\">No logs available</p>";
         }
-        html += "</div>";
         
-        html += "<p style=\"margin-top:15px;\"><strong>Note:</strong> Only latest 10 entries shown. Use <a href=\"/api/logs\" target=\"_blank\">JSON API</a> for complete logs.</p>";
-        html += "<script>function clearLogs(){if(confirm('Clear all logs?')){fetch('/logs-clear',{method:'POST'}).then(()=>location.reload());}}</script>";
-        html += "</div></body></html>";
-        return html;
+        return WebUI::getLogPage(logContent, "/logs-clear", "/api/logs", 
+                                stats.totalEntries, stats.infoCount, stats.warningCount, 
+                                stats.errorCount, logs.size() > 10 ? 10 : logs.size());
     }
     
     // 處理清除日誌請求
@@ -374,32 +606,76 @@ public:
     
     // 處理重啟請求
     void handleRestart() {
-        String html = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">";
-        html += "<title>重新啟動</title>";
-        html += "<style>body{font-family:Arial,sans-serif;text-align:center;margin:50px;background:#f0f0f0;}";
-        html += ".container{max-width:400px;margin:0 auto;background:white;padding:30px;border-radius:10px;}";
-        html += "h1{color:#333;}</style></head><body>";
-        html += "<div class=\"container\"><h1>🔄 重新啟動中...</h1>";
-        html += "<p>設備正在重新啟動，請稍候...</p>";
-        html += "<p>重啟完成後請重新連接。</p></div></body></html>";
-        
+        String html = WebUI::getRestartPage();
         webServer->sendHeader("Content-Type", "text/html; charset=utf-8");
         webServer->send(200, "text/html", html);
         delay(500); // 減少延遲從1秒到500ms
         safeRestart();
     }
     
-    // 掃描 WiFi 網路
+    // 處理清除WiFi配置請求（調試用）
+    void handleClearWiFi() {
+        config.clearWiFiConfig();
+        String html = "<html><body><h1>WiFi 配置已清除</h1>";
+        html += "<p>設備將重新啟動並進入配置模式</p>";
+        html += "<script>setTimeout(function(){window.location.href='/';}, 3000);</script>";
+        html += "</body></html>";
+        webServer->send(200, "text/html", html);
+        delay(1000);
+        safeRestart();
+    }
+    
+    // 掃描 WiFi 網路 - AP 模式安全版本
     String scanWiFiNetworks() {
-        DEBUG_INFO_PRINT("[WiFiManager] 開始掃描 WiFi 網路...\n");
+        DEBUG_INFO_PRINT("[WiFiManager] 開始 AP 模式安全掃描...\n");
         
-        // 在 AP 模式下掃描可能需要特殊處理
-        WiFi.scanDelete(); // 清除之前的掃描結果
-        int n = WiFi.scanNetworks(false, true); // 異步掃描，顯示隱藏網路
+        int n;
         
+        // 在 AP 模式下，使用改進的掃描方式
+        if (isAPMode) {
+            DEBUG_INFO_PRINT("[WiFiManager] AP 模式下進行網路掃描\n");
+            
+            // 多次嘗試掃描，提高成功率
+            n = -1;
+            int attempts = 0;
+            int maxAttempts = 3;
+            
+            while (attempts < maxAttempts && (n <= 0 || n == WIFI_SCAN_FAILED)) {
+                attempts++;
+                DEBUG_INFO_PRINT("[WiFiManager] 掃描嘗試 %d/%d\n", attempts, maxAttempts);
+                
+                // 清除舊的掃描結果
+                WiFi.scanDelete();
+                delay(50);
+                
+                // 使用同步掃描，但延長超時時間
+                n = WiFi.scanNetworks(false, false, false, 3000); // 同步掃描，不顯示隱藏網路，3秒超時
+                
+                DEBUG_INFO_PRINT("[WiFiManager] 掃描嘗試 %d 結果: %d\n", attempts, n);
+                
+                if (n > 0) {
+                    break; // 成功找到網路
+                } else if (n == WIFI_SCAN_FAILED) {
+                    DEBUG_WARN_PRINT("[WiFiManager] 掃描失敗，等待後重試\n");
+                    delay(500);
+                } else if (n == 0) {
+                    DEBUG_INFO_PRINT("[WiFiManager] 未找到網路，重試中\n");
+                    delay(300);
+                }
+            }
+            
+            if (n <= 0) {
+                DEBUG_WARN_PRINT("[WiFiManager] 所有掃描嘗試都失敗，返回空列表\n");
+                return "[]";
+            }
+        } else {
+            // 在 STA 模式下可以使用常規掃描
+            WiFi.scanDelete();
+            n = WiFi.scanNetworks(false, true);
+        }
         DEBUG_INFO_PRINT("[WiFiManager] 掃描完成，找到 %d 個網路\n", n);
         
-        if (n == -1) {
+        if (n == WIFI_SCAN_FAILED || n < 0) {
             DEBUG_ERROR_PRINT("[WiFiManager] WiFi 掃描失敗\n");
             return "[]";
         }
@@ -409,10 +685,12 @@ public:
             return "[]";
         }
         
+        // 構建JSON，但限制網路數量以減少處理時間
         String json = "[";
         int validNetworks = 0;
+        int maxNetworks = 15; // 最多返回15個網路
         
-        for (int i = 0; i < n; ++i) {
+        for (int i = 0; i < n && validNetworks < maxNetworks; ++i) {
             String ssid = WiFi.SSID(i);
             // 跳過空 SSID（隱藏網路）
             if (ssid.length() == 0) {
@@ -441,7 +719,22 @@ public:
         }
         
         if (isAPMode) {
+            // 處理 DNS 請求
             if (dnsServer) dnsServer->processNextRequest();
+            
+            // 檢查 AP 狀態並維持穩定性
+            static unsigned long lastAPCheck = 0;
+            if (millis() - lastAPCheck > 10000) { // 每10秒檢查一次
+                lastAPCheck = millis();
+                
+                // 檢查 AP 是否仍在運行
+                if (WiFi.getMode() != WIFI_AP && WiFi.getMode() != WIFI_AP_STA) {
+                    DEBUG_WARN_PRINT("[WiFiManager] 檢測到 AP 模式異常，嘗試重新啟動\n");
+                    startAPMode(); // 重新啟動 AP 模式
+                } else {
+                    DEBUG_VERBOSE_PRINT("[WiFiManager] AP 模式運行正常，已連接客戶端: %d\n", WiFi.softAPgetStationNum());
+                }
+            }
         } else {
             // 檢查 WiFi 連接狀態
             if (WiFi.status() != WL_CONNECTED && 
@@ -483,6 +776,37 @@ public:
         otaManager = ota;
     }
     
+    // 停止 AP 模式並切換到 STA 模式
+    void stopAPMode() {
+        if (!isAPMode) return;
+        
+        DEBUG_INFO_PRINT("[WiFiManager] 停止 AP 模式...\n");
+        
+        // 停止 DNS 服務器
+        if (dnsServer) {
+            dnsServer->stop();
+            delete dnsServer;
+            dnsServer = nullptr;
+        }
+        
+        // 停止 Web 服務器
+        if (webServer) {
+            webServer->stop();
+            delete webServer;
+            webServer = nullptr;
+        }
+        
+        // 停止 SoftAP
+        WiFi.softAPdisconnect(true);
+        
+        // 切換到 STA 模式
+        WiFi.mode(WIFI_STA);
+        delay(100);
+        
+        isAPMode = false;
+        DEBUG_INFO_PRINT("[WiFiManager] AP 模式已停止\n");
+    }
+    
     // 生成 Web 認證憑證
     void generateWebCredentials() {
         String mac = WiFi.macAddress();
@@ -516,247 +840,81 @@ public:
 private:
     // 生成主頁 HTML
     String getMainPageHTML() {
-        String statusText = "";
-        String authInfo = "";
+        String html = WebUI::getPageHeader("DaiSpan 配置");
+        html += "<div class=\"container\">";
+        html += "<h1>🌡️ DaiSpan 智能恆溫器</h1>";
         
+        // 狀態資訊
+        html += "<div class=\"status\">";
         if (isAPMode) {
-            statusText = "<h3>配置狀態</h3><p>設備已啟動 AP 配置模式</p><p>請連接此設備並配置 WiFi 設定</p>";
+            html += "<h3>📡 配置狀態</h3>";
+            html += "<p>設備已啟動 AP 配置模式</p>";
+            html += "<p>請連接此設備並配置 WiFi 設定</p>";
+            html += "<p><strong>AP SSID:</strong> " + String(AP_SSID) + "</p>";
+            html += "<p><strong>IP地址:</strong> " + WiFi.softAPIP().toString() + "</p>";
         } else {
-            statusText = "<h3>系統狀態</h3><p>設備已連接到 WiFi: <strong>" + WiFi.SSID() + "</strong></p><p>IP 地址: <strong>" + WiFi.localIP().toString() + "</strong></p>";
+            html += "<h3>🌐 系統狀態</h3>";
+            html += "<p>設備已連接到 WiFi: <strong>" + WiFi.SSID() + "</strong></p>";
+            html += "<p>IP 地址: <strong>" + WiFi.localIP().toString() + "</strong></p>";
+            html += "<p>信號強度: " + String(WiFi.RSSI()) + " dBm</p>";
         }
+        html += "</div>";
         
-        return R"(
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DaiSpan 配置</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; }
-        .container { max-width: 600px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        h1 { color: #333; text-align: center; }
-        .button { display: inline-block; padding: 10px 20px; margin: 10px 5px; background: #007cba; color: white; text-decoration: none; border-radius: 5px; border: none; cursor: pointer; }
-        .button:hover { background: #005a8b; }
-        .status { background: #e8f4f8; padding: 15px; border-radius: 5px; margin: 20px 0; }
-        .auth-info { background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 5px; margin: 20px 0; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>🌡️ DaiSpan 智能恆溫器</h1>
-        <div class="status">
-            )" + statusText + R"(
-        </div>
-        )" + authInfo + R"(
-        <div style="text-align: center;">
-            <a href="/config" class="button">📡 WiFi 設定</a>
-            <a href="/ota-status" class="button">🔄 OTA 更新</a>
-            <a href="/logs" class="button">📊 系統日誌</a>
-            <a href="/restart" class="button">🔄 重新啟動</a>
-        </div>
-    </div>
-</body>
-</html>
-        )";
+        // 導航按鈕
+        html += "<div style=\"text-align: center;\">";
+        html += "<a href=\"/config\" class=\"button\">📡 WiFi 設定</a>";
+        html += "<a href=\"/ota-status\" class=\"button\">🔄 OTA 更新</a>";
+        html += "<a href=\"/logs\" class=\"button\">📊 系統日誌</a>";
+        html += "<a href=\"/restart\" class=\"button\">🔄 重新啟動</a>";
+        html += "</div>";
+        
+        html += "</div>";
+        html += WebUI::getPageFooter();
+        return html;
     }
     
     // 生成配置頁面 HTML
     String getConfigPageHTML() {
-        return R"(
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WiFi 配置</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; }
-        .container { max-width: 600px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        h1 { color: #333; text-align: center; }
-        .form-group { margin: 15px 0; }
-        label { display: block; margin-bottom: 5px; font-weight: bold; }
-        input, select { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; box-sizing: border-box; }
-        .button { display: inline-block; padding: 10px 20px; margin: 10px 5px; background: #007cba; color: white; text-decoration: none; border-radius: 5px; border: none; cursor: pointer; width: 100%; }
-        .button:hover { background: #005a8b; }
-        .network-list { max-height: 200px; overflow-y: auto; border: 1px solid #ddd; border-radius: 5px; }
-        .network-item { padding: 10px; border-bottom: 1px solid #eee; cursor: pointer; }
-        .network-item:hover { background: #f5f5f5; }
-        .signal-strength { float: right; color: #666; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>📡 WiFi 配置</h1>
-        <form action="/save" method="post">
-            <div class="form-group">
-                <label>可用網路:</label>
-                <div class="network-list" id="networks">
-                    <div style="text-align: center; padding: 20px;">載入中...</div>
-                </div>
-            </div>
-            
-            <div class="form-group">
-                <label for="ssid">WiFi 名稱 (SSID):</label>
-                <input type="text" id="ssid" name="ssid" required>
-            </div>
-            
-            <div class="form-group">
-                <label for="password">WiFi 密碼:</label>
-                <input type="password" id="password" name="password">
-            </div>
-            
-            <hr>
-            
-            <div class="form-group">
-                <label for="deviceName">設備名稱:</label>
-                <input type="text" id="deviceName" name="deviceName" value="智能恆溫器">
-            </div>
-            
-            <div class="form-group">
-                <label for="pairingCode">HomeKit 配對碼:</label>
-                <input type="text" id="pairingCode" name="pairingCode" value="11122333" pattern="[0-9]{8}" title="請輸入8位數字">
-                <small style="color: #666; font-size: 12px;">必須是8位數字，避免使用簡單序列（如12345678）</small>
-            </div>
-            
-            <button type="submit" class="button">💾 保存配置</button>
-        </form>
+        String html = WebUI::getPageHeader("WiFi 配置");
+        html += "<div class=\"container\">";
+        html += "<h1>📡 WiFi 配置</h1>";
         
-        <div style="text-align: center; margin-top: 20px;">
-            <a href="/" class="button" style="background: #666;">⬅️ 返回主頁</a>
-        </div>
-    </div>
-
-    <script>
-        // 載入 WiFi 網路列表
-        function loadNetworks() {
-            const networkList = document.getElementById('networks');
-            networkList.innerHTML = '<div style="text-align: center; padding: 20px;">正在掃描 WiFi 網路...</div>';
-            
-            fetch('/scan')
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error('HTTP ' + response.status + ': ' + response.statusText);
-                    }
-                    return response.json();
-                })
-                .then(networks => {
-                    networkList.innerHTML = '';
-                    
-                    if (networks.length === 0) {
-                        networkList.innerHTML = '<div style="text-align: center; padding: 20px; color: orange;">未找到可用的 WiFi 網路</div>';
-                        return;
-                    }
-                    
-                    networks.forEach(network => {
-                        const item = document.createElement('div');
-                        item.className = 'network-item';
-                        item.innerHTML = `
-                            <strong>${network.ssid}</strong>
-                            <span class="signal-strength">${network.rssi} dBm ${network.secure ? '🔒' : '🔓'}</span>
-                        `;
-                        item.onclick = () => {
-                            document.getElementById('ssid').value = network.ssid;
-                        };
-                        networkList.appendChild(item);
-                    });
-                })
-                .catch(error => {
-                    console.error('WiFi scan error:', error);
-                    var errorDiv = document.createElement('div');
-                    errorDiv.style.textAlign = 'center';
-                    errorDiv.style.padding = '20px';
-                    errorDiv.style.color = 'red';
-                    errorDiv.innerHTML = 'Load failed<br>';
-                    var retryBtn = document.createElement('button');
-                    retryBtn.textContent = 'Retry';
-                    retryBtn.onclick = loadNetworks;
-                    errorDiv.appendChild(retryBtn);
-                    networkList.innerHTML = '';
-                    networkList.appendChild(errorDiv);
-                });
-        }
+        html += "<form action=\"/save\" method=\"post\">";
         
-        // 頁面載入時執行
-        loadNetworks();
-    </script>
-</body>
-</html>
-        )";
+        // WiFi 網路列表和配置表單
+        html += WebUI::getWiFiNetworkList("networks");
+        html += WebUI::getWiFiConfigForm();
+        
+        // HomeKit 配置表單
+        html += WebUI::getHomeKitConfigForm();
+        
+        html += "<button type=\"submit\" class=\"button\">💾 保存配置</button>";
+        html += "</form>";
+        
+        // 返回按鈕
+        html += "<div style=\"text-align: center; margin-top: 20px;\">";
+        html += "<a href=\"/\" class=\"button secondary\">⬅️ 返回主頁</a>";
+        html += "</div>";
+        
+        html += "</div>";
+        
+        // 添加 WiFi 掃描腳本
+        html += WebUI::getWiFiScanScript();
+        
+        html += WebUI::getPageFooter();
+        return html;
     }
     
     // 生成保存頁面 HTML
     String getSavePageHTML(const String& ssid) {
-        return R"(
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>配置已保存</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; }
-        .container { max-width: 600px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); text-align: center; }
-        h1 { color: #28a745; }
-        .countdown { font-size: 24px; font-weight: bold; color: #007cba; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>✅ 配置已保存</h1>
-        <p>WiFi 配置已成功保存！</p>
-        <p>正在重新啟動並嘗試連接到: <strong>)" + ssid + R"(</strong></p>
-        <div class="countdown" id="countdown">3</div>
-        <p>秒後自動重啟...</p>
-    </div>
-    
-    <script>
-        let count = 3;
-        const countdown = document.getElementById('countdown');
-        const timer = setInterval(() => {
-            count--;
-            countdown.textContent = count;
-            if (count <= 0) {
-                clearInterval(timer);
-                countdown.textContent = '重啟中...';
-            }
-        }, 1000);
-    </script>
-</body>
-</html>
-        )";
+        String message = "WiFi 配置已成功保存！<br>";
+        message += "正在重新啟動並嘗試連接到: <strong>" + ssid + "</strong>";
+        return WebUI::getSuccessPage("配置已保存", message, 3);
     }
     
     // 生成錯誤頁面 HTML
     String getErrorPageHTML(const String& title, const String& message) {
-        return R"(
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>配置錯誤</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; }
-        .container { max-width: 600px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); text-align: center; }
-        h1 { color: #dc3545; }
-        .message { background: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; padding: 15px; border-radius: 5px; margin: 20px 0; }
-        .button { display: inline-block; padding: 10px 20px; margin: 10px 5px; background: #007cba; color: white; text-decoration: none; border-radius: 5px; }
-        .button:hover { background: #005a8b; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>❌ )" + title + R"(</h1>
-        <div class="message">
-            )" + message + R"(
-        </div>
-        <a href="/config" class="button">⬅️ 返回配置</a>
-        <a href="/" class="button">🏠 回到主頁</a>
-    </div>
-</body>
-</html>
-        )";
+        return WebUI::getErrorPage(title, message, "/config");
     }
 
     // 生成 OTA 頁面 HTML
@@ -765,63 +923,9 @@ private:
         if (otaManager) {
             otaStatus = otaManager->getStatusHTML();
         } else {
-            otaStatus = "<div class=\"ota-status\"><h3>🔄 OTA 更新狀態</h3><p><span style=\"color: red;\">●</span> OTA 管理器未初始化</p></div>";
+            otaStatus = "<p><span style=\"color: red;\">●</span> OTA 管理器未初始化</p>";
         }
         
-        return R"(
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OTA 更新狀態</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; }
-        .container { max-width: 600px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        h1 { color: #333; text-align: center; }
-        .button { display: inline-block; padding: 10px 20px; margin: 10px 5px; background: #007cba; color: white; text-decoration: none; border-radius: 5px; border: none; cursor: pointer; }
-        .button:hover { background: #005a8b; }
-        .ota-status { background: #e8f4f8; padding: 15px; border-radius: 5px; margin: 20px 0; }
-        .code-block { background: #f5f5f5; border: 1px solid #ddd; border-radius: 5px; padding: 15px; margin: 15px 0; font-family: monospace; white-space: pre-wrap; }
-        .warning { background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 5px; padding: 15px; margin: 15px 0; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>🔄 OTA 遠程更新</h1>
-        )" + otaStatus + R"(
-        
-        <div class="warning">
-            <h3>⚠️ 注意事項</h3>
-            <ul>
-                <li>OTA 更新過程中請勿斷電或斷網</li>
-                <li>更新失敗可能導致設備無法啟動</li>
-                <li>建議在更新前備份當前固件</li>
-                <li>更新完成後設備會自動重啟</li>
-            </ul>
-        </div>
-        
-        <div class="ota-instructions">
-            <h3>📝 使用說明</h3>
-            <p>使用 PlatformIO 進行 OTA 更新：</p>
-            <div class="code-block">pio run -t upload --upload-port )" + WiFi.localIP().toString() + R"(</div>
-            
-            <p>或使用 Arduino IDE：</p>
-            <ol>
-                <li>工具 → 端口 → 選擇網路端口</li>
-                <li>選擇設備主機名</li>
-                <li>輸入 OTA 密碼</li>
-                <li>點擊上傳</li>
-            </ol>
-        </div>
-        
-        <div style="text-align: center; margin-top: 30px;">
-            <a href="/" class="button">⬅️ 返回主頁</a>
-            <a href="/restart" class="button" style="background: #dc3545;">🔄 重新啟動</a>
-        </div>
-    </div>
-</body>
-</html>
-        )";
+        return WebUI::getOTAPage(WiFi.localIP().toString(), "DaiSpan-Thermostat", otaStatus);
     }
 };

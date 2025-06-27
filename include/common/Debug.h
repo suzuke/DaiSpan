@@ -13,7 +13,12 @@
 #define DEBUG_INFO      2  // 顯示重要狀態更新
 #define DEBUG_VERBOSE   3  // 顯示詳細通訊過程
 
-#define DEBUG_LEVEL DEBUG_INFO
+// 性能優化：生產環境使用較低的調試級別
+#ifdef PRODUCTION_BUILD
+#define DEBUG_LEVEL DEBUG_ERROR  // 生產環境只顯示錯誤
+#else
+#define DEBUG_LEVEL DEBUG_INFO   // 開發環境顯示資訊
+#endif
 
 #define DEBUG_BUFFER_SIZE 256
 

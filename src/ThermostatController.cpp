@@ -195,13 +195,25 @@ void ThermostatController::update() {
             DEBUG_INFO_PRINT("[Controller] 嘗試從錯誤恢復模式恢復\n");
             consecutiveErrors = MAX_CONSECUTIVE_ERRORS - 1; // 給一次機會
         } else {
+            // 在錯誤恢復期間，大幅減少更新頻率並減少日誌輸出
+            static unsigned long lastRecoveryLog = 0;
+            if (currentTime - lastRecoveryLog > 60000) { // 每分鐘最多輸出一次日誌
+                DEBUG_INFO_PRINT("[Controller] 錯誤恢復模式中，剩餘時間：%lu秒\n", 
+                                (ERROR_RECOVERY_INTERVAL - (currentTime - lastSuccessfulUpdate)) / 1000);
+                lastRecoveryLog = currentTime;
+            }
             return; // 仍在恢復期間
         }
     }
     
     DEBUG_VERBOSE_PRINT("[Controller] 開始更新狀態\n");
     
+    // 計數本次更新的成功操作
+    int successfulOperations = 0;
+    int totalOperations = 0;
+    
     // 查詢設備狀態
+    totalOperations++;
     ACStatus status;
     if (protocol->queryStatus(status)) {
         if (status.isValid) {
@@ -212,25 +224,30 @@ void ThermostatController::update() {
             
             DEBUG_VERBOSE_PRINT("[Controller] 狀態更新成功 - 電源：%s，模式：%d，目標溫度：%.1f°C\n",
                                power ? "開啟" : "關閉", mode, targetTemperature);
+            successfulOperations++;
         }
-        resetErrorCount();
     } else {
         handleProtocolError("queryStatus");
     }
     
-    // 查詢當前溫度
-    float newTemperature;
-    if (protocol->queryTemperature(newTemperature)) {
-        currentTemperature = newTemperature;
-        DEBUG_VERBOSE_PRINT("[Controller] 溫度更新成功：%.1f°C\n", currentTemperature);
-        resetErrorCount();
-    } else {
-        handleProtocolError("queryTemperature");
+    // 只有在狀態查詢成功時才查詢溫度（減少不必要的協議調用）
+    if (successfulOperations > 0) {
+        totalOperations++;
+        float newTemperature;
+        if (protocol->queryTemperature(newTemperature)) {
+            currentTemperature = newTemperature;
+            DEBUG_VERBOSE_PRINT("[Controller] 溫度更新成功：%.1f°C\n", currentTemperature);
+            successfulOperations++;
+        } else {
+            handleProtocolError("queryTemperature");
+        }
     }
     
-    // 如果所有操作都成功，更新成功時間
-    if (protocol->isLastOperationSuccessful()) {
+    // 統一處理錯誤計數：只有所有操作都成功才重置
+    if (successfulOperations == totalOperations && successfulOperations > 0) {
+        resetErrorCount();
         lastSuccessfulUpdate = currentTime;
+        DEBUG_VERBOSE_PRINT("[Controller] 所有操作成功，重置錯誤計數\n");
     }
 }
 
