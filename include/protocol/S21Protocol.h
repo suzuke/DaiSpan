@@ -37,13 +37,21 @@ private:
     HardwareSerial& serial;
     S21ProtocolVersion protocolVersion;
     S21Features features;
+    S21Status status;  // 新增狀態追蹤
     bool isInitialized;
 
     // 內部方法
     bool detectProtocolVersion();
     bool detectFeatures();
     bool sendCommandInternal(char cmd0, char cmd1, const uint8_t* payload = nullptr, size_t len = 0);
-    bool waitForAck(unsigned long timeout = 100);
+    bool waitForAck(unsigned long timeout = 200);
+    
+    // 錯誤處理內部方法
+    void setError(S21ErrorCode error);
+    void incrementSuccess();
+    void incrementError();
+    bool validateResponse(const uint8_t* buffer, size_t len);
+    bool validatePayload(const uint8_t* payload, size_t len);
 
 public:
     explicit S21Protocol(HardwareSerial& s);
@@ -56,4 +64,12 @@ public:
     const S21Features& getFeatures() const override { return features; }
     bool isFeatureSupported(const S21Features& feature) const override;
     bool isCommandSupported(char cmd0, char cmd1) const override;
+    
+    // 錯誤處理和狀態檢測實現
+    const S21Status& getStatus() const override { return status; }
+    S21ErrorCode getLastError() const override { return status.lastError; }
+    void clearErrors() override;
+    bool hasErrors() const override { return status.hasErrors; }
+    uint32_t getErrorCount() const override { return status.communicationErrors; }
+    float getSuccessRate() const override;
 }; 
