@@ -20,15 +20,31 @@ static unsigned long lastStatusUpdateTime = 0;
 S21Protocol::S21Protocol(HardwareSerial& s) : 
     serial(s),
     protocolVersion(S21ProtocolVersion::UNKNOWN),
-    isInitialized(false) {
+    isInitialized(false),
+    supportedCommandsBitmap(0),
+    dynamicDiscoveryCompleted(false),
+    currentVariant(S21ProtocolVariant::STANDARD),
+    variantAdapter(nullptr) {
     // 初始化狀態
     status.isConnected = false;
     status.hasErrors = false;
     status.lastError = S21ErrorCode::SUCCESS;
+    
+    // 初始化 FX 命令支援陣列
+    memset(fxCommandSupported, false, sizeof(fxCommandSupported));
+    
+    // 設置預設變體適配器
+    variantAdapter = variantDetector.getAdapter(S21ProtocolVariant::STANDARD);
 }
 
 bool S21Protocol::begin() {
     DEBUG_INFO_PRINT("[S21] 開始初始化...\n");
+    
+    // 檢測協議變體
+    if (!detectProtocolVariant()) {
+        DEBUG_WARN_PRINT("[S21] 警告：無法檢測協議變體，使用標準變體\n");
+        // 繼續使用預設的標準變體
+    }
     
     // 檢測協議版本
     if (!detectProtocolVersion()) {
@@ -40,6 +56,16 @@ bool S21Protocol::begin() {
     if (!detectFeatures()) {
         DEBUG_ERROR_PRINT("[S21] 錯誤：無法檢測功能支援\n");
         return false;
+    }
+    
+    // 初始化 FX 命令能力
+    if (protocolVersion >= S21ProtocolVersion::V3_20) {
+        initializeFXCommandCapabilities();
+        
+        // 執行動態命令發現
+        if (!discoverAvailableCommands()) {
+            DEBUG_WARN_PRINT("[S21] 警告：動態命令發現失敗，將使用基本命令集\n");
+        }
     }
     
     isInitialized = true;
@@ -354,7 +380,74 @@ bool S21Protocol::sendCommand(char cmd0, char cmd1, const uint8_t* payload, size
         return false;  // setError 已在 validatePayload 中調用
     }
     
-    return sendCommandInternal(cmd0, cmd1, payload, len);
+    // 智能重試機制
+    int retryCount = 0;
+    bool success = false;
+    S21ErrorCode lastError = S21ErrorCode::SUCCESS;
+    
+    do {
+        // 自適應命令時序
+        if (retryCount > 0) {
+            adaptiveCommandTiming();
+        }
+        
+        // 記錄命令開始時間
+        unsigned long commandStartTime = millis();
+        
+        // 嘗試發送命令
+        success = sendCommandInternal(cmd0, cmd1, payload, len);
+        
+        if (success) {
+            // 命令成功，更新統計
+            commQuality.totalCommands++;
+            errorRecovery.consecutiveErrors = 0;
+            
+            // 監控回應時間
+            monitorResponseTimes();
+            updateCommunicationQuality();
+            
+            break;
+        } else {
+            // 命令失敗，記錄錯誤
+            lastError = status.lastError;
+            errorRecovery.consecutiveErrors++;
+            
+            DEBUG_WARN_PRINT("[S21] 命令 %c%c 失敗，錯誤：%d，重試次數：%d\n", 
+                            cmd0, cmd1, static_cast<int>(lastError), retryCount);
+            
+            // 檢查是否應該重試
+            if (shouldRetryCommand(lastError, retryCount)) {
+                retryCount++;
+                
+                // 根據錯誤類型調整重試策略
+                switch (lastError) {
+                    case S21ErrorCode::TIMEOUT:
+                        delay(100 * retryCount);  // 逐漸增加延遲
+                        commQuality.timeoutCount++;
+                        break;
+                        
+                    case S21ErrorCode::CHECKSUM_ERROR:
+                        delay(50);  // 短暫延遲後重試
+                        commQuality.checksumErrorCount++;
+                        break;
+                        
+                    default:
+                        delay(50);
+                        break;
+                }
+            } else {
+                break;  // 不應重試，退出循環
+            }
+        }
+    } while (retryCount <= 3);
+    
+    // 如果連續錯誤過多，啟動恢復程序
+    if (!success && errorRecovery.consecutiveErrors >= 3 && !errorRecovery.inRecoveryMode) {
+        DEBUG_WARN_PRINT("[S21] 連續錯誤過多，啟動錯誤恢復\n");
+        attemptErrorRecovery();
+    }
+    
+    return success;
 }
 
 bool S21Protocol::isCommandSupported(char cmd0, char cmd1) const {
@@ -645,4 +738,615 @@ bool S21Protocol::validatePayload(const uint8_t* payload, size_t len) {
     }
     
     return true;
+}
+
+// ========== FX 擴展命令實現 ==========
+
+bool S21Protocol::sendFXCommand(FXCommandType cmdType, uint8_t subCmd, const uint8_t* payload, size_t len) {
+    if (protocolVersion < S21ProtocolVersion::V3_20) {
+        setError(S21ErrorCode::COMMAND_NOT_SUPPORTED);
+        DEBUG_ERROR_PRINT("[S21] FX 命令需要協議版本 V3.20+\n");
+        return false;
+    }
+    
+    // 構建 FX 命令負載
+    uint8_t fxPayload[FX_MAX_PAYLOAD_LEN];
+    size_t fxPayloadLen = 0;
+    
+    // 添加命令類型和子命令
+    fxPayload[fxPayloadLen++] = static_cast<uint8_t>(cmdType);
+    fxPayload[fxPayloadLen++] = subCmd;
+    
+    // 添加用戶負載
+    if (payload && len > 0) {
+        if (fxPayloadLen + len > FX_MAX_PAYLOAD_LEN) {
+            setError(S21ErrorCode::BUFFER_OVERFLOW);
+            DEBUG_ERROR_PRINT("[S21] FX 命令負載過長\n");
+            return false;
+        }
+        memcpy(&fxPayload[fxPayloadLen], payload, len);
+        fxPayloadLen += len;
+    }
+    
+    DEBUG_INFO_PRINT("[S21] 發送 FX 命令: 類型=0x%02X, 子命令=0x%02X, 負載長度=%d\n", 
+                     static_cast<uint8_t>(cmdType), subCmd, fxPayloadLen);
+    
+    return sendCommandInternal('F', 'X', fxPayload, fxPayloadLen);
+}
+
+bool S21Protocol::parseFXResponse(FXCommandType expectedType, FXResponse& response) {
+    uint8_t cmd0, cmd1;
+    uint8_t payload[32];
+    size_t payloadLen;
+    
+    if (!parseResponse(cmd0, cmd1, payload, payloadLen)) {
+        return false;
+    }
+    
+    // 驗證回應命令
+    if (cmd0 != 'G' || cmd1 != 'X') {
+        setError(S21ErrorCode::INVALID_RESPONSE);
+        DEBUG_ERROR_PRINT("[S21] 錯誤：期望 GX 回應，收到 %c%c\n", cmd0, cmd1);
+        return false;
+    }
+    
+    // 檢查最小負載長度
+    if (payloadLen < 2) {
+        setError(S21ErrorCode::INVALID_RESPONSE);
+        DEBUG_ERROR_PRINT("[S21] FX 回應負載太短: %d\n", payloadLen);
+        return false;
+    }
+    
+    // 解析 FX 回應
+    response.commandType = static_cast<FXCommandType>(payload[0]);
+    response.subCommand = payload[1];
+    response.dataLength = payloadLen - 2;
+    
+    // 驗證命令類型匹配
+    if (response.commandType != expectedType) {
+        setError(S21ErrorCode::INVALID_RESPONSE);
+        DEBUG_ERROR_PRINT("[S21] FX 回應類型不匹配: 期望=0x%02X, 收到=0x%02X\n", 
+                          static_cast<uint8_t>(expectedType), 
+                          static_cast<uint8_t>(response.commandType));
+        return false;
+    }
+    
+    // 複製數據
+    if (response.dataLength > 0) {
+        size_t copyLen = min(response.dataLength, (uint8_t)FX_MAX_RESPONSE_LEN);
+        memcpy(response.data, &payload[2], copyLen);
+        response.dataLength = copyLen;
+    }
+    
+    response.isValid = true;
+    
+    DEBUG_INFO_PRINT("[S21] 成功解析 FX 回應: 類型=0x%02X, 子命令=0x%02X, 數據長度=%d\n", 
+                     static_cast<uint8_t>(response.commandType), 
+                     response.subCommand, response.dataLength);
+    
+    return true;
+}
+
+bool S21Protocol::probeFXCommandSupport(FXCommandType cmdType) {
+    uint8_t cmdIndex = static_cast<uint8_t>(cmdType) >> 4;  // 取高4位作為索引
+    if (cmdIndex >= FX_COMMAND_COUNT) {
+        return false;
+    }
+    
+    // 如果已經測試過，直接返回結果
+    if (fxCommandSupported[cmdIndex]) {
+        return true;
+    }
+    
+    // 發送基本探測命令
+    if (sendFXCommand(cmdType, 0x00)) {
+        FXResponse response;
+        if (parseFXResponse(cmdType, response)) {
+            fxCommandSupported[cmdIndex] = true;
+            DEBUG_INFO_PRINT("[S21] FX 命令 0x%02X 支援確認\n", static_cast<uint8_t>(cmdType));
+            return true;
+        }
+    }
+    
+    DEBUG_INFO_PRINT("[S21] FX 命令 0x%02X 不支援\n", static_cast<uint8_t>(cmdType));
+    return false;
+}
+
+void S21Protocol::initializeFXCommandCapabilities() {
+    DEBUG_INFO_PRINT("[S21] 初始化 FX 命令能力探測...\n");
+    
+    // 重置所有 FX 命令支援標誌
+    memset(fxCommandSupported, false, sizeof(fxCommandSupported));
+    
+    // 測試基本 FX 命令集
+    static const FXCommandType basicFXCommands[] = {
+        FXCommandType::FX00,  // 基本擴展查詢
+        FXCommandType::FX10,  // 感測器擴展
+        FXCommandType::FX20,  // 控制擴展
+        FXCommandType::FX30,  // 狀態擴展
+        FXCommandType::FX40   // 診斷擴展
+    };
+    
+    for (size_t i = 0; i < sizeof(basicFXCommands)/sizeof(basicFXCommands[0]); i++) {
+        probeFXCommandSupport(basicFXCommands[i]);
+        delay(50);  // 避免命令過於頻繁
+    }
+    
+    DEBUG_INFO_PRINT("[S21] FX 命令能力探測完成\n");
+}
+
+bool S21Protocol::discoverAvailableCommands() {
+    DEBUG_INFO_PRINT("[S21] 開始動態命令發現...\n");
+    
+    supportedCommandsBitmap = 0;
+    
+    // 測試基本命令集
+    static const struct {
+        char cmd0, cmd1;
+        uint32_t bitFlag;
+        const char* description;
+    } commandTests[] = {
+        {'F', '1', 0x0001, "基本狀態查詢"},
+        {'D', '1', 0x0002, "基本狀態設置"},
+        {'R', 'H', 0x0004, "溫度查詢"},
+        {'F', '8', 0x0008, "增強狀態查詢"},
+        {'D', '8', 0x0010, "增強狀態設置"},
+        {'F', '2', 0x0020, "功能支援查詢"},
+        {'F', 'Y', 0x0040, "版本查詢"},
+        {'F', 'K', 0x0080, "進階功能查詢"},
+        {'R', 'L', 0x0100, "濕度查詢"},
+        {'R', 'M', 0x0200, "室外溫度查詢"},
+        {'D', '3', 0x0400, "風速控制"},
+        {'D', '5', 0x0800, "擺風控制"}
+    };
+    
+    for (size_t i = 0; i < sizeof(commandTests)/sizeof(commandTests[0]); i++) {
+        if (testCommandSupport(commandTests[i].cmd0, commandTests[i].cmd1)) {
+            supportedCommandsBitmap |= commandTests[i].bitFlag;
+            DEBUG_INFO_PRINT("[S21] 命令 %c%c (%s) 支援確認\n", 
+                             commandTests[i].cmd0, commandTests[i].cmd1, 
+                             commandTests[i].description);
+        } else {
+            DEBUG_INFO_PRINT("[S21] 命令 %c%c (%s) 不支援\n", 
+                             commandTests[i].cmd0, commandTests[i].cmd1, 
+                             commandTests[i].description);
+        }
+        delay(20);  // 避免命令過於頻繁
+    }
+    
+    dynamicDiscoveryCompleted = true;
+    
+    DEBUG_INFO_PRINT("[S21] 動態命令發現完成，支援的命令位圖: 0x%08X\n", supportedCommandsBitmap);
+    return true;
+}
+
+bool S21Protocol::testCommandSupport(char cmd0, char cmd1, const uint8_t* testPayload, size_t testLen) {
+    // 發送測試命令
+    bool result = sendCommandInternal(cmd0, cmd1, testPayload, testLen);
+    
+    if (result) {
+        // 嘗試解析回應來確認命令確實被支援
+        uint8_t respCmd0, respCmd1;
+        uint8_t payload[32];
+        size_t payloadLen;
+        
+        if (parseResponse(respCmd0, respCmd1, payload, payloadLen)) {
+            // 檢查回應命令是否符合預期（通常是 F->G, D->H 的轉換）
+            char expectedResp0 = (cmd0 == 'F') ? 'G' : ((cmd0 == 'D') ? 'H' : (cmd0 == 'R') ? 'S' : cmd0 + 1);
+            if (respCmd0 == expectedResp0 && respCmd1 == cmd1) {
+                return true;
+            }
+        }
+    }
+    
+    return false;
+}
+
+// ========== 數據驗證和異常值過濾實現 (Phase 2) ==========
+
+bool S21Protocol::validateSensorData(float value, uint8_t sensorType) const {
+    switch (sensorType) {
+        case 0: // 溫度
+            return s21_validate_temperature(value);
+            
+        case 1: // 濕度
+            return s21_validate_humidity(value);
+            
+        case 2: // 功率
+            return s21_validate_power(value);
+            
+        case 3: // 電壓
+            return s21_validate_voltage(value);
+            
+        case 4: // 電流
+            return s21_validate_current(value);
+            
+        case 5: // 風扇轉速（RPM）
+            return (value >= 0.0f && value <= 10000.0f);
+            
+        case 6: // 壓縮機頻率（Hz）
+            return (value >= 0.0f && value <= 120.0f);
+            
+        default:
+            DEBUG_WARN_PRINT("[S21] 未知感測器類型：%d\n", sensorType);
+            return false;
+    }
+}
+
+float S21Protocol::filterOutliers(float newValue, float lastValue, float maxChange, unsigned long timeInterval) const {
+    // 如果是第一次讀取或時間間隔過長，直接返回新值
+    if (lastValue == 0.0f || timeInterval > 60000) {  // 60秒以上認為是新開始
+        return newValue;
+    }
+    
+    // 計算變化率
+    float change = abs(newValue - lastValue);
+    float changeRate = change / (timeInterval / 1000.0f);  // 每秒變化率
+    
+    // 如果變化率超過閾值，使用漸進式過濾
+    if (changeRate > maxChange) {
+        // 漸進調整：限制最大變化量
+        float direction = (newValue > lastValue) ? 1.0f : -1.0f;
+        float maxAllowedChange = maxChange * (timeInterval / 1000.0f);
+        float filteredValue = lastValue + (direction * maxAllowedChange);
+        
+        DEBUG_VERBOSE_PRINT("[S21] 異常值過濾：原值=%.2f, 過濾後=%.2f, 變化率=%.2f/s\n", 
+                          newValue, filteredValue, changeRate);
+        return filteredValue;
+    }
+    
+    return newValue;
+}
+
+bool S21Protocol::isDataStable(float value, float threshold, int requiredSamples) const {
+    static float samples[10] = {0};  // 最多記錄10個樣本
+    static int sampleCount = 0;
+    static int sampleIndex = 0;
+    
+    // 添加新樣本
+    samples[sampleIndex] = value;
+    sampleIndex = (sampleIndex + 1) % 10;
+    if (sampleCount < 10) sampleCount++;
+    
+    // 需要足夠的樣本才能判斷穩定性
+    if (sampleCount < requiredSamples) {
+        return false;
+    }
+    
+    // 計算樣本的標準差
+    float sum = 0.0f;
+    float mean = 0.0f;
+    
+    // 計算平均值
+    for (int i = 0; i < sampleCount; i++) {
+        sum += samples[i];
+    }
+    mean = sum / sampleCount;
+    
+    // 計算標準差
+    float variance = 0.0f;
+    for (int i = 0; i < sampleCount; i++) {
+        variance += (samples[i] - mean) * (samples[i] - mean);
+    }
+    variance /= sampleCount;
+    float stdDev = sqrt(variance);
+    
+    // 如果標準差小於閾值，認為數據穩定
+    bool stable = (stdDev <= threshold);
+    
+    DEBUG_VERBOSE_PRINT("[S21] 數據穩定性檢查：平均值=%.2f, 標準差=%.3f, 閾值=%.3f, 穩定=%s\n", 
+                       mean, stdDev, threshold, stable ? "是" : "否");
+    
+    return stable;
+}
+
+// ========== 協議變體支援實現 (Phase 3) ==========
+
+bool S21Protocol::detectProtocolVariant() {
+    DEBUG_INFO_PRINT("[S21] 開始檢測協議變體...\n");
+    
+    // 發送製造商識別命令（如果支援）
+    uint8_t identityPayload[] = {'I', 'D'};
+    if (sendCommandInternal('F', 'I', identityPayload, 2)) {
+        uint8_t cmd0, cmd1;
+        uint8_t response[32];
+        size_t responseLen;
+        
+        if (parseResponse(cmd0, cmd1, response, responseLen)) {
+            if (cmd0 == 'G' && cmd1 == 'I' && responseLen >= 2) {
+                // 使用檢測器識別變體
+                S21ProtocolVariant detected = variantDetector.detectVariant(response, responseLen);
+                
+                if (detected != S21ProtocolVariant::UNKNOWN) {
+                    DEBUG_INFO_PRINT("[S21] 檢測到協議變體：%s\n", 
+                                    variantDetector.getAdapter(detected)->getVariantInfo().name);
+                    return switchToVariant(detected);
+                }
+            }
+        }
+    }
+    
+    // 如果無法通過命令檢測，嘗試基於版本查詢的啟發式檢測
+    DEBUG_INFO_PRINT("[S21] 嘗試啟發式變體檢測...\n");
+    
+    // 發送 FY 命令並分析回應格式
+    uint8_t fyPayload[] = {'0', '0'};
+    if (sendCommandInternal('F', 'Y', fyPayload, 2)) {
+        uint8_t cmd0, cmd1;
+        uint8_t response[32];
+        size_t responseLen;
+        
+        if (parseResponse(cmd0, cmd1, response, responseLen)) {
+            if (cmd0 == 'G' && cmd1 == 'Y') {
+                // 基於回應格式推斷變體
+                if (responseLen >= 6 && response[4] == 'E') {
+                    // 可能是大金增強版
+                    DEBUG_INFO_PRINT("[S21] 啟發式檢測：可能是大金增強版\n");
+                    return switchToVariant(S21ProtocolVariant::DAIKIN_ENHANCED);
+                }
+            }
+        }
+    }
+    
+    DEBUG_INFO_PRINT("[S21] 無法檢測變體，保持標準變體\n");
+    return true;  // 保持預設的標準變體
+}
+
+bool S21Protocol::switchToVariant(S21ProtocolVariant variant) {
+    S21ProtocolVariantAdapter* newAdapter = variantDetector.getAdapter(variant);
+    if (!newAdapter) {
+        DEBUG_ERROR_PRINT("[S21] 錯誤：不支援的協議變體：%d\n", static_cast<int>(variant));
+        return false;
+    }
+    
+    currentVariant = variant;
+    variantAdapter = newAdapter;
+    
+    S21ProtocolVariantInfo info = variantAdapter->getVariantInfo();
+    DEBUG_INFO_PRINT("[S21] 切換到協議變體：%s (%s)\n", info.name, info.manufacturer);
+    DEBUG_INFO_PRINT("[S21] 變體特性：\n");
+    DEBUG_INFO_PRINT("  - 校驗和類型：%d\n", info.checksumType);
+    DEBUG_INFO_PRINT("  - 幀格式：%d\n", info.frameFormat);
+    DEBUG_INFO_PRINT("  - 溫度格式：%d\n", info.temperatureFormat);
+    DEBUG_INFO_PRINT("  - 濕度格式：%d\n", info.humidityFormat);
+    DEBUG_INFO_PRINT("  - 擴展命令：%s\n", info.hasExtendedCommands ? "是" : "否");
+    DEBUG_INFO_PRINT("  - 自定義編碼：%s\n", info.hasCustomEncoding ? "是" : "否");
+    
+    return true;
+}
+
+S21ProtocolVariantInfo S21Protocol::getCurrentVariantInfo() const {
+    if (variantAdapter) {
+        return variantAdapter->getVariantInfo();
+    }
+    
+    S21ProtocolVariantInfo defaultInfo;
+    return defaultInfo;
+}
+
+// ========== 智能錯誤恢復和通訊品質監控實現 (Phase 4) ==========
+
+bool S21Protocol::attemptErrorRecovery() {
+    DEBUG_INFO_PRINT("[S21] 開始錯誤恢復程序...\n");
+    
+    errorRecovery.inRecoveryMode = true;
+    errorRecovery.recoveryAttempts++;
+    errorRecovery.lastRecoveryTime = millis();
+    
+    // 步驟1：清除串口緩衝區
+    while (serial.available()) {
+        serial.read();
+    }
+    
+    // 步驟2：等待短暫時間讓系統穩定
+    delay(100);
+    
+    // 步驟3：重置錯誤狀態
+    clearErrors();
+    
+    // 步驟4：調整通訊參數
+    if (errorRecovery.recoveryAttempts > 2) {
+        // 增加超時時間
+        errorRecovery.adaptiveTimeout = min((uint32_t)(errorRecovery.adaptiveTimeout * 1.5), 5000UL);
+        DEBUG_INFO_PRINT("[S21] 調整超時時間至 %d ms\n", errorRecovery.adaptiveTimeout);
+    }
+    
+    // 步驟5：嘗試基本通訊測試
+    bool recoverySuccess = performHealthCheck();
+    
+    if (recoverySuccess) {
+        DEBUG_INFO_PRINT("[S21] 錯誤恢復成功\n");
+        errorRecovery.consecutiveErrors = 0;
+        errorRecovery.inRecoveryMode = false;
+        status.isConnected = true;
+    } else {
+        DEBUG_ERROR_PRINT("[S21] 錯誤恢復失敗，嘗試次數：%d\n", errorRecovery.recoveryAttempts);
+        
+        // 如果多次恢復失敗，進行完全重置
+        if (errorRecovery.recoveryAttempts >= 5) {
+            DEBUG_WARN_PRINT("[S21] 執行完全連接重置\n");
+            resetConnection();
+        }
+    }
+    
+    return recoverySuccess;
+}
+
+bool S21Protocol::performHealthCheck() {
+    DEBUG_INFO_PRINT("[S21] 執行健康檢查...\n");
+    
+    unsigned long startTime = millis();
+    
+    // 測試1：基本命令回應
+    if (!sendCommandInternal('F', '1')) {
+        DEBUG_ERROR_PRINT("[S21] 健康檢查失敗：F1 命令無回應\n");
+        return false;
+    }
+    
+    uint8_t cmd0, cmd1;
+    uint8_t payload[32];
+    size_t payloadLen;
+    
+    if (!parseResponse(cmd0, cmd1, payload, payloadLen)) {
+        DEBUG_ERROR_PRINT("[S21] 健康檢查失敗：無法解析回應\n");
+        return false;
+    }
+    
+    unsigned long responseTime = millis() - startTime;
+    
+    // 測試2：回應時間檢查
+    if (responseTime > errorRecovery.adaptiveTimeout) {
+        DEBUG_WARN_PRINT("[S21] 健康檢查警告：回應時間過長 (%d ms)\n", responseTime);
+        return false;
+    }
+    
+    // 測試3：回應格式檢查
+    if (cmd0 != 'G' || cmd1 != '1') {
+        DEBUG_ERROR_PRINT("[S21] 健康檢查失敗：回應格式錯誤 (%c%c)\n", cmd0, cmd1);
+        return false;
+    }
+    
+    DEBUG_INFO_PRINT("[S21] 健康檢查通過，回應時間：%d ms\n", responseTime);
+    
+    // 更新通訊品質
+    monitorResponseTimes();
+    updateCommunicationQuality();
+    
+    return true;
+}
+
+void S21Protocol::updateCommunicationQuality() {
+    unsigned long currentTime = millis();
+    
+    // 計算品質分數
+    float successRate = getSuccessRate();
+    float timeoutPenalty = (float)commQuality.timeoutCount / max(commQuality.totalCommands, 1UL) * 100.0f;
+    float checksumPenalty = (float)commQuality.checksumErrorCount / max(commQuality.totalCommands, 1UL) * 100.0f;
+    float responsePenalty = 0.0f;
+    
+    // 回應時間懲罰
+    if (commQuality.avgResponseTime > 1000) {
+        responsePenalty = min((commQuality.avgResponseTime - 1000) / 100.0f, 50.0f);
+    }
+    
+    commQuality.qualityScore = max(0.0f, successRate - timeoutPenalty - checksumPenalty - responsePenalty);
+    
+    // 判斷連接穩定性
+    commQuality.isStable = (commQuality.qualityScore > 80.0f && 
+                           errorRecovery.consecutiveErrors < 3 &&
+                           commQuality.avgResponseTime < 2000);
+    
+    commQuality.lastUpdateTime = currentTime;
+    
+    DEBUG_VERBOSE_PRINT("[S21] 通訊品質更新：分數=%.1f%%, 穩定=%s, 平均回應時間=%.1fms\n", 
+                       commQuality.qualityScore, 
+                       commQuality.isStable ? "是" : "否",
+                       commQuality.avgResponseTime);
+    
+    // 根據品質調整行為
+    if (commQuality.qualityScore < 50.0f && !errorRecovery.inRecoveryMode) {
+        DEBUG_WARN_PRINT("[S21] 通訊品質下降，啟動恢復程序\n");
+        attemptErrorRecovery();
+    }
+}
+
+bool S21Protocol::shouldRetryCommand(S21ErrorCode errorCode, int retryCount) const {
+    // 檢查是否應該重試命令
+    if (retryCount >= 3) {
+        return false;  // 超過最大重試次數
+    }
+    
+    switch (errorCode) {
+        case S21ErrorCode::TIMEOUT:
+            return retryCount < 2;  // 超時允許重試2次
+            
+        case S21ErrorCode::CHECKSUM_ERROR:
+            return retryCount < 1;  // 校驗和錯誤允許重試1次
+            
+        case S21ErrorCode::INVALID_RESPONSE:
+            return retryCount < 1;  // 無效回應允許重試1次
+            
+        case S21ErrorCode::COMMAND_NOT_SUPPORTED:
+            return false;  // 不支援的命令不重試
+            
+        case S21ErrorCode::PROTOCOL_ERROR:
+            return retryCount < 1;  // 協議錯誤允許重試1次
+            
+        default:
+            return retryCount < 1;  // 其他錯誤允許重試1次
+    }
+}
+
+void S21Protocol::resetConnection() {
+    DEBUG_WARN_PRINT("[S21] 執行完全連接重置\n");
+    
+    // 重置所有狀態
+    isInitialized = false;
+    status.isConnected = false;
+    status.hasErrors = false;
+    status.lastError = S21ErrorCode::SUCCESS;
+    
+    // 重置通訊品質
+    commQuality = CommunicationQuality();
+    
+    // 重置錯誤恢復
+    errorRecovery = ErrorRecovery();
+    
+    // 清除串口緩衝區
+    while (serial.available()) {
+        serial.read();
+    }
+    
+    // 等待系統穩定
+    delay(500);
+    
+    // 重新初始化
+    if (begin()) {
+        DEBUG_INFO_PRINT("[S21] 連接重置成功\n");
+    } else {
+        DEBUG_ERROR_PRINT("[S21] 連接重置失敗\n");
+    }
+}
+
+bool S21Protocol::adaptiveCommandTiming() {
+    // 根據通訊品質動態調整命令時序
+    if (commQuality.avgResponseTime > 1500) {
+        // 回應時間過長，增加延遲
+        delay(50);
+        return true;
+    } else if (commQuality.qualityScore < 70.0f) {
+        // 品質不佳，增加穩定性延遲
+        delay(20);
+        return true;
+    }
+    
+    return false;  // 不需要額外延遲
+}
+
+void S21Protocol::monitorResponseTimes() {
+    // 更新回應時間統計
+    unsigned long currentTime = millis();
+    float responseTime = (float)(currentTime - status.lastResponseTime);
+    
+    if (status.lastResponseTime > 0) {  // 確保有效的時間測量
+        commQuality.totalCommands++;
+        
+        // 更新最大和最小回應時間
+        if (responseTime > commQuality.maxResponseTime) {
+            commQuality.maxResponseTime = responseTime;
+        }
+        if (responseTime < commQuality.minResponseTime) {
+            commQuality.minResponseTime = responseTime;
+        }
+        
+        // 更新平均回應時間（移動平均）
+        if (commQuality.avgResponseTime == 0) {
+            commQuality.avgResponseTime = responseTime;
+        } else {
+            commQuality.avgResponseTime = (commQuality.avgResponseTime * 0.8f) + (responseTime * 0.2f);
+        }
+        
+        DEBUG_VERBOSE_PRINT("[S21] 回應時間監控：當前=%.1fms, 平均=%.1fms, 最大=%.1fms\n", 
+                           responseTime, commQuality.avgResponseTime, commQuality.maxResponseTime);
+    }
 } 
