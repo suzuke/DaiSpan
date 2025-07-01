@@ -31,7 +31,15 @@ private:
     static constexpr const char* AP_SSID = "DaiSpan-Config";
     static constexpr const char* AP_PASSWORD = nullptr;
     static constexpr int MAX_CONNECTION_ATTEMPTS = 3;
-    static constexpr int CONNECTION_TIMEOUT = 10000; // 10 秒
+    static constexpr int CONNECTION_TIMEOUT = 15000; // 15 秒 (增加超時時間)
+    
+    // WiFi穩定性改進
+    static constexpr unsigned long WIFI_RECONNECT_INTERVAL = 120000; // 2分鐘 (大幅增加重連間隔)
+    static constexpr unsigned long WIFI_STABILITY_CHECK_INTERVAL = 60000; // 1分鐘檢查一次
+    static constexpr int WIFI_SIGNAL_THRESHOLD = -80; // RSSI閾值，低於此值才考慮重連
+    unsigned long lastWiFiStabilityCheck;
+    int consecutiveFailures;
+    bool wifiStabilityMode; // 穩定模式：減少不必要的重連
     
 public:
     WiFiManager(ConfigManager& cfg) : 
@@ -42,7 +50,10 @@ public:
         isAPMode(false), 
         isConfigured(false),
         connectionAttempts(0),
-        lastConnectionAttempt(0) {
+        lastConnectionAttempt(0),
+        lastWiFiStabilityCheck(0),
+        consecutiveFailures(0),
+        wifiStabilityMode(false) {
         // 延遲到 WiFi 初始化後再生成認證憑證
     }
     
@@ -117,35 +128,36 @@ public:
         DEBUG_INFO_PRINT("[WiFiManager] 連接參數 - SSID: '%s', 密碼長度: %d\n", 
                          ssid.c_str(), password.length());
         
-        // 如果正在 AP 模式，先停止相關服務
+        // 溫和的模式切換 - 減少對系統的衝擊
         if (isAPMode) {
-            // 停止 DNS 服務器
+            DEBUG_INFO_PRINT("[WiFiManager] 溫和切換：從AP模式切換到STA模式\n");
+            
+            // 先停止服務，但保持WiFi模組活躍
             if (dnsServer) {
                 dnsServer->stop();
                 delete dnsServer;
                 dnsServer = nullptr;
             }
             
-            // 停止 Web 服務器
-            if (webServer) {
-                webServer->stop();
-                delete webServer;
-                webServer = nullptr;
-            }
-            
-            // 停止 SoftAP
-            WiFi.softAPdisconnect(true);
-            delay(100);
+            // 保留webServer，避免重複創建銷毀
+            // 停止 SoftAP，但使用溫和的方式
+            WiFi.softAPdisconnect(false); // false = 不強制斷開所有連接
+            delay(200); // 增加延遲確保平穩切換
             
             isAPMode = false;
-            DEBUG_INFO_PRINT("[WiFiManager] 已停止 AP 模式以進行 STA 連接\n");
         }
         
-        // 確保WiFi狀態乾淨
-        WiFi.disconnect(true);
-        delay(100);
-        WiFi.mode(WIFI_STA);
-        delay(100); // 等待模式切換完成
+        // 更溫和的WiFi狀態重置
+        if (WiFi.getMode() != WIFI_STA) {
+            WiFi.mode(WIFI_STA);
+            delay(300); // 增加延遲確保模式切換完成
+        }
+        
+        // 只在真正需要時才斷開連接
+        if (WiFi.status() == WL_CONNECTED) {
+            WiFi.disconnect(false); // 溫和斷開，不清除配置
+            delay(100);
+        }
         
         // 驗證模式切換成功
         wifi_mode_t currentMode = WiFi.getMode();
@@ -736,18 +748,55 @@ public:
                 }
             }
         } else {
-            // 檢查 WiFi 連接狀態
-            if (WiFi.status() != WL_CONNECTED && 
-                millis() - lastConnectionAttempt > 30000) { // 30 秒檢查一次
-                lastConnectionAttempt = millis();
+            // 改進的 WiFi 連接狀態檢查 - 更智能的重連策略
+            unsigned long currentTime = millis();
+            
+            // 主要穩定性檢查 - 降低檢查頻率
+            if (currentTime - lastWiFiStabilityCheck >= WIFI_STABILITY_CHECK_INTERVAL) {
+                lastWiFiStabilityCheck = currentTime;
                 
-                String ssid = config.getWiFiSSID();
-                String password = config.getWiFiPassword();
-                
-                if (!connectToWiFi(ssid, password)) {
-                    if (connectionAttempts >= MAX_CONNECTION_ATTEMPTS) {
-                        DEBUG_ERROR_PRINT("[WiFiManager] 多次連接失敗，切換到 AP 模式\n");
-                        startAPMode();
+                if (WiFi.status() != WL_CONNECTED) {
+                    consecutiveFailures++;
+                    DEBUG_WARN_PRINT("[WiFiManager] WiFi斷線檢測 - 連續失敗: %d次\n", consecutiveFailures);
+                    
+                    // 只在連續失敗超過閾值且達到重連間隔時才嘗試重連
+                    if (consecutiveFailures >= 2 && 
+                        currentTime - lastConnectionAttempt >= WIFI_RECONNECT_INTERVAL) {
+                        
+                        lastConnectionAttempt = currentTime;
+                        String ssid = config.getWiFiSSID();
+                        String password = config.getWiFiPassword();
+                        
+                        DEBUG_INFO_PRINT("[WiFiManager] 嘗試WiFi重連 (失敗%d次後)\n", consecutiveFailures);
+                        
+                        if (connectToWiFi(ssid, password)) {
+                            consecutiveFailures = 0; // 重連成功，重置計數器
+                            wifiStabilityMode = false;
+                        } else {
+                            // 重連失敗，進入穩定模式
+                            if (consecutiveFailures >= MAX_CONNECTION_ATTEMPTS) {
+                                DEBUG_ERROR_PRINT("[WiFiManager] 多次重連失敗，切換到 AP 模式\n");
+                                wifiStabilityMode = true;
+                                startAPMode();
+                            }
+                        }
+                    }
+                } else {
+                    // WiFi連接正常
+                    if (consecutiveFailures > 0) {
+                        DEBUG_INFO_PRINT("[WiFiManager] WiFi連接恢復正常\n");
+                        consecutiveFailures = 0;
+                        wifiStabilityMode = false;
+                    }
+                    
+                    // 檢查信號強度，只在信號極弱時才考慮重連
+                    int rssi = WiFi.RSSI();
+                    if (rssi < WIFI_SIGNAL_THRESHOLD && !wifiStabilityMode) {
+                        DEBUG_WARN_PRINT("[WiFiManager] WiFi信號弱 (%d dBm)，暫時進入穩定模式\n", rssi);
+                        wifiStabilityMode = true; // 臨時進入穩定模式，避免頻繁重連
+                    } else if (rssi > WIFI_SIGNAL_THRESHOLD + 10 && wifiStabilityMode) {
+                        DEBUG_INFO_PRINT("[WiFiManager] WiFi信號恢復 (%d dBm)，退出穩定模式\n", rssi);
+                        wifiStabilityMode = false;
                     }
                 }
             }

@@ -23,7 +23,7 @@
 
 // 更新間隔設定（毫秒）- 與 ThermostatController 保持一致
 #define UPDATE_INTERVAL    8000   // 狀態更新間隔（8秒，減少協議查詢頻率）
-#define HEARTBEAT_INTERVAL 8000   // 心跳日誌間隔（8秒）
+// HEARTBEAT_INTERVAL 已在 Debug.h 中定義
 
 class ThermostatDevice : public Service::Thermostat {
 private:

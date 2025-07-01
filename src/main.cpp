@@ -64,15 +64,22 @@ void initializeMonitoring() {
   DEBUG_INFO_PRINT("[Main] 啟動WebServer監控功能...\n");
   DEBUG_INFO_PRINT("[Main] 可用記憶體: %d bytes\n", ESP.getFreeHeap());
   
-  // 檢查記憶體是否足夠 (降低門檻至80KB)
-  if (ESP.getFreeHeap() < 80000) {
+  // 檢查記憶體是否足夠 (降低門檻至70KB，為ESP32-C3優化)
+  if (ESP.getFreeHeap() < 70000) {
     DEBUG_ERROR_PRINT("[Main] 記憶體不足(%d bytes)，跳過WebServer啟動\n", ESP.getFreeHeap());
     return;
   }
   
   DEBUG_INFO_PRINT("[Main] 記憶體檢查通過，開始啟動WebServer\n");
   
-  webServer = new WebServer(8080); // 使用8080端口避免與HomeSpan衝突
+  // 避免重複創建WebServer
+  if (!webServer) {
+    webServer = new WebServer(8080); // 使用8080端口避免與HomeSpan衝突
+    if (!webServer) {
+      DEBUG_ERROR_PRINT("[Main] WebServer創建失敗\n");
+      return;
+    }
+  }
   
   // 首頁 - 系統狀態 (優化版本，快速響應)
   webServer->on("/", [](){
@@ -92,48 +99,69 @@ void initializeMonitoring() {
     webServer->sendHeader("Pragma", "no-cache");
     webServer->sendHeader("Connection", "close"); // 確保連接關閉
     
-    // 簡化的HTML生成，減少String操作
-    String html = WebUI::getPageHeader("DaiSpan 監控", true, 30);
-    html.reserve(800); // 預分配緩衝區
-    html += "<div class=\"container\"><h1>DaiSpan 智能恆溫器</h1>";
-    html += "<div class=\"status\"><h3>HomeKit 運行模式</h3>";
-    html += "<p><strong>WiFi:</strong> " + WiFi.SSID() + "</p>";
-    html += "<p><strong>IP:</strong> " + WiFi.localIP().toString() + "</p>";
-    html += "<p><strong>記憶體:</strong> " + String(ESP.getFreeHeap()) + "B</p></div>";
-    html += "<div style=\"text-align:center;\">";
-    html += "<a href=\"/status\" class=\"button\">狀態</a>";
-    html += "<a href=\"/wifi\" class=\"button\">WiFi</a>";
-    html += "<a href=\"/homekit\" class=\"button\">HomeKit</a>";
-    if (configManager.getSimulationMode()) {
-      html += "<a href=\"/simulation\" class=\"button\">模擬</a>";
+    // 記憶體優化版本的首頁 - 整合詳細狀態
+    const size_t bufferSize = 4096;
+    auto buffer = std::make_unique<char[]>(bufferSize);
+    if (!buffer) {
+      webServer->send(500, "text/plain", "Memory allocation failed");
+      return;
     }
-    html += "<a href=\"/simulation-toggle\" class=\"button\">";
-    html += configManager.getSimulationMode() ? "真實" : "模擬";
-    html += "</a><a href=\"/ota\" class=\"button\">OTA</a></div></div>";
-    html += WebUI::getPageFooter();
+
+    char* p = buffer.get();
+    int remaining = bufferSize;
+    bool overflow = false;
+    auto append = [&](const char* format, ...) {
+      if (remaining <= 10 || overflow) {
+        overflow = true;
+        return;
+      }
+      va_list args;
+      va_start(args, format);
+      int written = vsnprintf(p, remaining, format, args);
+      va_end(args);
+      if (written > 0 && written < remaining) {
+        p += written;
+        remaining -= written;
+      } else {
+        overflow = true;
+      }
+    };
     
+    // HTML生成 - 整合詳細狀態
+    append("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>DaiSpan 智能恆溫器</title>");
+    append("<meta http-equiv=\"refresh\" content=\"30\">");
+    append("<style>%s</style></head><body>", WebUI::getCompactCSS().c_str());
+    append("<div class=\"container\"><h1>DaiSpan 智能恆溫器</h1>");
+    
+    // 系統狀態資訊
+    String statusCard = WebUI::getSystemStatusCard();
+    append("%s", statusCard.c_str());
+    
+    // 按鈕區域
+    append("<div style=\"text-align:center;margin:20px 0;\">");
+    append("<a href=\"/wifi\" class=\"button\">WiFi配置</a>");
+    append("<a href=\"/homekit\" class=\"button\">HomeKit設定</a>");
+    if (configManager.getSimulationMode()) {
+      append("<a href=\"/simulation\" class=\"button\">模擬控制</a>");
+    }
+    append("<a href=\"/simulation-toggle\" class=\"button\">切換%s模式</a>", configManager.getSimulationMode() ? "真實" : "模擬");
+    append("<a href=\"/ota\" class=\"button\">OTA更新</a></div></div></body></html>");
+    
+    // 檢查溢出
+    if (overflow) {
+      webServer->send(500, "text/html", "<div style='color:red;'>Error: HTML too large for buffer</div>");
+      return;
+    }
+    
+    String html(buffer.get());
     webServer->send(200, "text/html", html);
   });
   
-  // 詳細狀態頁面（簡化版，避免記憶體碎片）
+  // 詳細狀態頁面 - 記憶體優化版本
   webServer->on("/status", [](){
-    // 使用 WebUI 的現有方法但進行優化
-    String html = WebUI::getPageHeader("系統詳細狀態");
-    html.reserve(1200); // 預分配緩衝區
-    html += "<div class=\"container\"><h1>系統詳細狀態</h1>";
-    html += "<div style=\"text-align:center;margin:15px 0;\">";
-    html += "<button class=\"button\" onclick=\"location.reload()\">刷新狀態</button>";
-    html += "<button class=\"button\" onclick=\"window.open('/status-api','_blank')\">JSON API</button>";
-    html += "</div>";
-    
-    // 使用 WebUI 的系統狀態卡片
-    html += WebUI::getSystemStatusCard();
-    
-    html += "<div style=\"text-align:center;margin:20px 0;\">";
-    html += "<a href=\"/\" style=\"color:#007cba;text-decoration:none;\">返回主頁</a>";
-    html += "</div></div></body></html>";
-    
-    webServer->send(200, "text/html", html);
+    // 重定向到首頁（詳細狀態已整合）
+    webServer->sendHeader("Location", "/");
+    webServer->send(302, "text/plain", "Redirecting to main page");
   });
     
   // JSON狀態API (使用預編譯模板 - 唯一成功的記憶體優化)
@@ -154,7 +182,7 @@ void initializeMonitoring() {
     webServer->send(200, "application/json", json);
   });
   
-  // WiFi配置頁面
+  // WiFi配置頁面 - 使用改進的記憶體優化版本
   webServer->on("/wifi", [](){
     String html = WebUI::getSimpleWiFiConfigPage();
     webServer->send(200, "text/html", html);
@@ -214,9 +242,8 @@ void initializeMonitoring() {
     }
   });
   
-  // HomeKit配置頁面
+  // HomeKit配置頁面 - 使用改進的記憶體優化版本
   webServer->on("/homekit", [](){
-    // 當前配置資訊
     String currentPairingCode = configManager.getHomeKitPairingCode();
     String currentDeviceName = configManager.getHomeKitDeviceName();
     String currentQRID = configManager.getHomeKitQRID();
@@ -441,9 +468,10 @@ void initializeMonitoring() {
     webServer->send(200, "text/html", html);
   });
   
-  // 模式切換頁面
+  // 模式切換頁面 - 記憶體優化版本
   webServer->on("/simulation-toggle", [](){
-    String html = WebUI::getSimulationTogglePage("/simulation-toggle-confirm", configManager.getSimulationMode());
+    bool currentMode = configManager.getSimulationMode();
+    String html = WebUI::getSimulationTogglePage("/simulation-toggle-confirm", currentMode);
     webServer->send(200, "text/html", html);
   });
   
@@ -455,6 +483,23 @@ void initializeMonitoring() {
     String message = "運行模式已切換為：<strong>" + String(!currentMode ? "🔧 模擬模式" : "🏭 真實模式") + "</strong><br>";
     message += "設備將重啟並應用新設定...";
     String html = WebUI::getSuccessPage("模式切換中", message, 3, "/restart");
+    webServer->send(200, "text/html", html);
+  });
+  
+  // 簡化測試頁面 - 驗證緩衝區問題
+  webServer->on("/test", [](){
+    String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Test</title></head><body>";
+    html += "<h1>Simple Test Page</h1>";
+    html += "<p>If you can see this, basic HTML works.</p>";
+    html += "<a href='/'>Back to Home</a>";
+    html += "</body></html>";
+    webServer->send(200, "text/html", html);
+  });
+  
+  // OTA 頁面 - 記憶體優化版本
+  webServer->on("/ota", [](){
+    String deviceIP = WiFi.localIP().toString();
+    String html = WebUI::getOTAPage(deviceIP, "DaiSpan-Thermostat", "");
     webServer->send(200, "text/html", html);
   });
   
@@ -666,20 +711,53 @@ void setup() {
   String ssid = configManager.getWiFiSSID();
   String password = configManager.getWiFiPassword();
   
-  // 連接WiFi
+  // 改進的WiFi連接 - 更穩定的初始化
   WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid.c_str(), password.c_str());
+  delay(100); // 確保模式切換完成
   
-  // 等待WiFi連接
+  // ESP32-C3專用優化
+  #if defined(ESP32C3_SUPER_MINI)
+    WiFi.setTxPower(WIFI_POWER_11dBm); // 初始連接使用中等功率
+  #endif
+  
+  WiFi.begin(ssid.c_str(), password.c_str());
+  DEBUG_INFO_PRINT("[Main] 開始WiFi連接，使用漸進式重試策略...\n");
+  
+  // 漸進式連接重試 - 更友好的連接方式
   int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-    delay(500);
+  int maxAttempts = 25; // 增加重試次數
+  unsigned long connectStartTime = millis();
+  
+  while (WiFi.status() != WL_CONNECTED && attempts < maxAttempts) {
+    // 動態調整延遲時間
+    if (attempts < 10) {
+      delay(500); // 前10次快速重試
+    } else if (attempts < 20) {
+      delay(1000); // 中期使用1秒間隔
+    } else {
+      delay(2000); // 後期使用2秒間隔，給網路更多時間
+    }
+    
     DEBUG_VERBOSE_PRINT(".");
     attempts++;
+    
+    // 每5次嘗試輸出進度
+    if (attempts % 5 == 0) {
+      DEBUG_INFO_PRINT("\n[Main] WiFi連接嘗試 %d/%d (已用時 %lu 秒)\n", 
+                       attempts, maxAttempts, (millis() - connectStartTime) / 1000);
+    }
   }
   
   if (WiFi.status() == WL_CONNECTED) {
     DEBUG_INFO_PRINT("\n[Main] WiFi連接成功: %s\n", WiFi.localIP().toString().c_str());
+    
+    // ESP32-C3連接成功後的功率優化
+    #if defined(ESP32C3_SUPER_MINI)
+      // 連接成功後切換到節能模式
+      delay(1000); // 等待連接完全穩定
+      WiFi.setTxPower(WIFI_POWER_8_5dBm);
+      DEBUG_INFO_PRINT("[Main] ESP32-C3 切換到節能模式 (8.5dBm)\n");
+    #endif
     
     // 初始化Arduino OTA
     ArduinoOTA.setHostname("DaiSpan-Thermostat");
@@ -759,10 +837,15 @@ void loop() {
   unsigned long currentTime = millis();
   
   #if defined(ESP32C3_SUPER_MINI)
-    if (WiFi.status() == WL_DISCONNECTED &&
-    WiFi.getTxPower() != WIFI_POWER_8_5dBm) {
-    WiFi.setTxPower(WIFI_POWER_8_5dBm);
-  }
+    // ESP32-C3 WiFi穩定性改進 - 減少頻繁的功率調整
+    static unsigned long lastPowerCheck = 0;
+    if (millis() - lastPowerCheck >= 30000) { // 每30秒檢查一次，而不是每次loop
+      lastPowerCheck = millis();
+      if (WiFi.status() == WL_DISCONNECTED && WiFi.getTxPower() != WIFI_POWER_8_5dBm) {
+        WiFi.setTxPower(WIFI_POWER_8_5dBm);
+        DEBUG_VERBOSE_PRINT("[Main] ESP32-C3 調整WiFi功率為節能模式\n");
+      }
+    }
   #endif
 
   // 處理Arduino OTA（高優先級，頻繁調用）
@@ -797,41 +880,63 @@ void loop() {
     // 優先處理 HomeKit (最重要)
     homeSpan.poll();
     
-    // 檢測 HomeKit 配對狀態 (更準確的檢測方法)
+    // 簡化的 HomeKit 配對狀態檢測 - 減少記憶體監控負擔
     static unsigned long lastPairingCheck = 0;
     static bool wasPairing = false;
+    static int pairingDetectionCounter = 0;
     
-    if (currentTime - lastPairingCheck >= 2000) { // 每2秒檢查一次
-      // 檢查HomeSpan的配對狀態
-      // 當有新配對請求時，TCP連接數會增加
-      static uint32_t baseMemory = ESP.getFreeHeap();
+    if (currentTime - lastPairingCheck >= 5000) { // 減少檢查頻率至5秒
+      lastPairingCheck = currentTime;
+      
+      // 簡化的配對檢測：主要基於WebServer的響應性而不是記憶體監控
       uint32_t currentMemory = ESP.getFreeHeap();
       
-      // 配對活動檢測：記憶體使用變化 + TCP活動
-      bool memoryActivity = (baseMemory > currentMemory + 15000) || (currentMemory > baseMemory + 15000);
-      homeKitPairingActive = memoryActivity;
+      // 更寬鬆的記憶體變化檢測，避免誤判
+      static uint32_t avgMemory = currentMemory;
+      avgMemory = (avgMemory * 3 + currentMemory) / 4; // 移動平均
+      
+      bool significantMemoryDrop = currentMemory < avgMemory - 20000; // 20KB以上的記憶體下降
+      
+      if (significantMemoryDrop) {
+        pairingDetectionCounter++;
+      } else {
+        pairingDetectionCounter = 0;
+      }
+      
+      // 連續檢測到記憶體下降才認為在配對
+      homeKitPairingActive = (pairingDetectionCounter >= 2);
       
       // 記錄配對狀態變化
       if (homeKitPairingActive != wasPairing) {
-        DEBUG_INFO_PRINT("[Main] HomeKit配對狀態變化: %s\n", 
-                         homeKitPairingActive ? "配對中" : "空閒");
-        if (homeKitPairingActive) {
-          DEBUG_INFO_PRINT("[Main] 配對期間暫停WebServer處理以確保穩定性\n");
-        } else {
-          DEBUG_INFO_PRINT("[Main] 配對完成，恢復WebServer處理\n");
-        }
+        DEBUG_INFO_PRINT("[Main] HomeKit配對狀態變化: %s (記憶體: %d bytes)\n", 
+                         homeKitPairingActive ? "配對中" : "空閒", currentMemory);
         wasPairing = homeKitPairingActive;
       }
-      
-      baseMemory = currentMemory; // 更新基準值
-      lastPairingCheck = currentTime;
     }
     
-    // 配對期間完全暫停WebServer，確保HomeKit穩定
+    // 改進的WebServer處理 - 更智能的頻率控制
     if (!homeKitPairingActive && monitoringEnabled && webServer) {
       static unsigned long lastWebServerHandle = 0;
-      // 正常情況下限制WebServer頻率
-      if (currentTime - lastWebServerHandle >= 50) {
+      static int webServerSkipCounter = 0;
+      
+      // 根據記憶體情況動態調整WebServer處理頻率
+      uint32_t freeMemory = ESP.getFreeHeap();
+      unsigned long handleInterval;
+      
+      if (freeMemory < 60000) {
+        handleInterval = 200; // 記憶體緊張時降低頻率
+        webServerSkipCounter++;
+      } else if (freeMemory < 80000) {
+        handleInterval = 100; // 中等記憶體時中等頻率
+      } else {
+        handleInterval = 50;  // 記憶體充足時正常頻率
+        webServerSkipCounter = 0;
+      }
+      
+      // 記憶體嚴重不足時偶爾跳過WebServer處理
+      bool shouldSkip = (webServerSkipCounter > 10 && (webServerSkipCounter % 3) != 0);
+      
+      if (!shouldSkip && currentTime - lastWebServerHandle >= handleInterval) {
         webServer->handleClient();
         lastWebServerHandle = currentTime;
       }

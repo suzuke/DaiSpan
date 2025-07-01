@@ -13,169 +13,21 @@ namespace WebUI {
     // ==================== CSS 樣式 ====================
     
     /**
-     * 取得精簡版 CSS 樣式 (針對記憶體優化)
+     * 取得極簡CSS樣式 (記憶體優化 - 單一壓縮版本)
      */
-    String getCommonCSS() {
-        return R"(body{font-family:Arial;margin:20px;background:#f0f0f0}.container{max-width:600px;margin:0 auto;background:white;padding:20px;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,0.1)}h1{color:#333;text-align:center}h2,h3{color:#333}.button{display:inline-block;padding:10px 20px;margin:10px 5px;background:#007cba;color:white;text-decoration:none;border-radius:5px;border:none;cursor:pointer}.button:hover{background:#005a8b}.button.danger{background:#dc3545}.button.danger:hover{background:#c82333}.button.secondary{background:#666}.button.secondary:hover{background:#555})";
+    String getCompactCSS() {
+        return R"(body{font-family:Arial;margin:10px;background:#f0f0f0}.container{max-width:600px;margin:0 auto;background:white;padding:15px;border-radius:5px}h1{color:#333;text-align:center}h2,h3{color:#333}.button{display:inline-block;padding:8px 15px;margin:5px;background:#007cba;color:white;text-decoration:none;border-radius:3px;border:none;cursor:pointer}.button:hover{background:#005a8b}.button.danger{background:#dc3545}.button.secondary{background:#666}.form-group{margin:10px 0}label{display:block;margin-bottom:3px;font-weight:bold}input,select{width:100%;padding:8px;border:1px solid #ddd;border-radius:3px;box-sizing:border-box}input:focus,select:focus{border-color:#007cba;outline:none}.status{background:#e8f4f8;padding:10px;border-radius:3px;margin:10px 0}.warning{background:#fff3cd;padding:10px;border-radius:3px;margin:10px 0}.info{background:#d1ecf1;padding:10px;border-radius:3px;margin:10px 0}.error{background:#f8d7da;color:#721c24;padding:10px;border-radius:3px;margin:10px 0}.status-card{background:#f8f9fa;border:1px solid #dee2e6;border-radius:5px;padding:15px;margin:15px 0}.status-item{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid #eee}.status-item:last-child{border-bottom:none}.status-label{font-weight:bold;color:#495057}.status-value{color:#6c757d}.status-good{color:#28a745}.status-warning{color:#ffc107}.status-error{color:#dc3545}.signal-strength{font-size:0.9em;color:#6c757d}.network-item{cursor:pointer;padding:8px;border:1px solid #ddd;margin:5px;border-radius:3px}.network-item:hover{background:#f8f9fa})";
     }
-
+    
     /**
-     * 取得表單相關 CSS 樣式
+     * 舊CSS函數保持向後兼容 (使用空實現)
      */
-    String getFormCSS() {
-        return R"(.form-group{margin:15px 0}label{display:block;margin-bottom:5px;font-weight:bold}input[type=text],input[type=password],input[type=number],select{width:100%;padding:10px;border:1px solid #ddd;border-radius:5px;box-sizing:border-box}input[type=text]:focus,input[type=password]:focus,input[type=number]:focus,select:focus{border-color:#007cba;outline:none}small{color:#666;font-size:12px;display:block;margin-top:5px})";
-    }
+    String getCommonCSS() { return ""; }
+    String getFormCSS() { return ""; }
+    String getStatusCSS() { return ""; }
+    String getNetworkCSS() { return ""; }
+    String getSpecialCSS() { return ""; }
 
-    /**
-     * 取得狀態卡片相關 CSS 樣式
-     */
-    String getStatusCSS() {
-        return R"(
-            .status { 
-                background: #e8f4f8; 
-                padding: 15px; 
-                border-radius: 5px; 
-                margin: 20px 0; 
-            }
-            .status-card { 
-                background: #f8f9fa; 
-                border: 1px solid #dee2e6; 
-                padding: 15px; 
-                border-radius: 8px; 
-                margin: 15px 0; 
-            }
-            .status-grid { 
-                display: grid; 
-                grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); 
-                gap: 20px; 
-                margin: 20px 0; 
-            }
-            .status-item { 
-                display: flex; 
-                justify-content: space-between; 
-                padding: 5px 0; 
-                border-bottom: 1px solid #e9ecef; 
-            }
-            .status-item:last-child { 
-                border-bottom: none; 
-            }
-            .status-label { 
-                font-weight: bold; 
-                color: #6c757d; 
-            }
-            .status-value { 
-                color: #212529; 
-            }
-            .status-good { 
-                color: #28a745; 
-            }
-            .status-warning { 
-                color: #ffc107; 
-            }
-            .status-error { 
-                color: #dc3545; 
-            }
-            .success { 
-                background: #d4edda; 
-                border: 1px solid #c3e6cb; 
-                padding: 15px; 
-                border-radius: 5px; 
-                margin: 15px 0; 
-            }
-            .warning { 
-                background: #fff3cd; 
-                border: 1px solid #ffeaa7; 
-                padding: 15px; 
-                border-radius: 5px; 
-                margin: 15px 0; 
-            }
-            .error { 
-                background: #f8d7da; 
-                border: 1px solid #f5c6cb; 
-                color: #721c24; 
-                padding: 15px; 
-                border-radius: 5px; 
-                margin: 15px 0; 
-            }
-            .info { 
-                background: #e8f4f8; 
-                border: 1px solid #bee5eb; 
-                padding: 15px; 
-                border-radius: 5px; 
-                margin: 15px 0; 
-            }
-        )";
-    }
-
-    /**
-     * 取得網路相關 CSS 樣式
-     */
-    String getNetworkCSS() {
-        return R"(
-            .network-list { 
-                max-height: 200px; 
-                overflow-y: auto; 
-                border: 1px solid #ddd; 
-                border-radius: 5px; 
-            }
-            .network-item { 
-                padding: 10px; 
-                border-bottom: 1px solid #eee; 
-                cursor: pointer; 
-            }
-            .network-item:hover { 
-                background: #f5f5f5; 
-            }
-            .network-item:last-child { 
-                border-bottom: none; 
-            }
-            .signal-strength { 
-                float: right; 
-                color: #666; 
-            }
-        )";
-    }
-
-    /**
-     * 取得專用功能 CSS 樣式
-     */
-    String getSpecialCSS() {
-        return R"(
-            .code-block { 
-                background: #f5f5f5; 
-                border: 1px solid #ddd; 
-                border-radius: 5px; 
-                padding: 15px; 
-                margin: 15px 0; 
-                font-family: monospace; 
-                white-space: pre-wrap; 
-            }
-            .log-container { 
-                background: #000; 
-                color: #00ff00; 
-                padding: 15px; 
-                border-radius: 5px; 
-                max-height: 400px; 
-                overflow-y: auto; 
-                font-size: 12px; 
-            }
-            .log-entry { 
-                margin: 2px 0; 
-            }
-            .countdown { 
-                font-size: 24px; 
-                font-weight: bold; 
-                color: #007cba; 
-            }
-            .current-config { 
-                background: #f8f9fa; 
-                border: 1px solid #dee2e6; 
-                padding: 15px; 
-                border-radius: 5px; 
-                margin: 15px 0; 
-            }
-        )";
-    }
 
     // ==================== HTML 頁面結構 ====================
 
@@ -192,13 +44,9 @@ namespace WebUI {
             header += "<meta http-equiv=\"refresh\" content=\"" + String(refreshInterval) + "\">";
         }
         
-        // 組合所有 CSS
+        // 使用壓縮的 CSS
         header += "<style>";
-        header += getCommonCSS();
-        header += getFormCSS();
-        header += getStatusCSS();
-        header += getNetworkCSS();
-        header += getSpecialCSS();
+        header += getCompactCSS();
         header += "</style>";
         header += "</head><body>";
         
@@ -226,120 +74,78 @@ namespace WebUI {
         return nav;
     }
 
-    // ==================== 系統狀態元件 ====================
+    // ==================== 系統狀態元件 (記憶體優化版本) ====================
 
     /**
-     * 取得系統記憶體資訊
+     * 取得完整系統狀態卡片 (記憶體優化版本)
+     * 此版本將多個函式合併，並使用固定緩衝區來避免 String 串接造成的記憶體碎片。
      */
-    String getMemoryInfo() {
-        uint32_t freeHeap = ESP.getFreeHeap();
-        String heapClass = (freeHeap > 100000) ? "status-good" : (freeHeap > 50000) ? "status-warning" : "status-error";
-        
-        String html = "<div class=\"status-item\">";
-        html += "<span class=\"status-label\">可用記憶體:</span>";
-        html += "<span class=\"status-value " + heapClass + "\">" + String(freeHeap) + " bytes</span>";
-        html += "</div>";
-        
-        return html;
-    }
-
-    /**
-     * 取得 WiFi 狀態資訊
-     */
-    String getWiFiStatus() {
-        String html = "";
-        
-        if (WiFi.status() == WL_CONNECTED) {
-            html += "<div class=\"status-item\">";
-            html += "<span class=\"status-label\">WiFi SSID:</span>";
-            html += "<span class=\"status-value status-good\">" + WiFi.SSID() + "</span>";
-            html += "</div>";
-            
-            html += "<div class=\"status-item\">";
-            html += "<span class=\"status-label\">IP地址:</span>";
-            html += "<span class=\"status-value\">" + WiFi.localIP().toString() + "</span>";
-            html += "</div>";
-            
-            html += "<div class=\"status-item\">";
-            html += "<span class=\"status-label\">MAC地址:</span>";
-            html += "<span class=\"status-value\">" + WiFi.macAddress() + "</span>";
-            html += "</div>";
-            
-            html += "<div class=\"status-item\">";
-            html += "<span class=\"status-label\">信號強度:</span>";
-            int rssi = WiFi.RSSI();
-            String rssiClass = (rssi > -50) ? "status-good" : (rssi > -70) ? "status-warning" : "status-error";
-            html += "<span class=\"status-value " + rssiClass + "\">" + String(rssi) + " dBm</span>";
-            html += "</div>";
-            
-            html += "<div class=\"status-item\">";
-            html += "<span class=\"status-label\">網關:</span>";
-            html += "<span class=\"status-value\">" + WiFi.gatewayIP().toString() + "</span>";
-            html += "</div>";
-        } else {
-            html += "<div class=\"status-item\">";
-            html += "<span class=\"status-label\">WiFi狀態:</span>";
-            html += "<span class=\"status-value status-error\">未連接</span>";
-            html += "</div>";
+    String getSystemStatusCard() {
+        // 分配一個足夠大的緩衝區來構建HTML
+        const size_t bufferSize = 2048;
+        auto buffer = std::make_unique<char[]>(bufferSize);
+        if (!buffer) {
+            return "<div class='error'>Memory allocation failed for status card.</div>";
         }
-        
-        return html;
-    }
 
-    /**
-     * 取得系統基本資訊
-     */
-    String getSystemInfo() {
-        String html = "";
+        char* p = buffer.get();
+        int remaining = bufferSize;
+        int written;
+
+        // 安全地附加內容到緩衝區的輔助 Lambda
+        auto append = [&](const char* format, ...) {
+            if (remaining <= 1) return;
+            va_list args;
+            va_start(args, format);
+            written = vsnprintf(p, remaining, format, args);
+            va_end(args);
+            if (written > 0) {
+                p += written;
+                remaining -= written;
+            }
+        };
+
+        // --- 網路連接卡片 ---
+        append("<div class=\"status-card\"><h3>🌐 網路連接</h3>");
+        if (WiFi.status() == WL_CONNECTED) {
+            int rssi = WiFi.RSSI();
+            const char* rssiClass = (rssi > -50) ? "status-good" : (rssi > -70) ? "status-warning" : "status-error";
+            
+            append("<div class='status-item'><span class='status-label'>WiFi SSID:</span><span class='status-value status-good'>%s</span></div>", WiFi.SSID().c_str());
+            append("<div class='status-item'><span class='status-label'>IP地址:</span><span class='status-value'>%s</span></div>", WiFi.localIP().toString().c_str());
+            append("<div class='status-item'><span class='status-label'>MAC地址:</span><span class='status-value'>%s</span></div>", WiFi.macAddress().c_str());
+            append("<div class='status-item'><span class='status-label'>信號強度:</span><span class='status-value %s'>%d dBm</span></div>", rssiClass, rssi);
+            append("<div class='status-item'><span class='status-label'>網關:</span><span class='status-value'>%s</span></div>", WiFi.gatewayIP().toString().c_str());
+        } else {
+            append("<div class='status-item'><span class='status-label'>WiFi狀態:</span><span class='status-value status-error'>未連接</span></div>");
+        }
+        append("</div>");
+
+        // --- 系統資源卡片 ---
+        append("<div class=\"status-card\"><h3>💻 系統資源</h3>");
         
-        html += "<div class=\"status-item\">";
-        html += "<span class=\"status-label\">晶片型號:</span>";
-        html += "<span class=\"status-value\">" + String(ESP.getChipModel()) + "</span>";
-        html += "</div>";
-        
-        html += "<div class=\"status-item\">";
-        html += "<span class=\"status-label\">CPU頻率:</span>";
-        html += "<span class=\"status-value\">" + String(ESP.getCpuFreqMHz()) + " MHz</span>";
-        html += "</div>";
-        
-        html += "<div class=\"status-item\">";
-        html += "<span class=\"status-label\">Flash大小:</span>";
-        html += "<span class=\"status-value\">" + String(ESP.getFlashChipSize() / 1024 / 1024) + " MB</span>";
-        html += "</div>";
-        
-        html += "<div class=\"status-item\">";
-        html += "<span class=\"status-label\">運行時間:</span>";
+        // 記憶體資訊
+        uint32_t freeHeap = ESP.getFreeHeap();
+        const char* heapClass = (freeHeap > 100000) ? "status-good" : (freeHeap > 50000) ? "status-warning" : "status-error";
+        append("<div class='status-item'><span class='status-label'>可用記憶體:</span><span class='status-value %s'>%u bytes</span></div>", heapClass, freeHeap);
+
+        // 系統資訊
         unsigned long uptime = millis();
         unsigned long days = uptime / 86400000;
         unsigned long hours = (uptime % 86400000) / 3600000;
         unsigned long minutes = (uptime % 3600000) / 60000;
-        html += "<span class=\"status-value\">" + String(days) + "天 " + String(hours) + "時 " + String(minutes) + "分</span>";
-        html += "</div>";
-        
-        html += "<div class=\"status-item\">";
-        html += "<span class=\"status-label\">固件版本:</span>";
-        html += "<span class=\"status-value\">v3.0-OTA-FINAL</span>";
-        html += "</div>";
-        
-        return html;
-    }
+        char uptimeStr[40];
+        snprintf(uptimeStr, sizeof(uptimeStr), "%lu天 %lu時 %lu分", days, hours, minutes);
 
-    /**
-     * 取得完整系統狀態卡片
-     */
-    String getSystemStatusCard() {
-        String html = "<div class=\"status-card\">";
-        html += "<h3>🌐 網路連接</h3>";
-        html += getWiFiStatus();
-        html += "</div>";
-        
-        html += "<div class=\"status-card\">";
-        html += "<h3>💻 系統資源</h3>";
-        html += getMemoryInfo();
-        html += getSystemInfo();
-        html += "</div>";
-        
-        return html;
+        append("<div class='status-item'><span class='status-label'>晶片型號:</span><span class='status-value'>%s</span></div>", ESP.getChipModel());
+        append("<div class='status-item'><span class='status-label'>CPU頻率:</span><span class='status-value'>%u MHz</span></div>", ESP.getCpuFreqMHz());
+        append("<div class='status-item'><span class='status-label'>Flash大小:</span><span class='status-value'>%u MB</span></div>", ESP.getFlashChipSize() / 1024 / 1024);
+        append("<div class='status-item'><span class='status-label'>運行時間:</span><span class='status-value'>%s</span></div>", uptimeStr);
+        append("<div class='status-item'><span class='status-label'>固件版本:</span><span class='status-value'>v3.0-OTA-FINAL</span></div>");
+
+        append("</div>");
+
+        return String(buffer.get());
     }
 
     // ==================== WiFi 網路元件 ====================
@@ -546,142 +352,207 @@ namespace WebUI {
     }
 
     /**
-     * 取得成功頁面
+     * 取得成功頁面 (記憶體優化版本)
      */
     String getSuccessPage(const String& title, const String& message, int countdown = 0, const String& redirectUrl = "/") {
-        String html = getPageHeader("成功 - " + title);
-        html += "<div class=\"container\">";
-        html += "<h1>✅ " + title + "</h1>";
-        html += "<div class=\"success\">" + message + "</div>";
-        
+        const size_t bufferSize = 3072;
+        auto buffer = std::make_unique<char[]>(bufferSize);
+        if (!buffer) {
+            return "<div class='error'>Memory allocation failed.</div>";
+        }
+
+        char* p = buffer.get();
+        int remaining = bufferSize;
+        int written;
+        bool overflow = false;
+
+        auto append = [&](const char* format, ...) {
+            if (remaining <= 10 || overflow) {
+                overflow = true;
+                return;
+            }
+            va_list args;
+            va_start(args, format);
+            written = vsnprintf(p, remaining, format, args);
+            va_end(args);
+            if (written > 0 && written < remaining) {
+                p += written;
+                remaining -= written;
+            } else {
+                overflow = true;
+            }
+        };
+
+        // Inline getPageHeader to avoid String concatenation
+        append("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"><title>成功 - %s</title>", title.c_str());
+        append("<style>%s</style></head><body>", getCompactCSS().c_str());
+
+        // Page content
+        append("<div class=\"container\"><h1>✅ %s</h1><div class=\"success\">%s</div>", title.c_str(), message.c_str());
+
         if (countdown > 0) {
-            html += "<div style=\"text-align: center; margin: 20px 0;\">";
-            html += "<div style=\"font-size: 24px; font-weight: bold; color: #007cba;\">";
-            html += "<span id=\"countdown\">" + String(countdown) + "</span>";
-            html += "</div>";
-            html += "<p>秒後自動跳轉...</p>";
-            html += "</div>";
-            html += getCountdownScript(countdown);
+            append("<div style=\"text-align: center; margin: 20px 0;\"><div style=\"font-size: 24px; font-weight: bold; color: #007cba;\"><span id=\"countdown\">%d</span></div><p>秒後自動跳轉...</p></div>", countdown);
             
+            // Inline getCountdownScript
+            append("<script>let count = %d; const countdown = document.getElementById('countdown'); const timer = setInterval(() => { count--; if (countdown) countdown.textContent = count; if (count <= 0) { clearInterval(timer); if (countdown) countdown.textContent = '處理中...'; } }, 1000);</script>", countdown);
+
             if (redirectUrl.length() > 0) {
-                html += "<script>setTimeout(function(){window.location='" + redirectUrl + "';}, " + String(countdown * 1000) + ");</script>";
+                append("<script>setTimeout(function(){window.location='%s';}, %d);</script>", redirectUrl.c_str(), countdown * 1000);
             }
         }
+
+        append("<div style=\"text-align: center;\"><a href=\"/\" class=\"button secondary\">⬅️ 返回主頁</a></div></div>");
         
-        html += "<div style=\"text-align: center;\">";
-        html += "<a href=\"/\" class=\"button\">🏠 返回主頁</a>";
-        html += "</div>";
-        html += "</div>";
-        html += getPageFooter();
-        return html;
+        // Inline getPageFooter
+        append("</body></html>");
+
+        if (overflow) {
+            return "<div style='color:red;'>Error: HTML too large for buffer (" + String(bufferSize) + " bytes)</div>";
+        }
+        return String(buffer.get());
     }
 
     /**
-     * 取得重啟頁面
+     * 取得重啟頁面 (記憶體優化版本)
      */
     String getRestartPage(const String& ip = "") {
         String finalIp = ip.length() > 0 ? ip : WiFi.localIP().toString();
         
-        String html = getPageHeader("設備重啟中");
-        html += "<div class=\"container\">";
-        html += "<h1>🔄 設備重啟中</h1>";
-        html += "<div class=\"info\">";
-        html += "<p>設備正在重新啟動，請稍候...</p>";
-        html += "<p>約30秒後可重新訪問設備。</p>";
-        html += "</div>";
+        const size_t bufferSize = 2048;
+        auto buffer = std::make_unique<char[]>(bufferSize);
+        if (!buffer) { return "<div class='error'>Memory allocation failed.</div>"; }
+
+        char* p = buffer.get();
+        int remaining = bufferSize;
+        int written;
+
+        auto append = [&](const char* format, ...) {
+            if (remaining <= 1) return;
+            va_list args;
+            va_start(args, format);
+            written = vsnprintf(p, remaining, format, args);
+            va_end(args);
+            if (written > 0) { p += written; remaining -= written; }
+        };
+
+        // Inline getPageHeader
+        append("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>設備重啟中</title>");
+        append("<style>%s</style></head><body>", getCompactCSS().c_str());
+        
+        append("<div class=\"container\"><h1>🔄 設備重啟中</h1>");
+        append("<div class=\"info\"><p>設備正在重新啟動，請稍候...</p><p>約30秒後可重新訪問設備。</p></div>");
         
         if (finalIp.length() > 0) {
-            html += "<p>重啟完成後請訪問：<br>";
-            html += "<a href=\"http://" + finalIp + "\">http://" + finalIp + "</a></p>";
-            html += "<script>setTimeout(function(){window.location='http://" + finalIp + "';}, 30000);</script>";
+            append("<p>重啟完成後請訪問：<br><a href=\"http://%s\">http://%s</a></p>", finalIp.c_str(), finalIp.c_str());
+            append("<script>setTimeout(function(){window.location='http://%s';}, 30000);</script>", finalIp.c_str());
         }
         
-        html += "</div>";
-        html += getPageFooter();
-        return html;
+        append("</div></body></html>");
+        return String(buffer.get());
     }
 
     // ==================== 完整頁面模板 ====================
 
     /**
-     * 取得簡化的 WiFi 配置頁面（僅 WiFi 設定，不含 HomeKit）
+     * 安全的緩衝區append函數 (改進版記憶體優化)
+     */
+    class SafeHtmlBuilder {
+    private:
+        std::unique_ptr<char[]> buffer;
+        char* p;
+        int remaining;
+        size_t totalSize;
+        bool overflow;
+        
+    public:
+        SafeHtmlBuilder(size_t size) : totalSize(size), overflow(false) {
+            buffer = std::make_unique<char[]>(size);
+            if (!buffer) {
+                overflow = true;
+                return;
+            }
+            p = buffer.get();
+            remaining = size;
+        }
+        
+        void append(const char* format, ...) {
+            if (overflow || remaining <= 10) { // 保留10字節安全邊界
+                overflow = true;
+                return;
+            }
+            
+            va_list args;
+            va_start(args, format);
+            int written = vsnprintf(p, remaining, format, args);
+            va_end(args);
+            
+            if (written > 0 && written < remaining) {
+                p += written;
+                remaining -= written;
+            } else {
+                overflow = true;
+            }
+        }
+        
+        String toString() {
+            if (overflow) {
+                return "<div style='color:red;'>Error: HTML too large for buffer (" + String(totalSize) + " bytes)</div>";
+            }
+            return String(buffer.get());
+        }
+        
+        bool isOverflow() { return overflow; }
+        int getRemainingSpace() { return remaining; }
+    };
+
+    /**
+     * 取得簡化的 WiFi 配置頁面（改進記憶體優化版本）
      */
     String getSimpleWiFiConfigPage(const String& saveEndpoint = "/wifi-save", const String& scanEndpoint = "/wifi-scan", 
                                   const String& currentSSID = "", bool showWarning = true) {
-        String html = getPageHeader("WiFi 配置");
-        html += "<div class=\"container\">";
-        html += "<h1>📶 WiFi 配置</h1>";
-        
+        SafeHtmlBuilder html(6144); // 增加到6KB緩衝區
+
+        // --- Header ---
+        html.append("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>WiFi 配置</title>");
+        html.append("<style>%s</style></head><body>", getCompactCSS().c_str());
+
+        // --- Body ---
+        html.append("<div class=\"container\"><h1>📶 WiFi 配置</h1>");
         if (showWarning) {
-            html += "<div class=\"warning\">⚠️ 配置新WiFi後設備將重啟，HomeKit配對狀態會保持。</div>";
+            html.append("<div class=\"warning\">⚠️ 配置新WiFi後設備將重啟，HomeKit配對狀態會保持。</div>");
         }
+        html.append("<h3>可用網路 <button type=\"button\" class=\"button\" onclick=\"rescanNetworks()\">🔄 重新掃描</button></h3>");
+        html.append("<div id=\"networks\"><div style=\"padding:15px;text-align:center;color:#666;\">載入中...</div></div>");
         
-        // WiFi 網路列表
-        html += "<h3>可用網路 <button type=\"button\" class=\"button\" onclick=\"rescanNetworks()\" style=\"font-size:12px;padding:5px 10px;\">🔄 重新掃描</button></h3>";
-        html += "<div id=\"networks\">";
-        html += "<div style=\"padding:15px;text-align:center;color:#666;\">載入中...</div>";
-        html += "</div>";
+        // --- Form ---
+        html.append("<form action=\"%s\" method=\"POST\">", saveEndpoint.c_str());
+        html.append("<div class=\"form-group\"><label for=\"ssid\">WiFi 名稱:</label><input type=\"text\" id=\"ssid\" name=\"ssid\" value=\"%s\" required></div>", currentSSID.c_str());
+        html.append("<div class=\"form-group\"><label for=\"password\">WiFi 密碼:</label><input type=\"password\" id=\"password\" name=\"password\"></div>");
+        html.append("<button type=\"submit\" class=\"button\">💾 保存並重啟</button></form>");
         
-        html += "<form action=\"" + saveEndpoint + "\" method=\"POST\">";
-        html += getWiFiConfigForm(currentSSID);
-        html += "<button type=\"submit\" class=\"button\">💾 保存WiFi並重啟</button>";
-        html += "</form>";
-        
-        // 返回按鈕
-        html += "<div style=\"text-align: center; margin-top: 20px;\">";
-        html += "<a href=\"/\" class=\"button secondary\">⬅️ 返回主頁</a>";
-        html += "</div>";
-        
-        html += "</div>";
-        
-        // 完整的 WiFi 掃描腳本（包含自動載入和手動重掃描）
-        html += "<script>";
-        html += "function selectNetwork(ssid) {";
-        html += "  document.getElementById('ssid').value = ssid;";
-        html += "}";
-        html += "function loadNetworks() {";
-        html += "  const networkList = document.getElementById('networks');";
-        html += "  networkList.innerHTML = '<div style=\"text-align: center; padding: 20px;\">正在掃描 WiFi 網路...<br><small>這可能需要幾秒鐘</small></div>';";
-        html += "  const controller = new AbortController();";
-        html += "  const timeoutId = setTimeout(() => controller.abort(), 15000);";
-        html += "  fetch('" + scanEndpoint + "', { signal: controller.signal, cache: 'no-cache' })";
-        html += "    .then(response => {";
-        html += "      clearTimeout(timeoutId);";
-        html += "      if (!response.ok) {";
-        html += "        throw new Error('HTTP ' + response.status + ': ' + response.statusText);";
-        html += "      }";
-        html += "      return response.json();";
-        html += "    })";
-        html += "    .then(networks => {";
-        html += "      networkList.innerHTML = '';";
-        html += "      if (networks.length === 0) {";
-        html += "        networkList.innerHTML = '<div style=\"text-align: center; padding: 20px; color: orange;\">未找到可用的 WiFi 網路</div>';";
-        html += "        return;";
-        html += "      }";
-        html += "      networks.forEach(network => {";
-        html += "        const item = document.createElement('div');";
-        html += "        item.className = 'network-item';";
-        html += "        item.innerHTML = `<strong>${network.ssid}</strong><span class=\"signal-strength\">${network.rssi} dBm ${network.secure ? '🔒' : '🔓'}</span>`;";
-        html += "        item.onclick = () => selectNetwork(network.ssid);";
-        html += "        networkList.appendChild(item);";
-        html += "      });";
-        html += "    })";
-        html += "    .catch(error => {";
-        html += "      clearTimeout(timeoutId);";
-        html += "      console.error('WiFi scan error:', error);";
-        html += "      let errorMsg = error.name === 'AbortError' ? '掃描超時' : '載入失敗: ' + error.message;";
-        html += "      networkList.innerHTML = '<div style=\"text-align: center; padding: 20px; color: red;\">' + errorMsg + '<br><button class=\"button\" onclick=\"loadNetworks()\">重新掃描</button><br><small style=\"margin-top:10px;display:block;\">或者手動輸入 WiFi 名稱</small></div>';";
-        html += "    });";
-        html += "}";
-        html += "function rescanNetworks() {";
-        html += "  loadNetworks();";  // 重用 loadNetworks 函數
-        html += "}";
-        html += "// 頁面載入時延遲執行，讓 AP 連接穩定";
-        html += "document.addEventListener('DOMContentLoaded', function() { setTimeout(loadNetworks, 2000); });";
-        html += "</script>";
-        
-        html += getPageFooter();
-        return html;
+        html.append("<div style=\"text-align:center;margin:20px 0;\"><a href=\"/\" class=\"button secondary\">⬅️ 返回主頁</a></div></div>");
+
+        // --- JavaScript (簡化版) ---
+        html.append("<script>");
+        html.append("function selectNetwork(ssid){document.getElementById('ssid').value=ssid;}");
+        html.append("function loadNetworks(){");
+        html.append("fetch('%s').then(r=>r.json()).then(networks=>{", scanEndpoint.c_str());
+        html.append("let html='';");
+        html.append("networks.forEach(n=>{");
+        html.append("html+='<div style=\"padding:8px;border:1px solid #ddd;margin:5px;cursor:pointer\" onclick=\"selectNetwork(\\''+n.ssid+'\\')\">';");
+        html.append("html+='<strong>'+n.ssid+'</strong> ('+n.rssi+' dBm) '+(n.secure?'🔒':'🔓');");
+        html.append("html+='</div>';");
+        html.append("});");
+        html.append("document.getElementById('networks').innerHTML=html;");
+        html.append("}).catch(()=>{document.getElementById('networks').innerHTML='<p>掃描失敗</p>';});");
+        html.append("}");
+        html.append("function rescanNetworks(){loadNetworks();}");
+        html.append("setTimeout(loadNetworks,2000);");
+        html.append("</script>");
+
+        html.append("</body></html>");
+
+        return html.toString();
     }
 
     /**
@@ -721,350 +592,241 @@ namespace WebUI {
     }
 
     /**
-     * 取得完整的 OTA 頁面
+     * 取得完整的 OTA 頁面 (記憶體優化版本)
      */
     String getOTAPage(const String& deviceIP = "", const String& deviceHostname = "DaiSpan-Thermostat", 
                      const String& otaStatus = "") {
-        String html = getPageHeader("OTA 更新");
-        html += "<div class=\"container\">";
-        html += "<h1>🔄 OTA 遠程更新</h1>";
-        
-        // OTA 狀態顯示
+        const size_t bufferSize = 3072;
+        auto buffer = std::make_unique<char[]>(bufferSize);
+        if (!buffer) { return "<div class='error'>Memory allocation failed.</div>"; }
+
+        char* p = buffer.get();
+        int remaining = bufferSize;
+        int written;
+
+        auto append = [&](const char* format, ...) {
+            if (remaining <= 1) return;
+            va_list args;
+            va_start(args, format);
+            written = vsnprintf(p, remaining, format, args);
+            va_end(args);
+            if (written > 0) { p += written; remaining -= written; }
+        };
+
+        append("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>OTA 更新</title><style>%s</style></head><body>", getCompactCSS().c_str());
+        append("<div class=\"container\"><h1>🔄 OTA 遠程更新</h1>");
+
         if (otaStatus.length() > 0) {
-            html += "<div class=\"status\">";
-            html += "<h3>🔄 OTA 更新狀態</h3>";
-            html += otaStatus;
-            html += "</div>";
+            append("<div class=\"status\"><h3>🔄 OTA 更新狀態</h3>%s</div>", otaStatus.c_str());
         } else {
-            html += "<div class=\"status\">";
-            html += "<h3>🔄 OTA 更新狀態</h3>";
-            html += "<p><span style=\"color: green;\">●</span> OTA 服務已啟用</p>";
-            html += "<p><strong>設備主機名:</strong> " + deviceHostname + "</p>";
-            html += "<p><strong>IP地址:</strong> " + (deviceIP.length() > 0 ? deviceIP : WiFi.localIP().toString()) + "</p>";
-            html += "</div>";
+            append("<div class=\"status\"><h3>🔄 OTA 更新狀態</h3><p><span style=\"color: green;\">●</span> OTA 服務已啟用</p><p><strong>設備主機名:</strong> %s</p><p><strong>IP地址:</strong> %s</p></div>", deviceHostname.c_str(), (deviceIP.length() > 0 ? deviceIP.c_str() : WiFi.localIP().toString().c_str()));
         }
-        
-        html += "<div class=\"warning\">";
-        html += "<h3>⚠️ 注意事項</h3>";
-        html += "<ul>";
-        html += "<li>OTA 更新過程中請勿斷電或斷網</li>";
-        html += "<li>更新失敗可能導致設備無法啟動</li>";
-        html += "<li>建議在更新前備份當前固件</li>";
-        html += "<li>更新完成後設備會自動重啟</li>";
-        html += "</ul>";
-        html += "</div>";
-        
-        html += "<div>";
-        html += "<h3>📝 使用說明</h3>";
-        html += "<p>使用 PlatformIO 進行 OTA 更新：</p>";
-        String currentIP = deviceIP.length() > 0 ? deviceIP : WiFi.localIP().toString();
-        html += "<div class=\"code-block\">pio run -t upload --upload-port " + currentIP + "</div>";
-        
-        html += "<p>或使用 Arduino IDE：</p>";
-        html += "<ol>";
-        html += "<li>工具 → 端口 → 選擇網路端口</li>";
-        html += "<li>選擇設備主機名: " + deviceHostname + "</li>";
-        html += "<li>輸入 OTA 密碼</li>";
-        html += "<li>點擊上傳</li>";
-        html += "</ol>";
-        html += "</div>";
-        
-        html += "<div style=\"text-align: center; margin-top: 30px;\">";
-        html += "<a href=\"/\" class=\"button\">⬅️ 返回主頁</a>";
-        html += "<a href=\"/restart\" class=\"button danger\">🔄 重新啟動</a>";
-        html += "</div>";
-        
-        html += "</div>";
-        html += getPageFooter();
-        return html;
+
+        append("<div class=\"warning\"><h3>⚠️ 注意事項</h3><ul><li>OTA 更新過程中請勿斷電或斷網</li><li>更新失敗可能導致設備無法啟動</li><li>建議在更新前備份當前固件</li><li>更新完成後設備會自動重啟</li></ul></div>");
+        append("<div><h3>📝 使用說明</h3><p>使用 PlatformIO 進行 OTA 更新：</p><div class=\"code-block\">pio run -t upload --upload-port %s</div>", (deviceIP.length() > 0 ? deviceIP.c_str() : WiFi.localIP().toString().c_str()));
+        append("<p>或使用 Arduino IDE：</p><ol><li>工具 → 端口 → 選擇網路端口</li><li>選擇設備主機名: %s</li><li>輸入 OTA 密碼</li><li>點擊上傳</li></ol></div>", deviceHostname.c_str());
+        append("<div style=\"text-align: center; margin-top: 30px;\"><a href=\"/\" class=\"button secondary\">⬅️ 返回主頁</a><a href=\"/restart\" class=\"button danger\">🔄 重新啟動</a></div></div>");
+        append("</body></html>");
+
+        return String(buffer.get());
     }
 
     /**
-     * 取得完整的 HomeKit 配置頁面
+     * 取得 HomeKit 配置頁面 (改進記憶體優化版本)
      */
     String getHomeKitConfigPage(const String& saveEndpoint = "/homekit-save", 
                                const String& currentPairingCode = "11122333", 
                                const String& currentDeviceName = "智能恆溫器", 
                                const String& currentQRID = "HSPN", 
                                bool homeKitInitialized = false) {
-        String html = getPageHeader("HomeKit 配置");
-        html += "<div class=\"container\">";
-        html += "<h1>🏠 HomeKit 配置</h1>";
+        SafeHtmlBuilder html(5120); // 5KB緩衝區
+
+        html.append("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>HomeKit 配置</title>");
+        html.append("<style>%s</style></head><body>", getCompactCSS().c_str());
+        html.append("<div class=\"container\"><h1>🏠 HomeKit 配置</h1>");
         
-        // 當前配置顯示
-        html += "<div class=\"current-config\">";
-        html += "<h3>📋 當前配置</h3>";
-        html += "<p><strong>配對碼：</strong>" + currentPairingCode + "</p>";
-        html += "<p><strong>設備名稱：</strong>" + currentDeviceName + "</p>";
-        html += "<p><strong>QR ID：</strong>" + currentQRID + "</p>";
-        html += "<p><strong>HomeKit端口：</strong>1201</p>";
-        html += "<p><strong>初始化狀態：</strong>" + String(homeKitInitialized ? "✅ 已就緒" : "❌ 未就緒") + "</p>";
-        html += "</div>";
+        // 當前配置狀態
+        html.append("<div class=\"status\"><h3>📋 當前配置</h3>");
+        html.append("<p><strong>配對碼：</strong>%s</p>", currentPairingCode.c_str());
+        html.append("<p><strong>設備名稱：</strong>%s</p>", currentDeviceName.c_str());
+        html.append("<p><strong>QR ID：</strong>%s</p>", currentQRID.c_str());
+        html.append("<p><strong>狀態：</strong>%s</p>", homeKitInitialized ? "✅ 已就緒" : "❌ 未就緒");
+        html.append("</div>");
         
-        html += "<div class=\"warning\">";
-        html += "<h3>⚠️ 重要提醒</h3>";
-        html += "<p>修改HomeKit配置會中斷現有配對關係，您需要：</p>";
-        html += "<ul>";
-        html += "<li>從家庭App中移除現有設備</li>";
-        html += "<li>使用新的配對碼重新添加設備</li>";
-        html += "<li>重新配置自動化和場景</li>";
-        html += "</ul>";
-        html += "</div>";
+        // 警告提示
+        html.append("<div class=\"warning\"><h3>⚠️ 重要提醒</h3>");
+        html.append("<p>修改配置會中斷現有配對，需要重新配對設備。</p></div>");
         
-        html += "<form action=\"" + saveEndpoint + "\" method=\"POST\">";
-        html += "<h3>🔧 修改配置</h3>";
+        // 配置表單
+        html.append("<form action=\"%s\" method=\"POST\"><h3>🔧 修改配置</h3>", saveEndpoint.c_str());
+        html.append("<div class=\"form-group\">");
+        html.append("<label for=\"pairing_code\">配對碼 (8位數字):</label>");
+        html.append("<input type=\"text\" id=\"pairing_code\" name=\"pairing_code\" placeholder=\"當前: %s\" pattern=\"[0-9]{8}\" maxlength=\"8\">", currentPairingCode.c_str());
+        html.append("</div>");
         
-        html += "<div class=\"form-group\">";
-        html += "<label for=\"pairing_code\">配對碼 (8位數字):</label>";
-        html += "<input type=\"text\" id=\"pairing_code\" name=\"pairing_code\" ";
-        html += "placeholder=\"留空保持當前: " + currentPairingCode + "\" ";
-        html += "pattern=\"[0-9]{8}\" maxlength=\"8\" ";
-        html += "title=\"請輸入8位數字作為HomeKit配對碼\">";
-        html += "<small>必須是8位純數字，例如：12345678</small>";
-        html += "</div>";
+        html.append("<div class=\"form-group\">");
+        html.append("<label for=\"device_name\">設備名稱:</label>");
+        html.append("<input type=\"text\" id=\"device_name\" name=\"device_name\" placeholder=\"當前: %s\" maxlength=\"50\">", currentDeviceName.c_str());
+        html.append("</div>");
         
-        html += "<div class=\"form-group\">";
-        html += "<label for=\"device_name\">設備名稱:</label>";
-        html += "<input type=\"text\" id=\"device_name\" name=\"device_name\" ";
-        html += "placeholder=\"留空保持當前: " + currentDeviceName + "\" ";
-        html += "maxlength=\"50\">";
-        html += "<small>在家庭App中顯示的設備名稱</small>";
-        html += "</div>";
+        html.append("<div class=\"form-group\">");
+        html.append("<label for=\"qr_id\">QR識別碼:</label>");
+        html.append("<input type=\"text\" id=\"qr_id\" name=\"qr_id\" placeholder=\"當前: %s\" maxlength=\"4\">", currentQRID.c_str());
+        html.append("</div>");
         
-        html += "<div class=\"form-group\">";
-        html += "<label for=\"qr_id\">QR識別碼:</label>";
-        html += "<input type=\"text\" id=\"qr_id\" name=\"qr_id\" ";
-        html += "placeholder=\"留空保持當前: " + currentQRID + "\" ";
-        html += "maxlength=\"4\">";
-        html += "<small>QR碼中的設備識別碼，通常為4個字符</small>";
-        html += "</div>";
+        html.append("<div style=\"text-align:center;margin:20px 0;\">");
+        html.append("<button type=\"submit\" class=\"button\">💾 保存配置</button>");
+        html.append("</div></form>");
         
-        html += "<div style=\"text-align:center;margin:20px 0;\">";
-        html += "<button type=\"submit\" class=\"button\">💾 保存HomeKit配置</button>";
-        html += "</div>";
-        html += "</form>";
+        // 使用說明
+        html.append("<div class=\"info\"><h3>💡 配對流程</h3>");
+        html.append("<ol><li>修改配置後設備會重啟</li><li>在家庭App中重新添加設備</li><li>使用新的配對碼: <strong>%s</strong></li></ol>", currentPairingCode.c_str());
+        html.append("</div>");
         
-        html += "<div class=\"info\">";
-        html += "<h3>💡 使用說明</h3>";
-        html += "<p><strong>配對流程：</strong></p>";
-        html += "<ol>";
-        html += "<li>修改配置後，設備會自動重啟</li>";
-        html += "<li>在家庭App中掃描新的QR碼</li>";
-        html += "<li>或手動輸入新的配對碼：<strong>" + currentPairingCode + "</strong></li>";
-        html += "<li>完成配對後即可正常使用</li>";
-        html += "</ol>";
-        html += "</div>";
-        
-        html += "<div style=\"text-align: center; margin: 20px 0;\">";
-        html += "<a href=\"/\" class=\"button secondary\">⬅️ 返回主頁</a>";
-        html += "</div>";
-        
-        html += "</div>";
-        html += getPageFooter();
-        return html;
+        html.append("<div style=\"text-align:center;margin:20px 0;\">");
+        html.append("<a href=\"/\" class=\"button secondary\">⬅️ 返回主頁</a>");
+        html.append("</div></div></body></html>");
+
+        return html.toString();
     }
 
     /**
-     * 取得完整的日誌頁面
+     * 取得完整的日誌頁面 (記憶體優化版本)
      */
     String getLogPage(const String& logContent = "", const String& clearEndpoint = "/logs-clear", 
                      const String& apiEndpoint = "/api/logs", int totalEntries = 0, 
                      int infoCount = 0, int warningCount = 0, int errorCount = 0, int shownEntries = 0) {
-        String html = getPageHeader("系統日誌");
-        html += "<div class=\"container\">";
-        html += "<h1>📊 DaiSpan 系統日誌</h1>";
-        
-        html += "<div style=\"text-align:center;\">";
-        html += "<a href=\"" + apiEndpoint + "\" class=\"button\">📋 JSON格式</a>";
-        html += "<button onclick=\"clearLogs()\" class=\"button danger\">🗑️ 清除日誌</button>";
-        html += "<a href=\"/\" class=\"button secondary\">⬅️ 返回</a>";
-        html += "</div>";
-        
-        html += "<div class=\"status\">";
-        html += "<h3>📈 統計資訊</h3>";
-        html += "<p>總計: " + String(totalEntries) + " 條記錄";
+        const size_t bufferSize = 4096;
+        auto buffer = std::make_unique<char[]>(bufferSize);
+        if (!buffer) { return "<div class='error'>Memory allocation failed.</div>"; }
+
+        char* p = buffer.get();
+        int remaining = bufferSize;
+        int written;
+
+        auto append = [&](const char* format, ...) {
+            if (remaining <= 1) return;
+            va_list args;
+            va_start(args, format);
+            written = vsnprintf(p, remaining, format, args);
+            va_end(args);
+            if (written > 0) { p += written; remaining -= written; }
+        };
+
+        append("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>系統日誌</title><style>%s</style></head><body>", getCompactCSS().c_str());
+        append("<div class=\"container\"><h1>📊 DaiSpan 系統日誌</h1>");
+        append("<div style=\"text-align:center;\"><a href=\"%s\" class=\"button\">📋 JSON格式</a><button onclick=\"clearLogs()\" class=\"button danger\">🗑️ 清除日誌</button><a href=\"/\" class=\"button secondary\">⬅️ 返回主頁</a></div>", apiEndpoint.c_str());
+        append("<div class=\"status\"><h3>📈 統計資訊</h3><p>總計: %d 條記錄", totalEntries);
         if (shownEntries > 0 && shownEntries < totalEntries) {
-            html += " (顯示最新 " + String(shownEntries) + " 條)";
+            append(" (顯示最新 %d 條)", shownEntries);
         }
-        html += "</p>";
-        html += "<p>資訊: " + String(infoCount) + " | 警告: " + String(warningCount) + " | 錯誤: " + String(errorCount) + "</p>";
-        html += "</div>";
-        
-        // 顯示日誌內容
-        html += "<div class=\"log-container\">";
-        if (logContent.length() > 0) {
-            html += logContent;
-        } else {
-            html += "<p style=\"color:#666;\">沒有可用的日誌記錄</p>";
-        }
-        html += "</div>";
-        
-        html += "<p style=\"margin-top:15px;\"><strong>注意：</strong>只顯示最新的記錄。使用 <a href=\"" + apiEndpoint + "\" target=\"_blank\">JSON API</a> 查看完整日誌。</p>";
-        
-        html += "<script>";
-        html += "function clearLogs(){";
-        html += "  if(confirm('確定要清除所有日誌嗎？')){";
-        html += "    fetch('" + clearEndpoint + "',{method:'POST'}).then(()=>location.reload());";
-        html += "  }";
-        html += "}";
-        html += "</script>";
-        
-        html += "</div>";
-        html += getPageFooter();
-        return html;
+        append("</p><p>資訊: %d | 警告: %d | 錯誤: %d</p></div>", infoCount, warningCount, errorCount);
+        append("<div class=\"log-container\">%s</div>", logContent.length() > 0 ? logContent.c_str() : "<p style='color:#666;'>沒有可用的日誌記錄</p>");
+        append("<p style=\"margin-top:15px;\"><strong>注意：</strong>只顯示最新的記錄。使用 <a href=\"%s\" target=\"_blank\">JSON API</a> 查看完整日誌。</p>", apiEndpoint.c_str());
+        append("<script>function clearLogs(){if(confirm('確定要清除所有日誌嗎？')){fetch('%s',{method:'POST'}).then(()=>location.reload());}}</script>", clearEndpoint.c_str());
+        append("</div></body></html>");
+
+        return String(buffer.get());
     }
 
     /**
-     * 取得模擬控制頁面
+     * 取得模擬控制頁面 (記憶體優化版本)
      */
     String getSimulationControlPage(const String& saveEndpoint = "/simulation-control",
                                    bool power = false, int mode = 0, 
                                    float targetTemp = 22.0, float currentTemp = 25.0, float roomTemp = 25.0,
                                    bool isHeating = false, bool isCooling = false) {
-        String html = getPageHeader("模擬控制");
-        html += "<div class=\"container\">";
-        html += "<h1>🔧 模擬控制台</h1>";
-        
-        // 當前狀態顯示
-        html += "<div class=\"status-card\">";
-        html += "<h3>📊 當前狀態</h3>";
-        html += "<p><strong>電源：</strong>" + String(power ? "開啟" : "關閉") + "</p>";
-        html += "<p><strong>模式：</strong>" + String(mode) + " ";
+        const size_t bufferSize = 4096;
+        auto buffer = std::make_unique<char[]>(bufferSize);
+        if (!buffer) { return "<div class='error'>Memory allocation failed.</div>"; }
+
+        char* p = buffer.get();
+        int remaining = bufferSize;
+        int written;
+
+        auto append = [&](const char* format, ...) {
+            if (remaining <= 1) return;
+            va_list args;
+            va_start(args, format);
+            written = vsnprintf(p, remaining, format, args);
+            va_end(args);
+            if (written > 0) { p += written; remaining -= written; }
+        };
+
+        append("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>模擬控制</title><style>%s</style></head><body>", getCompactCSS().c_str());
+        append("<div class=\"container\"><h1>🔧 模擬控制台</h1>");
+
+        const char* modeText = "";
         switch(mode) {
-          case 0: html += "(關閉)"; break;
-          case 1: html += "(制熱)"; break;
-          case 2: html += "(制冷)"; break;
-          case 3: html += "(自動)"; break;
+          case 0: modeText = "(關閉)"; break;
+          case 1: modeText = "(制熱)"; break;
+          case 2: modeText = "(制冷)"; break;
+          case 3: modeText = "(自動)"; break;
         }
-        html += "</p>";
-        html += "<p><strong>當前溫度：</strong>" + String(currentTemp, 1) + "°C</p>";
-        html += "<p><strong>目標溫度：</strong>" + String(targetTemp, 1) + "°C</p>";
-        html += "<p><strong>環境溫度：</strong>" + String(roomTemp, 1) + "°C</p>";
-        html += "<p><strong>運行狀態：</strong>";
-        if (isHeating) {
-          html += "🔥 加熱中";
-        } else if (isCooling) {
-          html += "❄️ 制冷中";
-        } else {
-          html += "⏸️ 待機";
-        }
-        html += "</p>";
-        html += "</div>";
-        
-        html += "<div style=\"text-align:center;margin:15px 0;\">";
-        html += "<button onclick=\"window.location.reload()\" class=\"button\">🔄 刷新狀態</button>";
-        html += "</div>";
-        
-        html += "<div class=\"warning\">";
-        html += "<h3>💡 使用說明</h3>";
-        html += "<p><strong>模擬邏輯：</strong></p>";
-        html += "<ul>";
-        html += "<li>🔧 這是模擬模式，所有操作都是虛擬的</li>";
-        html += "<li>📱 HomeKit指令會即時反映在這裡</li>";
-        html += "<li>🌡️ 溫度會根據運行模式自動變化</li>";
-        html += "<li>🔄 點擊「刷新狀態」按鈕查看最新狀態</li>";
-        html += "<li>⚡ 可手動控制電源、模式和溫度參數</li>";
-        html += "</ul>";
-        html += "</div>";
-        
-        // 手動控制表單
-        html += "<form action=\"" + saveEndpoint + "\" method=\"POST\">";
-        html += "<h3>🎛️ 手動控制</h3>";
-        
-        html += "<div class=\"form-group\">";
-        html += "<label for=\"power\">電源控制:</label>";
-        html += "<select id=\"power\" name=\"power\">";
-        html += "<option value=\"1\"" + String(power ? " selected" : "") + ">開啟</option>";
-        html += "<option value=\"0\"" + String(!power ? " selected" : "") + ">關閉</option>";
-        html += "</select>";
-        html += "</div>";
-        
-        html += "<div class=\"form-group\">";
-        html += "<label for=\"mode\">運行模式:</label>";
-        html += "<select id=\"mode\" name=\"mode\">";
-        html += "<option value=\"0\"" + String(mode == 0 ? " selected" : "") + ">關閉</option>";
-        html += "<option value=\"1\"" + String(mode == 1 ? " selected" : "") + ">制熱</option>";
-        html += "<option value=\"2\"" + String(mode == 2 ? " selected" : "") + ">制冷</option>";
-        html += "<option value=\"3\"" + String(mode == 3 ? " selected" : "") + ">自動</option>";
-        html += "</select>";
-        html += "</div>";
-        
-        html += "<div class=\"form-group\">";
-        html += "<label for=\"target_temp\">目標溫度 (°C):</label>";
-        html += "<input type=\"number\" id=\"target_temp\" name=\"target_temp\" ";
-        html += "min=\"16\" max=\"30\" step=\"0.5\" ";
-        html += "value=\"" + String(targetTemp, 1) + "\">";
-        html += "</div>";
-        
-        html += "<div class=\"form-group\">";
-        html += "<label for=\"current_temp\">設置當前溫度 (°C):</label>";
-        html += "<input type=\"number\" id=\"current_temp\" name=\"current_temp\" ";
-        html += "min=\"10\" max=\"40\" step=\"0.1\" ";
-        html += "value=\"" + String(currentTemp, 1) + "\">";
-        html += "</div>";
-        
-        html += "<div class=\"form-group\">";
-        html += "<label for=\"room_temp\">設置環境溫度 (°C):</label>";
-        html += "<input type=\"number\" id=\"room_temp\" name=\"room_temp\" ";
-        html += "min=\"10\" max=\"40\" step=\"0.1\" ";
-        html += "value=\"" + String(roomTemp, 1) + "\">";
-        html += "</div>";
-        
-        html += "<div style=\"text-align:center;margin:20px 0;\">";
-        html += "<button type=\"submit\" class=\"button\">🔄 應用設置</button>";
-        html += "</div>";
-        html += "</form>";
-        
-        html += "<div style=\"text-align:center;margin:20px 0;\">";
-        html += "<a href=\"/\" style=\"color:#007cba;text-decoration:none;\">⬅️ 返回主頁</a> | ";
-        html += "<a href=\"/simulation-toggle\" style=\"color:#dc3545;text-decoration:none;\">🔄 切換到真實模式</a>";
-        html += "</div>";
-        
-        html += "</div>";
-        html += getPageFooter();
-        return html;
+        const char* runStatus = isHeating ? "🔥 加熱中" : (isCooling ? "❄️ 制冷中" : "⏸️ 待機");
+
+        append("<div class=\"status-card\"><h3>📊 當前狀態</h3><p><strong>電源：</strong>%s</p><p><strong>模式：</strong>%d %s</p><p><strong>當前溫度：</strong>%.1f°C</p><p><strong>目標溫度：</strong>%.1f°C</p><p><strong>環境溫度：</strong>%.1f°C</p><p><strong>運行狀態：</strong>%s</p></div>", power ? "開啟" : "關閉", mode, modeText, currentTemp, targetTemp, roomTemp, runStatus);
+        append("<div style=\"text-align:center;margin:15px 0;\"><button onclick=\"window.location.reload()\" class=\"button\">🔄 刷新狀態</button></div>");
+        append("<div class=\"warning\"><h3>💡 使用說明</h3><ul><li>🔧 這是模擬模式，所有操作都是虛擬的</li><li>📱 HomeKit指令會即時反映在這裡</li><li>🌡️ 溫度會根據運行模式自動變化</li><li>🔄 點擊「刷新狀態」按鈕查看最新狀態</li><li>⚡ 可手動控制電源、模式和溫度參數</li></ul></div>");
+        append("<form action=\"%s\" method=\"POST\"><h3>🎛️ 手動控制</h3>", saveEndpoint.c_str());
+        append("<div class=\"form-group\"><label for=\"power\">電源控制:</label><select id=\"power\" name=\"power\"><option value=\"1\"%s>開啟</option><option value=\"0\"%s>關閉</option></select></div>", power ? " selected" : "", !power ? " selected" : "");
+        append("<div class=\"form-group\"><label for=\"mode\">運行模式:</label><select id=\"mode\" name=\"mode\"><option value=\"0\"%s>關閉</option><option value=\"1\"%s>制熱</option><option value=\"2\"%s>制冷</option><option value=\"3\"%s>自動</option></select></div>", mode == 0 ? " selected" : "", mode == 1 ? " selected" : "", mode == 2 ? " selected" : "", mode == 3 ? " selected" : "");
+        append("<div class=\"form-group\"><label for=\"target_temp\">目標溫度 (°C):</label><input type=\"number\" id=\"target_temp\" name=\"target_temp\" min=\"16\" max=\"30\" step=\"0.5\" value=\"%.1f\"></div>", targetTemp);
+        append("<div class=\"form-group\"><label for=\"current_temp\">設置當前溫度 (°C):</label><input type=\"number\" id=\"current_temp\" name=\"current_temp\" min=\"10\" max=\"40\" step=\"0.1\" value=\"%.1f\"></div>", currentTemp);
+        append("<div class=\"form-group\"><label for=\"room_temp\">設置環境溫度 (°C):</label><input type=\"number\" id=\"room_temp\" name=\"room_temp\" min=\"10\" max=\"40\" step=\"0.1\" value=\"%.1f\"></div>", roomTemp);
+        append("<div style=\"text-align:center;margin:20px 0;\"><button type=\"submit\" class=\"button\">🔄 應用設置</button></div></form>");
+        append("<div style=\"text-align:center;margin:20px 0;\"><a href=\"/\" class=\"button secondary\">⬅️ 返回主頁</a><a href=\"/simulation-toggle\" class=\"button danger\">🔄 切換到真實模式</a></div></div>");
+        append("</body></html>");
+
+        return String(buffer.get());
     }
 
     /**
-     * 取得模擬模式切換確認頁面
+     * 取得模擬模式切換確認頁面 (記憶體優化版本)
      */
     String getSimulationTogglePage(const String& confirmEndpoint = "/simulation-toggle-confirm",
                                   bool currentMode = false) {
-        String html = getPageHeader("切換運行模式");
-        html += "<div class=\"container\">";
-        html += "<h1>🔄 切換運行模式</h1>";
+        const size_t bufferSize = 3072;
+        auto buffer = std::make_unique<char[]>(bufferSize);
+        if (!buffer) { return "<div class='error'>Memory allocation failed.</div>"; }
+
+        char* p = buffer.get();
+        int remaining = bufferSize;
+        int written;
+        bool overflow = false;
+
+        auto append = [&](const char* format, ...) {
+            if (remaining <= 10 || overflow) {
+                overflow = true;
+                return;
+            }
+            va_list args;
+            va_start(args, format);
+            written = vsnprintf(p, remaining, format, args);
+            va_end(args);
+            if (written > 0 && written < remaining) {
+                p += written;
+                remaining -= written;
+            } else {
+                overflow = true;
+            }
+        };
+
+        append("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>切換運行模式</title><style>%s</style></head><body>", getCompactCSS().c_str());
+        append("<div class=\"container\"><h1>🔄 切換運行模式</h1>");
+        append("<div class=\"warning\"><h3>⚠️ 重要提醒</h3><p>當前模式：%s</p><p>切換模式將會：</p><ul><li>重新啟動設備</li><li>重新初始化控制器</li><li>%s</li></ul></div>", currentMode ? "🔧 模擬模式" : "🏭 真實模式", currentMode ? "啟用真實空調通訊（需要連接S21協議線路）" : "停用真實空調通訊，啟用模擬功能");
         
-        html += "<div class=\"warning\">";
-        html += "<h3>⚠️ 重要提醒</h3>";
-        html += "<p>當前模式：" + String(currentMode ? "🔧 模擬模式" : "🏭 真實模式") + "</p>";
-        html += "<p>切換模式將會：</p>";
-        html += "<ul>";
-        html += "<li>重新啟動設備</li>";
-        html += "<li>重新初始化控制器</li>";
-        if (currentMode) {
-          html += "<li>啟用真實空調通訊（需要連接S21協議線路）</li>";
-        } else {
-          html += "<li>停用真實空調通訊，啟用模擬功能</li>";
+        const char* targetMode = currentMode ? "真實模式" : "模擬模式";
+        const char* targetIcon = currentMode ? "🏭" : "🔧";
+
+        append("<div style=\"text-align:center;margin:20px 0;\"><form action=\"%s\" method=\"POST\" style=\"display:inline;\"><button type=\"submit\" class=\"button danger\">%s 切換到%s</button></form></div>", confirmEndpoint.c_str(), targetIcon, targetMode);
+        append("<div style=\"text-align:center;margin:20px 0;\"><a href=\"/\" class=\"button secondary\">⬅️ 返回主頁</a></div></div>");
+        append("</body></html>");
+
+        if (overflow) {
+            return "<div style='color:red;'>Error: HTML too large for buffer (" + String(bufferSize) + " bytes)</div>";
         }
-        html += "</ul>";
-        html += "</div>";
-        
-        String targetMode = currentMode ? "真實模式" : "模擬模式";
-        String targetIcon = currentMode ? "🏭" : "🔧";
-        
-        html += "<div style=\"text-align:center;margin:20px 0;\">";
-        html += "<form action=\"" + confirmEndpoint + "\" method=\"POST\" style=\"display:inline;\">";
-        html += "<button type=\"submit\" class=\"button danger\">" + targetIcon + " 切換到" + targetMode + "</button>";
-        html += "</form>";
-        html += "</div>";
-        
-        html += "<div style=\"text-align:center;margin:20px 0;\">";
-        html += "<a href=\"/\" style=\"color:#007cba;text-decoration:none;\">⬅️ 取消並返回主頁</a>";
-        html += "</div>";
-        
-        html += "</div>";
-        html += getPageFooter();
-        return html;
+        return String(buffer.get());
     }
 
 } // namespace WebUI

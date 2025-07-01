@@ -212,63 +212,84 @@ public:
         return stats;
     }
     
-    // 生成 HTML 日誌頁面
+    // 生成 HTML 日誌頁面 (記憶體優化版本)
     String generateLogHTML() {
         std::lock_guard<std::mutex> lock(logMutex);
         LogStats stats = getStats();
-        
-        // 進一步減少顯示條目數量
+
         const size_t MAX_DISPLAY_ENTRIES = 20;
         size_t displayCount = std::min(logBuffer.size(), MAX_DISPLAY_ENTRIES);
-        
-        // 使用更簡單的 HTML 結構
-        String html;
-        html.reserve(2048); // 預分配記憶體
-        
-        html = "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">";
-        html += "<title>DaiSpan Logs</title>";
-        html += "<style>body{font-family:monospace;margin:10px;background:#f0f0f0;}";
-        html += ".container{max-width:800px;margin:0 auto;background:white;padding:15px;border-radius:5px;}";
-        html += "h1{color:#333;text-align:center;margin:10px;}";
-        html += ".button{padding:5px 10px;margin:3px;background:#007cba;color:white;text-decoration:none;border-radius:3px;}";
-        html += ".stats{background:#e8f4f8;padding:10px;border-radius:3px;margin:10px 0;}";
-        html += ".log-container{background:#000;color:#0f0;padding:10px;border-radius:3px;max-height:300px;overflow-y:auto;font-size:11px;}";
-        html += "</style></head><body><div class=\"container\">";
-        html += "<h1>DaiSpan System Logs</h1>";
-        
-        // 控制按鈕
-        html += "<div style=\"text-align:center;\">";
-        html += "<button onclick=\"location.reload()\" class=\"button\">Refresh</button>";
-        html += "<button onclick=\"clearLogs()\" class=\"button\">Clear</button>";
-        html += "<a href=\"/\" class=\"button\">Back</a></div>";
-        
-        // 統計信息
-        html += "<div class=\"stats\"><h3>Stats</h3><p>Total: " + String(stats.totalEntries);
-        if (displayCount < stats.totalEntries) {
-            html += " (latest " + String(displayCount) + ")";
+
+        // 分配一個足夠大的緩衝區來構建HTML，避免String串接造成的記憶體碎片。
+        const size_t bufferSize = 3072;
+        auto buffer = std::make_unique<char[]>(bufferSize);
+        if (!buffer) {
+            log(LogLevel::CRITICAL, "LogManager", "Failed to allocate memory for HTML log page.");
+            return "<!DOCTYPE html><html><body><h1>Error: Not enough memory to display logs.</h1></body></html>";
         }
-        html += " | INFO: " + String(stats.infoCount);
-        html += " | WARN: " + String(stats.warningCount);
-        html += " | ERR: " + String(stats.errorCount) + "</p></div>";
+
+        char* p = buffer.get();
+        int remaining = bufferSize;
+        int written;
+
+        // 安全地附加內容到緩衝區的輔助 Lambda
+        auto append = [&](const char* format, ...) {
+            if (remaining <= 1) return;
+            va_list args;
+            va_start(args, format);
+            written = vsnprintf(p, remaining, format, args);
+            va_end(args);
+            if (written > 0) {
+                p += written;
+                remaining -= written;
+            }
+        };
+
+        append("<!DOCTYPE html><html><head><meta charset=\"UTF-8\">");
+        append("<title>DaiSpan Logs</title>");
+        append("<style>body{font-family:monospace;margin:10px;background:#f0f0f0;}");
+        append(".container{max-width:800px;margin:0 auto;background:white;padding:15px;border-radius:5px;}");
+        append("h1{color:#333;text-align:center;margin:10px;}");
+        append(".button{padding:5px 10px;margin:3px;background:#007cba;color:white;text-decoration:none;border-radius:3px;}");
+        append(".stats{background:#e8f4f8;padding:10px;border-radius:3px;margin:10px 0;}");
+        append(".log-container{background:#000;color:#0f0;padding:10px;border-radius:3px;max-height:300px;overflow-y:auto;font-size:11px;}");
+        append("</style></head><body><div class=\"container\">");
+        append("<h1>DaiSpan System Logs</h1>");
         
-        // 日誌內容 - 只顯示最新的條目
-        html += "<div class=\"log-container\">";
+        append("<div style=\"text-align:center;\">");
+        append("<button onclick=\"location.reload()\" class=\"button\">Refresh</button>");
+        append("<button onclick=\"clearLogs()\" class=\"button\">Clear</button>");
+        append("<a href=\"/\" class=\"button\">Back</a></div>");
+        
+        append("<div class=\"stats\"><h3>Stats</h3><p>Total: %d", stats.totalEntries);
+        if (displayCount < stats.totalEntries) {
+            append(" (latest %d)", displayCount);
+        }
+        append(" | INFO: %d", stats.infoCount);
+        append(" | WARN: %d", stats.warningCount);
+        append(" | ERR: %d</p></div>", stats.errorCount);
+        
+        append("<div class=\"log-container\">");
         if (logBuffer.size() > 0) {
             size_t startIndex = logBuffer.size() > displayCount ? logBuffer.size() - displayCount : 0;
             for (size_t i = startIndex; i < logBuffer.size(); i++) {
+                if (remaining < 256) { // 為最後的日誌條目保留足夠空間，避免溢出
+                    append("...<br>");
+                    break;
+                }
                 const auto& entry = logBuffer[i];
-                html += "[" + String(entry.timestamp) + "][" + String(getLevelString(entry.level)) + "][" + entry.component + "] " + entry.message + "<br>";
+                // 注意：此處未對 entry.message 進行HTML轉義，假設日誌內容是安全的
+                append("[%lu][%s][%s] %s<br>", entry.timestamp, getLevelString(entry.level), entry.component.c_str(), entry.message.c_str());
             }
         } else {
-            html += "No logs";
+            append("No logs");
         }
-        html += "</div>";
+        append("</div>");
         
-        // JavaScript
-        html += "<script>function clearLogs(){if(confirm('Clear?')){fetch('/logs-clear',{method:'POST'}).then(()=>location.reload());}}</script>";
-        html += "</div></body></html>";
+        append("<script>function clearLogs(){if(confirm('Clear?')){fetch('/logs-clear',{method:'POST'}).then(()=>location.reload());}}</script>");
+        append("</div></body></html>");
         
-        return html;
+        return String(buffer.get());
     }
     
     // 生成 JSON 格式的日誌

@@ -10,14 +10,14 @@ DaiSpan is an ESP32-based HomeKit smart thermostat that controls Daikin air cond
 
 ### Build and Deploy
 ```bash
-# Build firmware (default target: ESP32-S3-USB)
+# Build firmware (default target: ESP32-C3 SuperMini)
 pio run
 
 # Upload via USB (default method)
 pio run -t upload
 
 # Upload via OTA
-pio run -e esp32-s3-ota -t upload
+pio run -e esp32-c3-supermini-ota -t upload
 
 # Monitor serial output
 pio device monitor
@@ -41,7 +41,7 @@ pio run -e esp32-s3-usb -t upload
 pio run -e esp32-s3-ota -t upload
 ```
 
-**Note**: For OTA uploads, ensure the device IP address is correctly set in `platformio.ini` under `[env:esp32-s3-ota]` section.
+**Note**: For OTA uploads, ensure the device IP address is correctly set in `platformio.ini` under the respective OTA environment section. The default OTA authentication password is `12345678`.
 
 ### Multi-Board Support
 
@@ -174,3 +174,19 @@ Uses HomeSpan library for HomeKit compatibility:
 - Protocol abstraction allows unit testing of business logic
 - Web interface provides manual testing capabilities
 - Serial monitor shows detailed debug logs with Chinese descriptions
+
+### Testing and Monitoring Scripts
+The `scripts/` directory contains Python and shell tools for device testing:
+
+```bash
+# Quick device status check
+python3 scripts/quick_check.py [device_ip]
+
+# Long-term stability testing (24 hours, check every 5 minutes)
+python3 scripts/long_term_test.py 192.168.4.1 24 5
+
+# Continuous background monitoring
+./scripts/resource_monitor.sh 192.168.4.1 [interval_seconds]
+```
+
+**Dependencies**: Install Python `requests` library and system tools (`bc`, `curl`)
