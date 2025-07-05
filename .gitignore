@@ -1,0 +1,103 @@
+# ===================================
+# PlatformIO Project .gitignore
+# ===================================
+
+# PlatformIO Build System
+.pio/
+.pioenvs/
+.piolibdeps/
+.pio/build/
+.pio/libdeps/
+
+# VSCode Workspace
+.vscode/.browse.c_cpp.db*
+.vscode/c_cpp_properties.json
+.vscode/launch.json
+.vscode/ipch/
+# Keep settings and extensions for team consistency
+# .vscode/settings.json
+# .vscode/extensions.json
+
+# Build Artifacts
+build/
+*.bin
+*.elf
+*.hex
+*.map
+*.o
+*.a
+*.so
+*.exe
+
+# ESP32/Arduino Specific
+*.partitions
+firmware*.bin
+bootloader*.bin
+partitions*.bin
+
+# System Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Logs and Debug Files
+*.log
+debug.txt
+debug/
+logs/
+monitor*.log
+daispan_resource_*.log
+
+# Temporary Files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+*.bak
+*.backup
+*.orig
+
+# Environment and Secrets
+.env
+.env.local
+.env.production
+*.key
+*.pem
+credentials.json
+
+# Tracking and Upload Files
+usage_tracking*.json
+uploads/*.json
+*.upload
+
+# Documentation Build
+docs/_build/
+docs/build/
+
+# IDE Files
+*.sublime-project
+*.sublime-workspace
+.idea/
+*.iml
+
+# OS Generated
+.directory
+.fseventsd
+.DocumentRevisions-V100
+.TemporaryItems
+.fuse_hidden*
+
+# Development Notes (uncomment if you want to ignore)
+# notes/private/
+# TODO.md
+
+# Test Artifacts
+test_results/
+coverage/
+*.coverage

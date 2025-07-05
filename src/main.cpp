@@ -8,6 +8,7 @@
 #include "common/Debug.h"
 #include "common/Config.h"
 #include "common/WiFiManager.h"
+#include "common/SystemManager.h"
 #include <ArduinoOTA.h>
 #include "common/OTAManager.h"
 #include "WiFi.h"
@@ -42,6 +43,9 @@ bool homeKitInitialized = false;
 ConfigManager configManager;
 WiFiManager* wifiManager = nullptr;
 OTAManager* otaManager = nullptr;
+
+// 系統管理器
+SystemManager* systemManager = nullptr;
 
 // WebServer用於HomeKit模式下的只讀監控
 WebServer* webServer = nullptr;
@@ -830,208 +834,75 @@ void setup() {
     // WiFi連接失敗，啟動AP模式
     wifiManager->begin();
   }
+  
+  // 初始化系統管理器
+  systemManager = new SystemManager(
+    configManager, wifiManager, webServer,
+    thermostatController, mockController, thermostatDevice,
+    deviceInitialized, homeKitInitialized, monitoringEnabled, homeKitPairingActive
+  );
+  
+  DEBUG_INFO_PRINT("[Main] 系統管理器初始化完成\n");
 }
 
 void loop() {
-  static unsigned long lastLoopTime = 0;
-  unsigned long currentTime = millis();
-  
-  #if defined(ESP32C3_SUPER_MINI)
-    // ESP32-C3 WiFi穩定性改進 - 減少頻繁的功率調整
-    static unsigned long lastPowerCheck = 0;
-    if (millis() - lastPowerCheck >= 30000) { // 每30秒檢查一次，而不是每次loop
-      lastPowerCheck = millis();
-      if (WiFi.status() == WL_DISCONNECTED && WiFi.getTxPower() != WIFI_POWER_8_5dBm) {
-        WiFi.setTxPower(WIFI_POWER_8_5dBm);
-        DEBUG_VERBOSE_PRINT("[Main] ESP32-C3 調整WiFi功率為節能模式\n");
-      }
-    }
-  #endif
-
-  // 處理Arduino OTA（高優先級，頻繁調用）
-  if (WiFi.status() == WL_CONNECTED) {
-    ArduinoOTA.handle();
-  }
-  
-  // 根據模式處理不同的邏輯
-  if (homeKitInitialized) {
-    // HomeKit模式：處理HomeSpan、WebServer和OTA
-    // 優化處理順序，避免資源競爭
+  // 使用系統管理器處理主迴圈邏輯
+  if (systemManager) {
+    systemManager->processMainLoop();
     
-    // 檢查是否需要延遲啟動WebServer（針對setup()路徑）
-    static unsigned long homeKitReadyTime = 0;
-    static bool webServerStartScheduled = false;
-    static bool homeKitStabilized = false;
-    
-    if (!webServerStartScheduled && !monitoringEnabled) {
-      homeKitReadyTime = millis();
-      webServerStartScheduled = true;
-      DEBUG_INFO_PRINT("[Main] WebServer將在HomeKit穩定後啟動（延遲5秒）\n");
-    }
-    
-    // 等待5秒讓HomeKit完全穩定，然後再啟動WebServer
-    if (webServerStartScheduled && !monitoringEnabled && 
-        millis() - homeKitReadyTime >= 5000 && !homeKitPairingActive) {
-      DEBUG_INFO_PRINT("[Main] HomeKit已穩定，開始啟動WebServer（setup路徑）\n");
+    // 檢查是否需要啟動監控
+    if (systemManager->shouldStartMonitoring()) {
+      DEBUG_INFO_PRINT("[Main] 系統管理器請求啟動監控\n");
       initializeMonitoring();
-      homeKitStabilized = true;
     }
     
-    // 優先處理 HomeKit (最重要)
-    homeSpan.poll();
-    
-    // 簡化的 HomeKit 配對狀態檢測 - 減少記憶體監控負擔
-    static unsigned long lastPairingCheck = 0;
-    static bool wasPairing = false;
-    static int pairingDetectionCounter = 0;
-    
-    if (currentTime - lastPairingCheck >= 5000) { // 減少檢查頻率至5秒
-      lastPairingCheck = currentTime;
-      
-      // 簡化的配對檢測：主要基於WebServer的響應性而不是記憶體監控
-      uint32_t currentMemory = ESP.getFreeHeap();
-      
-      // 更寬鬆的記憶體變化檢測，避免誤判
-      static uint32_t avgMemory = currentMemory;
-      avgMemory = (avgMemory * 3 + currentMemory) / 4; // 移動平均
-      
-      bool significantMemoryDrop = currentMemory < avgMemory - 20000; // 20KB以上的記憶體下降
-      
-      if (significantMemoryDrop) {
-        pairingDetectionCounter++;
+    // 處理配置模式（WiFi管理器）
+    if (wifiManager) {
+      // 檢查是否WiFi已連接但HomeKit未初始化（需要啟動HomeKit）
+      if (WiFi.status() == WL_CONNECTED && !homeKitInitialized && !deviceInitialized) {
+        DEBUG_INFO_PRINT("[Main] WiFi已連接，開始初始化HomeKit...\n");
+        
+        // 先停止 AP 模式，防止模式衝突
+        if (wifiManager->isInAPMode()) {
+          wifiManager->stopAPMode();
+          delay(500); // 等待 AP 模式完全停止
+        }
+        
+        // 清理WiFi管理器
+        delete wifiManager;
+        wifiManager = nullptr;
+        
+        // 初始化硬件組件
+        initializeHardware();
+        
+        // 初始化HomeKit
+        initializeHomeKit();
+        
+        DEBUG_INFO_PRINT("[Main] HomeKit初始化完成\n");
       } else {
-        pairingDetectionCounter = 0;
-      }
-      
-      // 連續檢測到記憶體下降才認為在配對
-      homeKitPairingActive = (pairingDetectionCounter >= 2);
-      
-      // 記錄配對狀態變化
-      if (homeKitPairingActive != wasPairing) {
-        DEBUG_INFO_PRINT("[Main] HomeKit配對狀態變化: %s (記憶體: %d bytes)\n", 
-                         homeKitPairingActive ? "配對中" : "空閒", currentMemory);
-        wasPairing = homeKitPairingActive;
+        // 配置模式：處理WiFi管理器
+        wifiManager->loop();
       }
     }
+  } else {
+    // 降級處理：如果系統管理器未初始化，仍處理基本功能
+    DEBUG_ERROR_PRINT("[Main] 系統管理器未初始化，使用降級模式\n");
     
-    // 改進的WebServer處理 - 更智能的頻率控制
-    if (!homeKitPairingActive && monitoringEnabled && webServer) {
-      static unsigned long lastWebServerHandle = 0;
-      static int webServerSkipCounter = 0;
-      
-      // 根據記憶體情況動態調整WebServer處理頻率
-      uint32_t freeMemory = ESP.getFreeHeap();
-      unsigned long handleInterval;
-      
-      if (freeMemory < 60000) {
-        handleInterval = 200; // 記憶體緊張時降低頻率
-        webServerSkipCounter++;
-      } else if (freeMemory < 80000) {
-        handleInterval = 100; // 中等記憶體時中等頻率
-      } else {
-        handleInterval = 50;  // 記憶體充足時正常頻率
-        webServerSkipCounter = 0;
-      }
-      
-      // 記憶體嚴重不足時偶爾跳過WebServer處理
-      bool shouldSkip = (webServerSkipCounter > 10 && (webServerSkipCounter % 3) != 0);
-      
-      if (!shouldSkip && currentTime - lastWebServerHandle >= handleInterval) {
-        webServer->handleClient();
-        lastWebServerHandle = currentTime;
-      }
-    }
-    
-    // OTA 處理（低優先級）
-    static unsigned long lastOTAHandle = 0;
-    if (currentTime - lastOTAHandle >= 100) { // 限制每100ms處理一次
+    // 基本 OTA 處理
+    if (WiFi.status() == WL_CONNECTED) {
       ArduinoOTA.handle();
-      lastOTAHandle = currentTime;
     }
-  } else if (wifiManager) {
-    // 檢查是否WiFi已連接但HomeKit未初始化（需要啟動HomeKit）
-    if (WiFi.status() == WL_CONNECTED && !homeKitInitialized && !deviceInitialized) {
-      DEBUG_INFO_PRINT("[Main] WiFi已連接，開始初始化HomeKit...\n");
-      
-      // 先停止 AP 模式，防止模式衝突
-      if (wifiManager->isInAPMode()) {
-        wifiManager->stopAPMode();
-        delay(500); // 等待 AP 模式完全停止
-      }
-      
-      // 清理WiFi管理器
-      delete wifiManager;
-      wifiManager = nullptr;
-      
-      // 初始化硬件組件
-      initializeHardware();
-      
-      // 初始化HomeKit
-      initializeHomeKit();
-      
-      // 延遲啟動監控以避免阻塞 (使用非阻塞方式)
-      static unsigned long homeKitInitTime = 0;
-      static bool monitoringScheduled = false;
-      
-      if (!monitoringScheduled) {
-        homeKitInitTime = millis();
-        monitoringScheduled = true;
-        DEBUG_INFO_PRINT("[Main] WebServer監控將在HomeKit穩定後啟動（延遲5秒）\n");
-      }
-      
-      // 5秒後非阻塞啟動監控，確保HomeKit完全穩定
-      if (monitoringScheduled && millis() - homeKitInitTime >= 5000 && !monitoringEnabled) {
-        DEBUG_INFO_PRINT("[Main] HomeKit已穩定，開始啟動WebServer監控\n");
-        initializeMonitoring();
-      }
-      
-      DEBUG_INFO_PRINT("[Main] HomeKit初始化完成\n");
-    } else {
-      // 配置模式：處理WiFi管理器
+    
+    // 基本 HomeKit 處理
+    if (homeKitInitialized) {
+      homeSpan.poll();
+    }
+    
+    // 基本 WiFi 管理
+    if (wifiManager) {
       wifiManager->loop();
     }
-  }
-
-  // 每5秒輸出一次心跳信息
-  if (currentTime - lastLoopTime >= HEARTBEAT_INTERVAL) {
-    String mode = "";
-    if (homeKitInitialized) {
-      mode = "HomeKit模式";
-    } else if (wifiManager && wifiManager->isInAPMode()) {
-      mode = "WiFi配置模式";
-    } else {
-      mode = "初始化中";
-    }
     
-    DEBUG_INFO_PRINT("[Main] 主循環運行中... 模式：%s，WiFi：%s，設備：%s，IP：%s\n", 
-                     mode.c_str(),
-                     WiFi.status() == WL_CONNECTED ? "已連接" : "未連接",
-                     deviceInitialized ? "已初始化" : "未初始化",
-                     WiFi.localIP().toString().c_str());
-    
-    // 如果是HomeKit模式，顯示詳細狀態
-    if (homeKitInitialized) {
-      // 記憶體監控和分析
-      static uint32_t minMemory = ESP.getFreeHeap();
-      static uint32_t maxMemory = ESP.getFreeHeap();
-      uint32_t currentMemory = ESP.getFreeHeap();
-      
-      if (currentMemory < minMemory) minMemory = currentMemory;
-      if (currentMemory > maxMemory) maxMemory = currentMemory;
-      
-      DEBUG_INFO_PRINT("[Main] HomeKit狀態 - WiFi: %d dBm, 記憶體: %d bytes (最小:%d, 最大:%d), WebServer: %s, 配對中: %s\n", 
-                       WiFi.RSSI(), 
-                       currentMemory,
-                       minMemory,
-                       maxMemory,
-                       monitoringEnabled ? "啟用" : "停用",
-                       homeKitPairingActive ? "是" : "否");
-      
-      // 記憶體警告
-      if (currentMemory < 80000) {
-        DEBUG_ERROR_PRINT("[Main] ⚠️ 記憶體不足警告: %d bytes\n", currentMemory);
-      }
-    }
-    lastLoopTime = currentTime;
+    delay(50); // 防止過度消耗 CPU
   }
 }
