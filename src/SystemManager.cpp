@@ -62,6 +62,12 @@ void SystemManager::processMainLoop() {
 void SystemManager::handleOptimizedTimingTasks(unsigned long currentTime) {
     // 高性能統一定時檢查 - 一次檢查所有定時器
     
+    // 全局WiFi監控 (最高優先級 - 快速重連)
+    if (currentTime >= state.nextWiFiCheck) {
+        state.nextWiFiCheck = currentTime + 15000; // 15秒檢查間隔
+        handleGlobalWiFiMonitoring(currentTime);
+    }
+    
     // ESP32-C3 功率管理檢查
     if (currentTime >= state.nextPowerCheck) {
         state.nextPowerCheck = currentTime + POWER_CHECK_INTERVAL;
@@ -101,6 +107,60 @@ void SystemManager::handleOptimizedTimingTasks(unsigned long currentTime) {
     if (currentTime >= state.nextHeartbeat) {
         state.nextHeartbeat = currentTime + SYSTEM_HEARTBEAT_INTERVAL;
         printHeartbeatInfo(currentTime);
+    }
+}
+
+void SystemManager::handleGlobalWiFiMonitoring(unsigned long currentTime) {
+    // 全局WiFi監控 - 即使在HomeKit模式下也要確保WiFi連接
+    static unsigned long lastWiFiReconnectAttempt = 0;
+    static int wifiFailureCount = 0;
+    
+    wl_status_t wifiStatus = WiFi.status();
+    
+    if (wifiStatus != WL_CONNECTED) {
+        wifiFailureCount++;
+        DEBUG_WARN_PRINT("[SystemManager] WiFi斷線檢測 (狀態: %d, 失敗計數: %d)\n", wifiStatus, wifiFailureCount);
+        
+        // 快速重連策略：30秒間隔，不等待多次失敗
+        if (currentTime - lastWiFiReconnectAttempt >= 30000) { // 30秒重連間隔
+            lastWiFiReconnectAttempt = currentTime;
+            
+            // 獲取WiFi憑證
+            String ssid = configManager.getWiFiSSID();
+            String password = configManager.getWiFiPassword();
+            
+            if (ssid.length() > 0 && ssid != "UNCONFIGURED_SSID") {
+                DEBUG_INFO_PRINT("[SystemManager] 全局WiFi重連嘗試 - SSID: %s\n", ssid.c_str());
+                
+                // 溫和的重連策略
+                WiFi.disconnect(false);
+                delay(100);
+                WiFi.begin(ssid.c_str(), password.c_str());
+                
+                // 非阻塞等待連接建立
+                unsigned long connectStart = millis();
+                while (WiFi.status() != WL_CONNECTED && millis() - connectStart < 10000) {
+                    delay(100);
+                    // 允許其他任務繼續執行
+                    if (homeKitInitialized) {
+                        homeSpan.poll();
+                    }
+                }
+                
+                if (WiFi.status() == WL_CONNECTED) {
+                    wifiFailureCount = 0; // 重置失敗計數
+                    DEBUG_INFO_PRINT("[SystemManager] WiFi重連成功 - IP: %s\n", WiFi.localIP().toString().c_str());
+                } else {
+                    DEBUG_ERROR_PRINT("[SystemManager] WiFi重連失敗 (嘗試 %d 次)\n", wifiFailureCount);
+                }
+            }
+        }
+    } else {
+        // WiFi已連接，重置失敗計數
+        if (wifiFailureCount > 0) {
+            DEBUG_INFO_PRINT("[SystemManager] WiFi連接恢復正常\n");
+            wifiFailureCount = 0;
+        }
     }
 }
 

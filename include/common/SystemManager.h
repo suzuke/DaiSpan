@@ -26,6 +26,7 @@ private:
         unsigned long nextPairingCheck;
         unsigned long nextHeartbeat;
         unsigned long nextWebServerHandle;
+        unsigned long nextWiFiCheck;
         unsigned long homeKitReadyTime;
         
         // 狀態標誌
@@ -40,7 +41,7 @@ private:
         uint16_t fastLoopDivider;
         
         OptimizedTimingSystem() : nextPowerCheck(0), nextPairingCheck(0), nextHeartbeat(0),
-                                 nextWebServerHandle(0), homeKitReadyTime(0),
+                                 nextWebServerHandle(0), nextWiFiCheck(0), homeKitReadyTime(0),
                                  webServerStartScheduled(false), homeKitStabilized(false),
                                  wasPairing(false), webServerSkipCounter(0), avgMemory(0),
                                  loopCounter(0), fastLoopDivider(100) {}
@@ -63,6 +64,7 @@ private:
     // 私有方法
     void handleOptimizedTimingTasks(unsigned long currentTime);
     void handleESP32C3PowerManagement(unsigned long currentTime);
+    void handleGlobalWiFiMonitoring(unsigned long currentTime);
     void handleOTAUpdates();
     void handleHomeKitMode(unsigned long currentTime);
     void handleConfigurationMode();

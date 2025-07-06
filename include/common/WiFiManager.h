@@ -33,9 +33,9 @@ private:
     static constexpr int MAX_CONNECTION_ATTEMPTS = 3;
     static constexpr int CONNECTION_TIMEOUT = 15000; // 15 秒 (增加超時時間)
     
-    // 高性能WiFi管理
-    static constexpr unsigned long WIFI_RECONNECT_INTERVAL = 90000;  // 1.5分鐘 (平衡重連頻率)
-    static constexpr unsigned long WIFI_STABILITY_CHECK_INTERVAL = 45000; // 45秒檢查一次
+    // 優化WiFi重連管理 - 快速故障恢復
+    static constexpr unsigned long WIFI_RECONNECT_INTERVAL = 30000;  // 30秒 (快速重連)
+    static constexpr unsigned long WIFI_STABILITY_CHECK_INTERVAL = 15000; // 15秒檢查一次
     static constexpr int WIFI_SIGNAL_THRESHOLD = -75; // 提高RSSI閾值
     unsigned long lastWiFiStabilityCheck;
     int consecutiveFailures;
@@ -749,8 +749,8 @@ public:
                     consecutiveFailures++;
                     DEBUG_WARN_PRINT("[WiFiManager] WiFi斷線檢測 - 連續失敗: %d次\n", consecutiveFailures);
                     
-                    // 只在連續失敗超過閾值且達到重連間隔時才嘗試重連
-                    if (consecutiveFailures >= 2 && 
+                    // 立即嘗試重連，不等待多次失敗
+                    if (consecutiveFailures >= 1 && 
                         currentTime - lastConnectionAttempt >= WIFI_RECONNECT_INTERVAL) {
                         
                         lastConnectionAttempt = currentTime;

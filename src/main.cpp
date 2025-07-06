@@ -699,15 +699,17 @@ void setup() {
   wifiManager = new WiFiManager(configManager);
   
   // 檢查WiFi配置狀態
-  if (!configManager.isWiFiConfigured()) {
+  bool hasWiFiConfig = configManager.isWiFiConfigured();
+  
+  if (!hasWiFiConfig) {
     DEBUG_INFO_PRINT("[Main] 未找到WiFi配置，啟動配置模式\n");
     
     // 啟動AP模式進行WiFi配置（不啟動HomeKit）
     wifiManager->begin();
     
     DEBUG_INFO_PRINT("[Main] 請連接到 DaiSpan-Config 進行WiFi配置\n");
-    return; // 在配置模式下，不啟動HomeKit
-  }
+    // 不要return，繼續初始化SystemManager
+  } else {
   
   // 有WiFi配置，嘗試連接並啟動HomeKit
   DEBUG_INFO_PRINT("[Main] 找到WiFi配置，嘗試連接...\n");
@@ -812,16 +814,6 @@ void setup() {
     // 然後初始化HomeKit（硬件準備好後）
     initializeHomeKit();
     
-    // 先停止 AP 模式（如果正在運行），防止干擾HomeKit
-    if (wifiManager && wifiManager->isInAPMode()) {
-      wifiManager->stopAPMode();
-      delay(500); // 等待 AP 模式完全停止
-    }
-    
-    // 清理WiFi管理器，避免干擾HomeKit
-    delete wifiManager;
-    wifiManager = nullptr;
-    
     // 初始化簡單的OTA功能
     ArduinoOTA.setHostname("DaiSpan-Thermostat");
     ArduinoOTA.begin();
@@ -835,7 +827,10 @@ void setup() {
     wifiManager->begin();
   }
   
-  // 初始化系統管理器
+  } // 結束hasWiFiConfig的else分支
+  
+  // 統一的SystemManager初始化 - 放在setup()的最後
+  // 確保在所有可能的路徑中都能初始化SystemManager
   systemManager = new SystemManager(
     configManager, wifiManager, webServer,
     thermostatController, mockController, thermostatDevice,
@@ -843,6 +838,20 @@ void setup() {
   );
   
   DEBUG_INFO_PRINT("[Main] 系統管理器初始化完成\n");
+  
+  // 如果在HomeKit模式，現在可以安全清理WiFiManager
+  if (homeKitInitialized && wifiManager) {
+    // 先停止 AP 模式（如果正在運行），防止干擾HomeKit
+    if (wifiManager->isInAPMode()) {
+      wifiManager->stopAPMode();
+      delay(500); // 等待 AP 模式完全停止
+    }
+    
+    // 清理WiFi管理器，避免干擾HomeKit
+    delete wifiManager;
+    wifiManager = nullptr;
+    DEBUG_INFO_PRINT("[Main] WiFiManager已清理，進入純HomeKit模式\n");
+  }
 }
 
 void loop() {
