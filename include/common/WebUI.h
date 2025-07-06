@@ -14,9 +14,31 @@ namespace WebUI {
     
     /**
      * 取得極簡CSS樣式 (記憶體優化 - 單一壓縮版本)
+     * 使用 PROGMEM 儲存以節省RAM
      */
-    String getCompactCSS() {
-        return R"(body{font-family:Arial;margin:10px;background:#f0f0f0}.container{max-width:600px;margin:0 auto;background:white;padding:15px;border-radius:5px}h1{color:#333;text-align:center}h2,h3{color:#333}.button{display:inline-block;padding:8px 15px;margin:5px;background:#007cba;color:white;text-decoration:none;border-radius:3px;border:none;cursor:pointer}.button:hover{background:#005a8b}.button.danger{background:#dc3545}.button.secondary{background:#666}.form-group{margin:10px 0}label{display:block;margin-bottom:3px;font-weight:bold}input,select{width:100%;padding:8px;border:1px solid #ddd;border-radius:3px;box-sizing:border-box}input:focus,select:focus{border-color:#007cba;outline:none}.status{background:#e8f4f8;padding:10px;border-radius:3px;margin:10px 0}.warning{background:#fff3cd;padding:10px;border-radius:3px;margin:10px 0}.info{background:#d1ecf1;padding:10px;border-radius:3px;margin:10px 0}.error{background:#f8d7da;color:#721c24;padding:10px;border-radius:3px;margin:10px 0}.status-card{background:#f8f9fa;border:1px solid #dee2e6;border-radius:5px;padding:15px;margin:15px 0}.status-item{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid #eee}.status-item:last-child{border-bottom:none}.status-label{font-weight:bold;color:#495057}.status-value{color:#6c757d}.status-good{color:#28a745}.status-warning{color:#ffc107}.status-error{color:#dc3545}.signal-strength{font-size:0.9em;color:#6c757d}.network-item{cursor:pointer;padding:8px;border:1px solid #ddd;margin:5px;border-radius:3px}.network-item:hover{background:#f8f9fa})";
+    static const char* getCompactCSS() {
+        static const char CSS_CONTENT[] PROGMEM = 
+            "body{font-family:Arial;margin:10px;background:#f0f0f0}"
+            ".container{max-width:600px;margin:0 auto;background:white;padding:15px;border-radius:5px}"
+            "h1{color:#333;text-align:center}h2,h3{color:#333}"
+            ".button{display:inline-block;padding:8px 15px;margin:5px;background:#007cba;color:white;text-decoration:none;border-radius:3px;border:none;cursor:pointer}"
+            ".button:hover{background:#005a8b}.button.danger{background:#dc3545}.button.secondary{background:#666}"
+            ".form-group{margin:10px 0}label{display:block;margin-bottom:3px;font-weight:bold}"
+            "input,select{width:100%;padding:8px;border:1px solid #ddd;border-radius:3px;box-sizing:border-box}"
+            "input:focus,select:focus{border-color:#007cba;outline:none}"
+            ".status{background:#e8f4f8;padding:10px;border-radius:3px;margin:10px 0}"
+            ".warning{background:#fff3cd;padding:10px;border-radius:3px;margin:10px 0}"
+            ".info{background:#d1ecf1;padding:10px;border-radius:3px;margin:10px 0}"
+            ".error{background:#f8d7da;color:#721c24;padding:10px;border-radius:3px;margin:10px 0}"
+            ".status-card{background:#f8f9fa;border:1px solid #dee2e6;border-radius:5px;padding:15px;margin:15px 0}"
+            ".status-item{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid #eee}"
+            ".status-item:last-child{border-bottom:none}"
+            ".status-label{font-weight:bold;color:#495057}.status-value{color:#6c757d}"
+            ".status-good{color:#28a745}.status-warning{color:#ffc107}.status-error{color:#dc3545}"
+            ".signal-strength{font-size:0.9em;color:#6c757d}"
+            ".network-item{cursor:pointer;padding:8px;border:1px solid #ddd;margin:5px;border-radius:3px}"
+            ".network-item:hover{background:#f8f9fa}";
+        return CSS_CONTENT;
     }
     
     /**
@@ -46,7 +68,7 @@ namespace WebUI {
         
         // 使用壓縮的 CSS
         header += "<style>";
-        header += getCompactCSS();
+        header += String(getCompactCSS());
         header += "</style>";
         header += "</head><body>";
         
@@ -77,75 +99,69 @@ namespace WebUI {
     // ==================== 系統狀態元件 (記憶體優化版本) ====================
 
     /**
-     * 取得完整系統狀態卡片 (記憶體優化版本)
-     * 此版本將多個函式合併，並使用固定緩衝區來避免 String 串接造成的記憶體碎片。
+     * 取得完整系統狀態卡片 (高性能流式版本)
+     * 使用高效的字符串流方法，最小化記憶體分配
      */
     String getSystemStatusCard() {
-        // 分配一個足夠大的緩衝區來構建HTML
-        const size_t bufferSize = 2048;
-        auto buffer = std::make_unique<char[]>(bufferSize);
-        if (!buffer) {
-            return "<div class='error'>Memory allocation failed for status card.</div>";
-        }
-
-        char* p = buffer.get();
-        int remaining = bufferSize;
-        int written;
-
-        // 安全地附加內容到緩衝區的輔助 Lambda
-        auto append = [&](const char* format, ...) {
-            if (remaining <= 1) return;
-            va_list args;
-            va_start(args, format);
-            written = vsnprintf(p, remaining, format, args);
-            va_end(args);
-            if (written > 0) {
-                p += written;
-                remaining -= written;
-            }
-        };
-
-        // --- 網路連接卡片 ---
-        append("<div class=\"status-card\"><h3>🌐 網路連接</h3>");
+        // 預估所需容量並使用String.reserve()
+        String html;
+        html.reserve(1400); // 根據實際內容預估容量
+        
+        // 預先計算資料以減少重複調用
+        uint32_t freeHeap = ESP.getFreeHeap();
+        unsigned long uptime = millis();
+        
+        // 網路連接卡片
+        html += "<div class=\"status-card\"><h3>🌐 網路連接</h3>";
         if (WiFi.status() == WL_CONNECTED) {
             int rssi = WiFi.RSSI();
             const char* rssiClass = (rssi > -50) ? "status-good" : (rssi > -70) ? "status-warning" : "status-error";
             
-            append("<div class='status-item'><span class='status-label'>WiFi SSID:</span><span class='status-value status-good'>%s</span></div>", WiFi.SSID().c_str());
-            append("<div class='status-item'><span class='status-label'>IP地址:</span><span class='status-value'>%s</span></div>", WiFi.localIP().toString().c_str());
-            append("<div class='status-item'><span class='status-label'>MAC地址:</span><span class='status-value'>%s</span></div>", WiFi.macAddress().c_str());
-            append("<div class='status-item'><span class='status-label'>信號強度:</span><span class='status-value %s'>%d dBm</span></div>", rssiClass, rssi);
-            append("<div class='status-item'><span class='status-label'>網關:</span><span class='status-value'>%s</span></div>", WiFi.gatewayIP().toString().c_str());
+            html += "<div class='status-item'><span class='status-label'>WiFi SSID:</span><span class='status-value status-good'>";
+            html += WiFi.SSID();
+            html += "</span></div><div class='status-item'><span class='status-label'>IP地址:</span><span class='status-value'>";
+            html += WiFi.localIP().toString();
+            html += "</span></div><div class='status-item'><span class='status-label'>MAC地址:</span><span class='status-value'>";
+            html += WiFi.macAddress();
+            html += "</span></div><div class='status-item'><span class='status-label'>信號強度:</span><span class='status-value ";
+            html += rssiClass;
+            html += "'>";
+            html += rssi;
+            html += " dBm</span></div><div class='status-item'><span class='status-label'>網關:</span><span class='status-value'>";
+            html += WiFi.gatewayIP().toString();
+            html += "</span></div>";
         } else {
-            append("<div class='status-item'><span class='status-label'>WiFi狀態:</span><span class='status-value status-error'>未連接</span></div>");
+            html += "<div class='status-item'><span class='status-label'>WiFi狀態:</span><span class='status-value status-error'>未連接</span></div>";
         }
-        append("</div>");
+        html += "</div>";
 
-        // --- 系統資源卡片 ---
-        append("<div class=\"status-card\"><h3>💻 系統資源</h3>");
-        
-        // 記憶體資訊
-        uint32_t freeHeap = ESP.getFreeHeap();
+        // 系統資源卡片
         const char* heapClass = (freeHeap > 100000) ? "status-good" : (freeHeap > 50000) ? "status-warning" : "status-error";
-        append("<div class='status-item'><span class='status-label'>可用記憶體:</span><span class='status-value %s'>%u bytes</span></div>", heapClass, freeHeap);
+        
+        html += "<div class=\"status-card\"><h3>💻 系統資源</h3><div class='status-item'><span class='status-label'>可用記憶體:</span><span class='status-value ";
+        html += heapClass;
+        html += "'>";
+        html += freeHeap;
+        html += " bytes</span></div><div class='status-item'><span class='status-label'>晶片型號:</span><span class='status-value'>";
+        html += ESP.getChipModel();
+        html += "</span></div><div class='status-item'><span class='status-label'>CPU頻率:</span><span class='status-value'>";
+        html += ESP.getCpuFreqMHz();
+        html += " MHz</span></div><div class='status-item'><span class='status-label'>Flash大小:</span><span class='status-value'>";
+        html += (ESP.getFlashChipSize() / 1048576);
+        html += " MB</span></div><div class='status-item'><span class='status-label'>運行時間:</span><span class='status-value'>";
+        
+        // 高效的運行時間計算
+        unsigned long days = uptime / 86400000UL;
+        unsigned long hours = (uptime % 86400000UL) / 3600000UL;
+        unsigned long minutes = (uptime % 3600000UL) / 60000UL;
+        html += days;
+        html += "天 ";
+        html += hours;
+        html += "時 ";
+        html += minutes;
+        html += "分</span></div><div class='status-item'><span class='status-label'>固件版本:</span><span class='status-value'>v3.0-OTA-FINAL</span></div></div>";
 
-        // 系統資訊
-        unsigned long uptime = millis();
-        unsigned long days = uptime / 86400000;
-        unsigned long hours = (uptime % 86400000) / 3600000;
-        unsigned long minutes = (uptime % 3600000) / 60000;
-        char uptimeStr[40];
-        snprintf(uptimeStr, sizeof(uptimeStr), "%lu天 %lu時 %lu分", days, hours, minutes);
-
-        append("<div class='status-item'><span class='status-label'>晶片型號:</span><span class='status-value'>%s</span></div>", ESP.getChipModel());
-        append("<div class='status-item'><span class='status-label'>CPU頻率:</span><span class='status-value'>%u MHz</span></div>", ESP.getCpuFreqMHz());
-        append("<div class='status-item'><span class='status-label'>Flash大小:</span><span class='status-value'>%u MB</span></div>", ESP.getFlashChipSize() / 1024 / 1024);
-        append("<div class='status-item'><span class='status-label'>運行時間:</span><span class='status-value'>%s</span></div>", uptimeStr);
-        append("<div class='status-item'><span class='status-label'>固件版本:</span><span class='status-value'>v3.0-OTA-FINAL</span></div>");
-
-        append("</div>");
-
-        return String(buffer.get());
+        return html;
     }
 
     // ==================== WiFi 網路元件 ====================
@@ -385,7 +401,7 @@ namespace WebUI {
 
         // Inline getPageHeader to avoid String concatenation
         append("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"><title>成功 - %s</title>", title.c_str());
-        append("<style>%s</style></head><body>", getCompactCSS().c_str());
+        append("<style>%s</style></head><body>", getCompactCSS());
 
         // Page content
         append("<div class=\"container\"><h1>✅ %s</h1><div class=\"success\">%s</div>", title.c_str(), message.c_str());
@@ -437,7 +453,7 @@ namespace WebUI {
 
         // Inline getPageHeader
         append("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>設備重啟中</title>");
-        append("<style>%s</style></head><body>", getCompactCSS().c_str());
+        append("<style>%s</style></head><body>", getCompactCSS());
         
         append("<div class=\"container\"><h1>🔄 設備重啟中</h1>");
         append("<div class=\"info\"><p>設備正在重新啟動，請稍候...</p><p>約30秒後可重新訪問設備。</p></div>");
@@ -514,7 +530,7 @@ namespace WebUI {
 
         // --- Header ---
         html.append("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>WiFi 配置</title>");
-        html.append("<style>%s</style></head><body>", getCompactCSS().c_str());
+        html.append("<style>%s</style></head><body>", getCompactCSS());
 
         // --- Body ---
         html.append("<div class=\"container\"><h1>📶 WiFi 配置</h1>");
@@ -613,7 +629,7 @@ namespace WebUI {
             if (written > 0) { p += written; remaining -= written; }
         };
 
-        append("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>OTA 更新</title><style>%s</style></head><body>", getCompactCSS().c_str());
+        append("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>OTA 更新</title><style>%s</style></head><body>", getCompactCSS());
         append("<div class=\"container\"><h1>🔄 OTA 遠程更新</h1>");
 
         if (otaStatus.length() > 0) {
@@ -642,7 +658,7 @@ namespace WebUI {
         SafeHtmlBuilder html(5120); // 5KB緩衝區
 
         html.append("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>HomeKit 配置</title>");
-        html.append("<style>%s</style></head><body>", getCompactCSS().c_str());
+        html.append("<style>%s</style></head><body>", getCompactCSS());
         html.append("<div class=\"container\"><h1>🏠 HomeKit 配置</h1>");
         
         // 當前配置狀態
@@ -713,7 +729,7 @@ namespace WebUI {
             if (written > 0) { p += written; remaining -= written; }
         };
 
-        append("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>系統日誌</title><style>%s</style></head><body>", getCompactCSS().c_str());
+        append("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>系統日誌</title><style>%s</style></head><body>", getCompactCSS());
         append("<div class=\"container\"><h1>📊 DaiSpan 系統日誌</h1>");
         append("<div style=\"text-align:center;\"><a href=\"%s\" class=\"button\">📋 JSON格式</a><button onclick=\"clearLogs()\" class=\"button danger\">🗑️ 清除日誌</button><a href=\"/\" class=\"button secondary\">⬅️ 返回主頁</a></div>", apiEndpoint.c_str());
         append("<div class=\"status\"><h3>📈 統計資訊</h3><p>總計: %d 條記錄", totalEntries);
@@ -753,7 +769,7 @@ namespace WebUI {
             if (written > 0) { p += written; remaining -= written; }
         };
 
-        append("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>模擬控制</title><style>%s</style></head><body>", getCompactCSS().c_str());
+        append("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>模擬控制</title><style>%s</style></head><body>", getCompactCSS());
         append("<div class=\"container\"><h1>🔧 模擬控制台</h1>");
 
         const char* modeText = "";
@@ -812,7 +828,7 @@ namespace WebUI {
             }
         };
 
-        append("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>切換運行模式</title><style>%s</style></head><body>", getCompactCSS().c_str());
+        append("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>切換運行模式</title><style>%s</style></head><body>", getCompactCSS());
         append("<div class=\"container\"><h1>🔄 切換運行模式</h1>");
         append("<div class=\"warning\"><h3>⚠️ 重要提醒</h3><p>當前模式：%s</p><p>切換模式將會：</p><ul><li>重新啟動設備</li><li>重新初始化控制器</li><li>%s</li></ul></div>", currentMode ? "🔧 模擬模式" : "🏭 真實模式", currentMode ? "啟用真實空調通訊（需要連接S21協議線路）" : "停用真實空調通訊，啟用模擬功能");
         

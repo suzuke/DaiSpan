@@ -33,13 +33,17 @@ private:
     static constexpr int MAX_CONNECTION_ATTEMPTS = 3;
     static constexpr int CONNECTION_TIMEOUT = 15000; // 15 秒 (增加超時時間)
     
-    // WiFi穩定性改進
-    static constexpr unsigned long WIFI_RECONNECT_INTERVAL = 120000; // 2分鐘 (大幅增加重連間隔)
-    static constexpr unsigned long WIFI_STABILITY_CHECK_INTERVAL = 60000; // 1分鐘檢查一次
-    static constexpr int WIFI_SIGNAL_THRESHOLD = -80; // RSSI閾值，低於此值才考慮重連
+    // 高性能WiFi管理
+    static constexpr unsigned long WIFI_RECONNECT_INTERVAL = 90000;  // 1.5分鐘 (平衡重連頻率)
+    static constexpr unsigned long WIFI_STABILITY_CHECK_INTERVAL = 45000; // 45秒檢查一次
+    static constexpr int WIFI_SIGNAL_THRESHOLD = -75; // 提高RSSI閾值
     unsigned long lastWiFiStabilityCheck;
     int consecutiveFailures;
     bool wifiStabilityMode; // 穩定模式：減少不必要的重連
+    
+    // 網路掃描優化
+    unsigned long lastNetworkScan;
+    static constexpr unsigned long NETWORK_SCAN_CACHE_TIME = 30000; // 30秒掃描緩存
     
 public:
     WiFiManager(ConfigManager& cfg) : 
@@ -53,7 +57,8 @@ public:
         lastConnectionAttempt(0),
         lastWiFiStabilityCheck(0),
         consecutiveFailures(0),
-        wifiStabilityMode(false) {
+        wifiStabilityMode(false),
+        lastNetworkScan(0) {
         // 延遲到 WiFi 初始化後再生成認證憑證
     }
     
@@ -637,89 +642,74 @@ public:
         safeRestart();
     }
     
-    // 掃描 WiFi 網路 - AP 模式安全版本
+    // 掃描 WiFi 網路 - 高性能版本，使用緩存
     String scanWiFiNetworks() {
-        DEBUG_INFO_PRINT("[WiFiManager] 開始 AP 模式安全掃描...\n");
+        unsigned long currentTime = millis();
+        
+        // 檢查是否可以使用緩存結果
+        if (currentTime - lastNetworkScan < NETWORK_SCAN_CACHE_TIME && cachedNetworksJSON.length() > 0) {
+            DEBUG_INFO_PRINT("[WiFiManager] 使用緩存的網路掃描結果\n");
+            return cachedNetworksJSON;
+        }
+        
+        DEBUG_INFO_PRINT("[WiFiManager] 開始新的網路掃描...\n");
+        lastNetworkScan = currentTime;
         
         int n;
         
-        // 在 AP 模式下，使用改進的掃描方式
+        // 在 AP 模式下使用優化的掃描方式
         if (isAPMode) {
-            DEBUG_INFO_PRINT("[WiFiManager] AP 模式下進行網路掃描\n");
+            // 減少重試次數，提高效率
+            n = WiFi.scanNetworks(false, false, false, 2000); // 2秒超時
             
-            // 多次嘗試掃描，提高成功率
-            n = -1;
-            int attempts = 0;
-            int maxAttempts = 3;
-            
-            while (attempts < maxAttempts && (n <= 0 || n == WIFI_SCAN_FAILED)) {
-                attempts++;
-                DEBUG_INFO_PRINT("[WiFiManager] 掃描嘗試 %d/%d\n", attempts, maxAttempts);
-                
-                // 清除舊的掃描結果
-                WiFi.scanDelete();
-                delay(50);
-                
-                // 使用同步掃描，但延長超時時間
-                n = WiFi.scanNetworks(false, false, false, 3000); // 同步掃描，不顯示隱藏網路，3秒超時
-                
-                DEBUG_INFO_PRINT("[WiFiManager] 掃描嘗試 %d 結果: %d\n", attempts, n);
-                
-                if (n > 0) {
-                    break; // 成功找到網路
-                } else if (n == WIFI_SCAN_FAILED) {
-                    DEBUG_WARN_PRINT("[WiFiManager] 掃描失敗，等待後重試\n");
-                    delay(500);
-                } else if (n == 0) {
-                    DEBUG_INFO_PRINT("[WiFiManager] 未找到網路，重試中\n");
-                    delay(300);
-                }
-            }
-            
-            if (n <= 0) {
-                DEBUG_WARN_PRINT("[WiFiManager] 所有掃描嘗試都失敗，返回空列表\n");
+            if (n <= 0 || n == WIFI_SCAN_FAILED) {
+                DEBUG_WARN_PRINT("[WiFiManager] 掃描失敗，返回空列表\n");
+                cachedNetworksJSON = "[]";
                 return "[]";
             }
         } else {
-            // 在 STA 模式下可以使用常規掃描
             WiFi.scanDelete();
             n = WiFi.scanNetworks(false, true);
         }
+        
         DEBUG_INFO_PRINT("[WiFiManager] 掃描完成，找到 %d 個網路\n", n);
         
         if (n == WIFI_SCAN_FAILED || n < 0) {
-            DEBUG_ERROR_PRINT("[WiFiManager] WiFi 掃描失敗\n");
+            cachedNetworksJSON = "[]";
             return "[]";
         }
         
         if (n == 0) {
-            DEBUG_INFO_PRINT("[WiFiManager] 未找到任何 WiFi 網路\n");
+            cachedNetworksJSON = "[]";
             return "[]";
         }
         
-        // 構建JSON，但限制網路數量以減少處理時間
-        String json = "[";
+        // 高效構建JSON - 預估容量
+        String json;
+        json.reserve(n * 80); // 預估每個網路約80字符
+        json = "[";
+        
         int validNetworks = 0;
-        int maxNetworks = 15; // 最多返回15個網路
+        const int maxNetworks = 12; // 減少最大網路數量
         
         for (int i = 0; i < n && validNetworks < maxNetworks; ++i) {
             String ssid = WiFi.SSID(i);
-            // 跳過空 SSID（隱藏網路）
-            if (ssid.length() == 0) {
-                continue;
-            }
+            if (ssid.length() == 0) continue; // 跳過隱藏網路
             
             if (validNetworks > 0) json += ",";
-            json += "{";
-            json += "\"ssid\":\"" + ssid + "\",";
-            json += "\"rssi\":" + String(WiFi.RSSI(i)) + ",";
-            json += "\"secure\":" + String(WiFi.encryptionType(i) != WIFI_AUTH_OPEN ? "true" : "false");
+            json += "{\"ssid\":\"";
+            json += ssid;
+            json += "\",\"rssi\":";
+            json += WiFi.RSSI(i);
+            json += ",\"secure\":";
+            json += (WiFi.encryptionType(i) != WIFI_AUTH_OPEN) ? "true" : "false";
             json += "}";
             validNetworks++;
         }
         
         json += "]";
-        DEBUG_INFO_PRINT("[WiFiManager] 返回 %d 個有效網路\n", validNetworks);
+        cachedNetworksJSON = json;
+        DEBUG_INFO_PRINT("[WiFiManager] 返回 %d 個有效網路並緩存\n", validNetworks);
         return json;
     }
     
@@ -887,6 +877,7 @@ public:
     }
 
 private:
+    String cachedNetworksJSON; // 網路掃描緩存
     // 生成主頁 HTML
     String getMainPageHTML() {
         String html = WebUI::getPageHeader("DaiSpan 配置");

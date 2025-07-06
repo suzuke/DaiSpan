@@ -2,13 +2,13 @@
 #include "protocol/S21Utils.h"
 #include "common/Debug.h"
 
-// 常量定義 (基於 Faikin 規範調整)
-static constexpr uint32_t RESPONSE_TIMEOUT_MS = 1000;   // 等待回應超時時間 (增加至1秒)
-static constexpr uint32_t ACK_TIMEOUT_MS = 200;         // 等待 ACK 超時時間
-static constexpr uint32_t INTER_BYTE_TIMEOUT_MS = 50;   // 字節間超時時間
-static constexpr uint32_t COMMAND_DELAY_MS = 20;        // 命令間延遲
-static constexpr uint32_t POST_COMMAND_DELAY_MS = 10;   // 命令後延遲
-static constexpr size_t BUFFER_SIZE = 256;              // 緩衝區大小
+// 高性能通訊常量 (基於 Faikin 規範優化)
+static constexpr uint32_t RESPONSE_TIMEOUT_MS = 500;    // 降低超時時間以提高響應性
+static constexpr uint32_t ACK_TIMEOUT_MS = 150;         // 優化 ACK 超時
+static constexpr uint32_t INTER_BYTE_TIMEOUT_MS = 30;   // 減少字節間超時
+static constexpr uint32_t COMMAND_DELAY_MS = 10;        // 減少命令間延遲
+static constexpr uint32_t POST_COMMAND_DELAY_MS = 5;    // 減少命令後延遲
+static constexpr size_t BUFFER_SIZE = 128;              // 優化緩衝區大小
 
 // 靜態變量用於記錄上一次的值
 static float lastReportedTemp = 0.0f;

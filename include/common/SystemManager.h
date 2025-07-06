@@ -19,27 +19,31 @@ class ThermostatDevice;
  */
 class SystemManager {
 private:
-    // 系統狀態
-    struct SystemState {
-        unsigned long lastLoopTime;
-        unsigned long lastPowerCheck;
-        unsigned long lastOTAHandle;
-        unsigned long lastPairingCheck;
-        unsigned long lastWebServerHandle;
+    // 高性能定時系統
+    struct OptimizedTimingSystem {
+        // 合併定時器到單一結構，減少比較次數
+        unsigned long nextPowerCheck;
+        unsigned long nextPairingCheck;
+        unsigned long nextHeartbeat;
+        unsigned long nextWebServerHandle;
         unsigned long homeKitReadyTime;
         
+        // 狀態標誌
         bool webServerStartScheduled;
         bool homeKitStabilized;
         bool wasPairing;
-        int pairingDetectionCounter;
         int webServerSkipCounter;
         uint32_t avgMemory;
         
-        SystemState() : lastLoopTime(0), lastPowerCheck(0), lastOTAHandle(0),
-                       lastPairingCheck(0), lastWebServerHandle(0), homeKitReadyTime(0),
-                       webServerStartScheduled(false), homeKitStabilized(false),
-                       wasPairing(false), pairingDetectionCounter(0), 
-                       webServerSkipCounter(0), avgMemory(0) {}
+        // 循環計數器優化 - 減少毫秒調用
+        uint16_t loopCounter;
+        uint16_t fastLoopDivider;
+        
+        OptimizedTimingSystem() : nextPowerCheck(0), nextPairingCheck(0), nextHeartbeat(0),
+                                 nextWebServerHandle(0), homeKitReadyTime(0),
+                                 webServerStartScheduled(false), homeKitStabilized(false),
+                                 wasPairing(false), webServerSkipCounter(0), avgMemory(0),
+                                 loopCounter(0), fastLoopDivider(100) {}
     } state;
     
     // 系統組件引用
@@ -57,6 +61,7 @@ private:
     bool& homeKitPairingActive;
     
     // 私有方法
+    void handleOptimizedTimingTasks(unsigned long currentTime);
     void handleESP32C3PowerManagement(unsigned long currentTime);
     void handleOTAUpdates();
     void handleHomeKitMode(unsigned long currentTime);

@@ -36,35 +36,76 @@ SystemManager::SystemManager(ConfigManager& config, WiFiManager*& wifi, WebServe
 }
 
 void SystemManager::processMainLoop() {
-    unsigned long currentTime = millis();
+    // 高性能循環計數器系統 - 減少millis()調用
+    state.loopCounter++;
+    bool shouldCheckTiming = (state.loopCounter % state.fastLoopDivider) == 0;
     
-    // ESP32-C3 特定的 WiFi 功率管理
-    handleESP32C3PowerManagement(currentTime);
+    // 只在必要時獲取當前時間
+    unsigned long currentTime = shouldCheckTiming ? millis() : 0;
     
-    // 高優先級：OTA 更新處理
-    handleOTAUpdates();
-    
-    // 根據系統模式處理不同邏輯
+    // 關鍵系統處理 - 每次循環都執行
     if (homeKitInitialized) {
-        handleHomeKitMode(currentTime);
+        homeSpan.poll(); // 最高優先級
     }
-    // 配置模式處理已移到main.cpp以避免依賴問題
     
-    // 定期任務處理
-    handlePeriodicTasks(currentTime);
+    // 中等優先級處理 - 每10次循環檢查一次
+    if ((state.loopCounter % 10) == 0) {
+        handleOTAUpdates();
+    }
+    
+    // 定時任務處理 - 使用優化的定時系統
+    if (shouldCheckTiming) {
+        handleOptimizedTimingTasks(currentTime);
+    }
 }
 
-void SystemManager::handleESP32C3PowerManagement(unsigned long currentTime) {
-    #if defined(ESP32C3_SUPER_MINI)
-    if (currentTime - state.lastPowerCheck >= POWER_CHECK_INTERVAL) {
-        state.lastPowerCheck = currentTime;
-        
+void SystemManager::handleOptimizedTimingTasks(unsigned long currentTime) {
+    // 高性能統一定時檢查 - 一次檢查所有定時器
+    
+    // ESP32-C3 功率管理檢查
+    if (currentTime >= state.nextPowerCheck) {
+        state.nextPowerCheck = currentTime + POWER_CHECK_INTERVAL;
+        #if defined(ESP32C3_SUPER_MINI)
         if (WiFi.status() == WL_DISCONNECTED && WiFi.getTxPower() != WIFI_POWER_8_5dBm) {
             WiFi.setTxPower(WIFI_POWER_8_5dBm);
             DEBUG_VERBOSE_PRINT("[SystemManager] ESP32-C3 調整WiFi功率為節能模式\n");
         }
+        #endif
     }
-    #endif
+    
+    // HomeKit 配對檢測
+    if (homeKitInitialized && currentTime >= state.nextPairingCheck) {
+        state.nextPairingCheck = currentTime + PAIRING_CHECK_INTERVAL;
+        handleHomeKitPairingDetection(currentTime);
+    }
+    
+    // WebServer 處理
+    if (homeKitInitialized && !homeKitPairingActive && monitoringEnabled && webServer) {
+        uint32_t freeMemory = ESP.getFreeHeap();
+        unsigned long handleInterval = calculateWebServerInterval(freeMemory);
+        
+        if (currentTime >= state.nextWebServerHandle) {
+            state.nextWebServerHandle = currentTime + handleInterval;
+            if (!shouldSkipWebServerProcessing()) {
+                webServer->handleClient();
+            }
+        }
+    }
+    
+    // WebServer 啟動檢查
+    if (homeKitInitialized) {
+        handleWebServerStartup(currentTime);
+    }
+    
+    // 系統心跳
+    if (currentTime >= state.nextHeartbeat) {
+        state.nextHeartbeat = currentTime + SYSTEM_HEARTBEAT_INTERVAL;
+        printHeartbeatInfo(currentTime);
+    }
+}
+
+void SystemManager::handleESP32C3PowerManagement(unsigned long currentTime) {
+    // 方法保留用於向後兼容，實際邏輯已移至 handleOptimizedTimingTasks
 }
 
 void SystemManager::handleOTAUpdates() {
@@ -74,23 +115,8 @@ void SystemManager::handleOTAUpdates() {
 }
 
 void SystemManager::handleHomeKitMode(unsigned long currentTime) {
-    // WebServer 啟動管理
-    handleWebServerStartup(currentTime);
-    
-    // HomeKit 核心處理（最高優先級）
-    homeSpan.poll();
-    
-    // HomeKit 配對狀態檢測
-    handleHomeKitPairingDetection(currentTime);
-    
-    // WebServer 處理（智能頻率控制）
-    handleWebServerProcessing(currentTime);
-    
-    // OTA 處理（低優先級，限制頻率）
-    if (currentTime - state.lastOTAHandle >= OTA_HANDLE_INTERVAL) {
-        ArduinoOTA.handle();
-        state.lastOTAHandle = currentTime;
-    }
+    // 此方法已由 handleOptimizedTimingTasks 替代，保留用於向後兼容
+    handleOptimizedTimingTasks(currentTime);
 }
 
 void SystemManager::handleWebServerStartup(unsigned long currentTime) {
@@ -110,33 +136,19 @@ void SystemManager::handleWebServerStartup(unsigned long currentTime) {
 }
 
 void SystemManager::handleHomeKitPairingDetection(unsigned long currentTime) {
-    if (currentTime - state.lastPairingCheck >= PAIRING_CHECK_INTERVAL) {
-        state.lastPairingCheck = currentTime;
-        
-        uint32_t currentMemory = ESP.getFreeHeap();
-        updatePairingDetection(currentMemory);
-        
-        // 記錄配對狀態變化
-        if (homeKitPairingActive != state.wasPairing) {
-            DEBUG_INFO_PRINT("[SystemManager] HomeKit配對狀態變化: %s (記憶體: %d bytes)\n", 
-                             homeKitPairingActive ? "配對中" : "空閒", currentMemory);
-            state.wasPairing = homeKitPairingActive;
-        }
+    uint32_t currentMemory = ESP.getFreeHeap();
+    updatePairingDetection(currentMemory);
+    
+    // 記錄配對狀態變化
+    if (homeKitPairingActive != state.wasPairing) {
+        DEBUG_INFO_PRINT("[SystemManager] HomeKit配對狀態變化: %s (記憶體: %d bytes)\n", 
+                         homeKitPairingActive ? "配對中" : "空閒", currentMemory);
+        state.wasPairing = homeKitPairingActive;
     }
 }
 
 void SystemManager::handleWebServerProcessing(unsigned long currentTime) {
-    if (!homeKitPairingActive && monitoringEnabled && webServer) {
-        uint32_t freeMemory = ESP.getFreeHeap();
-        unsigned long handleInterval = calculateWebServerInterval(freeMemory);
-        
-        bool shouldSkip = shouldSkipWebServerProcessing();
-        
-        if (!shouldSkip && currentTime - state.lastWebServerHandle >= handleInterval) {
-            webServer->handleClient();
-            state.lastWebServerHandle = currentTime;
-        }
-    }
+    // 此方法已由 handleOptimizedTimingTasks 替代，保留用於向後兼容
 }
 
 void SystemManager::handleConfigurationMode() {
@@ -146,10 +158,7 @@ void SystemManager::handleConfigurationMode() {
 }
 
 void SystemManager::handlePeriodicTasks(unsigned long currentTime) {
-    if (currentTime - state.lastLoopTime >= SYSTEM_HEARTBEAT_INTERVAL) {
-        printHeartbeatInfo(currentTime);
-        state.lastLoopTime = currentTime;
-    }
+    // 此方法已由 handleOptimizedTimingTasks 替代，保留用於向後兼容
 }
 
 void SystemManager::printHeartbeatInfo(unsigned long currentTime) {
@@ -208,19 +217,12 @@ bool SystemManager::shouldSkipWebServerProcessing() const {
 }
 
 void SystemManager::updatePairingDetection(uint32_t currentMemory) {
-    // 更寬鬆的記憶體變化檢測，避免誤判
+    // 高性能記憶體檢測，不需要複雜的計數器
     state.avgMemory = (state.avgMemory * 3 + currentMemory) / 4; // 移動平均
     
+    // 簡化的配對檢測邏輯
     bool significantMemoryDrop = currentMemory < state.avgMemory - MEMORY_DROP_THRESHOLD;
-    
-    if (significantMemoryDrop) {
-        state.pairingDetectionCounter++;
-    } else {
-        state.pairingDetectionCounter = 0;
-    }
-    
-    // 連續檢測到記憶體下降才認為在配對
-    homeKitPairingActive = (state.pairingDetectionCounter >= 2);
+    homeKitPairingActive = significantMemoryDrop;
 }
 
 void SystemManager::getSystemStats(String& mode, String& wifiStatus, String& deviceStatus, String& ipAddress) {
@@ -238,7 +240,7 @@ void SystemManager::getSystemStats(String& mode, String& wifiStatus, String& dev
 }
 
 void SystemManager::resetState() {
-    state = SystemState();
+    state = OptimizedTimingSystem();
     state.avgMemory = ESP.getFreeHeap();
     DEBUG_INFO_PRINT("[SystemManager] 系統狀態已重置\n");
 }

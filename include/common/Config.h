@@ -47,8 +47,46 @@ private:
     Preferences preferences;
     bool initialized;
     
+    // 高性能緩存系統
+    struct ConfigCache {
+        // WiFi 配置緩存
+        String wifiSSID;
+        String wifiPassword;
+        bool wifiConfigValid;
+        
+        // HomeKit 配置緩存
+        String homeKitPairingCode;
+        String homeKitDeviceName;
+        String homeKitQRID;
+        bool homeKitConfigValid;
+        
+        // 系統配置緩存
+        unsigned long updateInterval;
+        unsigned long heartbeatInterval;
+        unsigned long serialBaud;
+        bool simulationMode;
+        bool systemConfigValid;
+        
+        // 溫度配置緩存
+        float minTemp;
+        float maxTemp;
+        float tempStep;
+        float tempThreshold;
+        bool tempConfigValid;
+        
+        ConfigCache() : wifiConfigValid(false), homeKitConfigValid(false), 
+                       systemConfigValid(false), tempConfigValid(false) {}
+    } cache;
+    
+    // 緩存更新標誌
+    volatile bool cacheNeedsUpdate;
+    unsigned long lastCacheUpdate;
+    static constexpr unsigned long CACHE_INVALIDATE_INTERVAL = 300000; // 5分鐘
+    
+    // 私有緩存方法將在下方實現
+    
 public:
-    ConfigManager() : initialized(false) {}
+    ConfigManager() : initialized(false), cacheNeedsUpdate(true), lastCacheUpdate(0) {}
     
     bool begin(const char* namespace_name = "daispan") {
         if (initialized) {
@@ -73,20 +111,30 @@ public:
         }
     }
     
-    // WiFi 配置
+    // WiFi 配置 (使用緩存優化)
     String getWiFiSSID() {
-        return preferences.getString(ConfigConstants::WIFI_SSID_KEY, ConfigConstants::DEFAULT_WIFI_SSID);
+        if (!cache.wifiConfigValid || shouldUpdateCache()) {
+            updateWiFiCache();
+        }
+        return cache.wifiSSID;
     }
     
     String getWiFiPassword() {
-        return preferences.getString(ConfigConstants::WIFI_PASSWORD_KEY, ConfigConstants::DEFAULT_WIFI_PASSWORD);
+        if (!cache.wifiConfigValid || shouldUpdateCache()) {
+            updateWiFiCache();
+        }
+        return cache.wifiPassword;
     }
     
     bool setWiFiCredentials(const String& ssid, const String& password) {
         bool success = preferences.putString(ConfigConstants::WIFI_SSID_KEY, ssid);
         success &= preferences.putString(ConfigConstants::WIFI_PASSWORD_KEY, password);
         if (success) {
-            DEBUG_INFO_PRINT("[Config] WiFi 憑證已保存\n");
+            // 立即更新緩存
+            cache.wifiSSID = ssid;
+            cache.wifiPassword = password;
+            cache.wifiConfigValid = true;
+            DEBUG_INFO_PRINT("[Config] WiFi 憑證已保存並更新緩存\n");
         }
         return success;
     }
@@ -207,6 +255,57 @@ public:
     }
     
 private:
+    // 緩存輔助方法
+    bool shouldUpdateCache() const {
+        return cacheNeedsUpdate || (millis() - lastCacheUpdate > CACHE_INVALIDATE_INTERVAL);
+    }
+    
+    void updateWiFiCache() {
+        if (!cache.wifiConfigValid) {
+            cache.wifiSSID = preferences.getString(ConfigConstants::WIFI_SSID_KEY, ConfigConstants::DEFAULT_WIFI_SSID);
+            cache.wifiPassword = preferences.getString(ConfigConstants::WIFI_PASSWORD_KEY, ConfigConstants::DEFAULT_WIFI_PASSWORD);
+            cache.wifiConfigValid = true;
+        }
+    }
+    
+    void updateHomeKitCache() {
+        if (!cache.homeKitConfigValid) {
+            cache.homeKitPairingCode = preferences.getString(ConfigConstants::HOMEKIT_PAIRING_CODE_KEY, ConfigConstants::DEFAULT_PAIRING_CODE);
+            cache.homeKitDeviceName = preferences.getString(ConfigConstants::HOMEKIT_DEVICE_NAME_KEY, ConfigConstants::DEFAULT_DEVICE_NAME);
+            cache.homeKitQRID = preferences.getString(ConfigConstants::HOMEKIT_QR_ID_KEY, ConfigConstants::DEFAULT_QR_ID_STRING);
+            cache.homeKitConfigValid = true;
+        }
+    }
+    
+    void updateSystemCache() {
+        if (!cache.systemConfigValid) {
+            cache.updateInterval = preferences.getULong(ConfigConstants::UPDATE_INTERVAL_KEY, ConfigConstants::DEFAULT_UPDATE_INTERVAL);
+            cache.heartbeatInterval = preferences.getULong(ConfigConstants::HEARTBEAT_INTERVAL_KEY, ConfigConstants::DEFAULT_HEARTBEAT_INTERVAL);
+            cache.serialBaud = preferences.getULong(ConfigConstants::SERIAL_BAUD_KEY, ConfigConstants::DEFAULT_SERIAL_BAUD);
+            cache.simulationMode = preferences.getBool(ConfigConstants::SIMULATION_MODE_KEY, ConfigConstants::DEFAULT_SIMULATION_MODE);
+            cache.systemConfigValid = true;
+        }
+    }
+    
+    void updateTempCache() {
+        if (!cache.tempConfigValid) {
+            cache.minTemp = preferences.getFloat(ConfigConstants::MIN_TEMP_KEY, ConfigConstants::DEFAULT_MIN_TEMP);
+            cache.maxTemp = preferences.getFloat(ConfigConstants::MAX_TEMP_KEY, ConfigConstants::DEFAULT_MAX_TEMP);
+            cache.tempStep = preferences.getFloat(ConfigConstants::TEMP_STEP_KEY, ConfigConstants::DEFAULT_TEMP_STEP);
+            cache.tempThreshold = preferences.getFloat(ConfigConstants::TEMP_THRESHOLD_KEY, ConfigConstants::DEFAULT_TEMP_THRESHOLD);
+            cache.tempConfigValid = true;
+        }
+    }
+    
+    void invalidateCache() {
+        cache.wifiConfigValid = false;
+        cache.homeKitConfigValid = false;
+        cache.systemConfigValid = false;
+        cache.tempConfigValid = false;
+        cacheNeedsUpdate = true;
+        lastCacheUpdate = millis();
+    }
+    
     void loadDefaults() {
         // 不自動設置 WiFi 憑證，讓系統檢測到未配置狀態
         // WiFi 憑證將通過 AP 配置模式設置

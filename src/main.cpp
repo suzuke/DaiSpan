@@ -134,7 +134,7 @@ void initializeMonitoring() {
     // HTML生成 - 整合詳細狀態
     append("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>DaiSpan 智能恆溫器</title>");
     append("<meta http-equiv=\"refresh\" content=\"30\">");
-    append("<style>%s</style></head><body>", WebUI::getCompactCSS().c_str());
+    append("<style>%s</style></head><body>", WebUI::getCompactCSS());
     append("<div class=\"container\"><h1>DaiSpan 智能恆溫器</h1>");
     
     // 系統狀態資訊

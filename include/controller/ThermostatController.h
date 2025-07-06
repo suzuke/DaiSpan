@@ -20,10 +20,10 @@ private:
     unsigned long lastUpdateTime;
     unsigned long lastSuccessfulUpdate;
     
-    // 錯誤處理和重試邏輯（對真實硬體更寬容）
-    static constexpr unsigned long MAX_CONSECUTIVE_ERRORS = 5;      // 降低錯誤閾值，更快進入恢復模式
-    static constexpr unsigned long ERROR_RECOVERY_INTERVAL = 30000; // 30秒（增加恢復間隔，減少無效重試）
-    static constexpr unsigned long UPDATE_INTERVAL = 8000;         // 8秒（減少查詢頻率）
+    // 高性能錯誤處理和重試邏輯
+    static constexpr unsigned long MAX_CONSECUTIVE_ERRORS = 3;      // 進一步降低錯誤閾值
+    static constexpr unsigned long ERROR_RECOVERY_INTERVAL = 20000; // 20秒（減少恢復間隔）
+    static constexpr unsigned long UPDATE_INTERVAL = 6000;         // 6秒（提高查詢頻率但保持合理）
     
     // 內部輔助方法
     bool handleProtocolError(const char* operation);
