@@ -174,6 +174,39 @@ bool ThermostatController::setTargetTemperature(float temperature) {
     return success;
 }
 
+bool ThermostatController::setFanSpeed(uint8_t speed) {
+    if (!protocol) {
+        DEBUG_ERROR_PRINT("[Controller] 錯誤：協議實例無效\n");
+        return false;
+    }
+    
+    if (isInErrorRecoveryMode()) {
+        DEBUG_WARN_PRINT("[Controller] 跳過操作：處於錯誤恢復模式\n");
+        return false;
+    }
+    
+    // 檢查協議是否支持該風速
+    if (!protocol->supportsFanSpeed(speed)) {
+        DEBUG_ERROR_PRINT("[Controller] 錯誤：協議不支持風速 %d\n", speed);
+        return false;
+    }
+    
+    DEBUG_INFO_PRINT("[Controller] 設置風速：%d (%s)\n", speed, getFanSpeedText(speed));
+    
+    // 使用抽象協議介面設置風速
+    bool success = protocol->setPowerAndMode(power, mode, targetTemperature, speed);
+    
+    if (success) {
+        fanSpeed = speed;
+        resetErrorCount();
+        DEBUG_INFO_PRINT("[Controller] 風速設置成功：%s\n", getFanSpeedText(speed));
+    } else {
+        handleProtocolError("setFanSpeed");
+    }
+    
+    return success;
+}
+
 void ThermostatController::update() {
     unsigned long currentTime = millis();
     

@@ -1,4 +1,5 @@
 #include "controller/MockThermostatController.h"
+#include "common/ThermostatMode.h"
 
 MockThermostatController::MockThermostatController(float initialTemp) 
     : power(false), 
@@ -6,6 +7,7 @@ MockThermostatController::MockThermostatController(float initialTemp)
       targetTemperature(initialTemp), 
       currentTemperature(initialTemp),
       simulatedRoomTemp(initialTemp),
+      fanSpeed(FAN_AUTO),
       lastUpdateTime(0),
       isHeating(false),
       isCooling(false) {
@@ -84,6 +86,24 @@ float MockThermostatController::getTargetTemperature() const {
 
 float MockThermostatController::getCurrentTemperature() const {
     return currentTemperature;
+}
+
+bool MockThermostatController::setFanSpeed(uint8_t speed) {
+    // 檢查風速是否在有效範圍內
+    if (speed < FAN_AUTO || speed > FAN_QUIET) {
+        DEBUG_ERROR_PRINT("[MockController] 錯誤：無效的風速值 %d\n", speed);
+        return false;
+    }
+    
+    if (fanSpeed != speed) {
+        fanSpeed = speed;
+        DEBUG_INFO_PRINT("[MockController] 風速設置: %d (%s)\n", speed, getFanSpeedText(speed));
+    }
+    return true;
+}
+
+uint8_t MockThermostatController::getFanSpeed() const {
+    return fanSpeed;
 }
 
 void MockThermostatController::update() {

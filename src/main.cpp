@@ -2,6 +2,7 @@
 #include "controller/ThermostatController.h"
 #include "controller/MockThermostatController.h"
 #include "device/ThermostatDevice.h"
+#include "device/FanDevice.h"
 #include "protocol/S21Protocol.h"
 #include "protocol/IACProtocol.h"
 #include "protocol/ACProtocolFactory.h"
@@ -35,6 +36,7 @@ std::unique_ptr<ACProtocolFactory> protocolFactory = nullptr;
 IThermostatControl* thermostatController = nullptr;
 MockThermostatController* mockController = nullptr;  // 模擬控制器專用指針
 ThermostatDevice* thermostatDevice = nullptr;
+FanDevice* fanDevice = nullptr;  // 風扇設備指針
 SpanAccessory* accessory = nullptr;
 bool deviceInitialized = false;
 bool homeKitInitialized = false;
@@ -355,7 +357,8 @@ void initializeMonitoring() {
                                                  mockController->getCurrentTemperature(),
                                                  mockController->getSimulatedRoomTemp(),
                                                  mockController->isSimulationHeating(),
-                                                 mockController->isSimulationCooling());
+                                                 mockController->isSimulationCooling(),
+                                                 mockController->getFanSpeed());
     webServer->send(200, "text/html", html);
   });
   
@@ -382,10 +385,11 @@ void initializeMonitoring() {
     String targetTempStr = webServer->arg("target_temp");
     String currentTempStr = webServer->arg("current_temp");
     String roomTempStr = webServer->arg("room_temp");
+    String fanSpeedStr = webServer->arg("fan_speed");
     
-    DEBUG_INFO_PRINT("[Web] 模擬控制請求 - 電源:%s 模式:%s 目標溫度:%s 當前溫度:%s 環境溫度:%s\n",
+    DEBUG_INFO_PRINT("[Web] 模擬控制請求 - 電源:%s 模式:%s 目標溫度:%s 當前溫度:%s 環境溫度:%s 風量:%s\n",
                      powerStr.c_str(), modeStr.c_str(), targetTempStr.c_str(), 
-                     currentTempStr.c_str(), roomTempStr.c_str());
+                     currentTempStr.c_str(), roomTempStr.c_str(), fanSpeedStr.c_str());
     
     // 電源控制
     if (powerStr.length() > 0) {
@@ -447,28 +451,38 @@ void initializeMonitoring() {
       }
     }
     
-    // 建立狀態信息
-    String statusInfo = "<h3>📊 當前狀態</h3>";
-    statusInfo += "<p><strong>電源：</strong>" + String(mockController->getPower() ? "開啟" : "關閉") + "</p>";
-    statusInfo += "<p><strong>模式：</strong>" + String(mockController->getTargetMode());
-    switch(mockController->getTargetMode()) {
-      case 0: statusInfo += " (關閉)"; break;
-      case 1: statusInfo += " (制熱)"; break;
-      case 2: statusInfo += " (制冷)"; break;
-      case 3: statusInfo += " (自動)"; break;
+    // 風量控制（僅在電源開啟時才處理）
+    if (fanSpeedStr.length() > 0 && mockController->getPower()) {
+      uint8_t fanSpeed = fanSpeedStr.toInt();
+      if (fanSpeed >= 0 && fanSpeed <= 6) {
+        DEBUG_INFO_PRINT("[Web] 收到風量設置請求：%d (%s)\n", fanSpeed, getFanSpeedText(fanSpeed));
+        mockController->setFanSpeed(fanSpeed);
+        DEBUG_INFO_PRINT("[Web] 風量設置完成，當前風量：%d\n", mockController->getFanSpeed());
+      }
+    } else if (fanSpeedStr.length() > 0 && !mockController->getPower()) {
+      DEBUG_INFO_PRINT("[Web] 電源關閉時忽略風量設置請求\n");
     }
-    statusInfo += "</p>";
-    statusInfo += "<p><strong>目標溫度：</strong>" + String(mockController->getTargetTemperature(), 1) + "°C</p>";
-    statusInfo += "<p><strong>當前溫度：</strong>" + String(mockController->getCurrentTemperature(), 1) + "°C</p>";
     
-    String message = "模擬參數已成功更新！<br><br>" + statusInfo;
-    message += "<br><div style=\"margin:20px 0;\">";
-    message += "<a href=\"/simulation\" class=\"button\">🔧 返回模擬控制</a>";
-    message += "<a href=\"/\" class=\"button\">🏠 返回主頁</a>";
-    message += "</div>";
-    message += "<p style=\"color:#666;font-size:14px;\">💡 提示：可以在HomeKit app中查看狀態變化</p>";
+    // 建立簡化的狀態信息（避免緩衝區溢出）
+    String statusInfo = String("電源:") + (mockController->getPower() ? "開啟" : "關閉") + 
+                       " | 模式:" + String(mockController->getTargetMode()) + 
+                       " | 溫度:" + String(mockController->getTargetTemperature(), 1) + "°C" +
+                       " | 風量:" + String(mockController->getFanSpeed());
     
-    String html = WebUI::getSuccessPage("設置已更新", message, 0);
+    String message = "模擬參數已成功更新！<br><br>";
+    message += "📊 " + statusInfo + "<br><br>";
+    message += "💡 可在HomeKit中查看變化";
+    
+    // 創建自定義的簡單成功頁面，避免緩衝區問題
+    String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>設置已更新</title>";
+    html += "<style>" + String(WebUI::getCompactCSS()) + "</style></head><body>";
+    html += "<div class='container'><h1>✅ 設置已更新</h1>";
+    html += "<div class='status'>" + message + "</div>";
+    html += "<div style='text-align:center;margin:20px 0;'>";
+    html += "<a href='/simulation' class='button'>🔧 返回模擬控制</a>&nbsp;&nbsp;";
+    html += "<a href='/' class='button secondary'>🏠 返回主頁</a>";
+    html += "</div></div></body></html>";
+    
     webServer->send(200, "text/html", html);
   });
   
@@ -574,17 +588,28 @@ void initializeHomeKit() {
     new Characteristic::FirmwareRevision("1.0");
     new Characteristic::Identify();
     
-    // 創建ThermostatDevice（在同一作用域內以確保正確註冊到HomeKit）
+    // 創建ThermostatDevice和FanDevice（在同一作用域內以確保正確註冊到HomeKit）
     if (deviceInitialized && thermostatController) {
-      DEBUG_INFO_PRINT("[Main] 硬件已初始化，創建ThermostatDevice\n");
+      DEBUG_INFO_PRINT("[Main] 硬件已初始化，創建ThermostatDevice和FanDevice\n");
+      
+      // 創建恆溫器服務
       thermostatDevice = new ThermostatDevice(*thermostatController);
       if (!thermostatDevice) {
         DEBUG_ERROR_PRINT("[Main] 創建 ThermostatDevice 失敗\n");
       } else {
         DEBUG_INFO_PRINT("[Main] ThermostatDevice 創建成功並註冊到HomeKit\n");
       }
+      
+      // 創建風扇服務（同一配件中的第二個服務）
+      fanDevice = new FanDevice(*thermostatController);
+      if (!fanDevice) {
+        DEBUG_ERROR_PRINT("[Main] 創建 FanDevice 失敗\n");
+      } else {
+        DEBUG_INFO_PRINT("[Main] FanDevice 創建成功並註冊到HomeKit\n");
+      }
+      
     } else {
-      DEBUG_ERROR_PRINT("[Main] 硬件未初始化，無法創建ThermostatDevice\n");
+      DEBUG_ERROR_PRINT("[Main] 硬件未初始化，無法創建HomeKit設備\n");
       DEBUG_ERROR_PRINT("[Main] deviceInitialized=%s, thermostatController=%s\n",
                         deviceInitialized ? "true" : "false",
                         thermostatController ? "valid" : "null");

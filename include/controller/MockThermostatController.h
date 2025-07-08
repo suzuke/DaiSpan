@@ -11,6 +11,7 @@ private:
     float targetTemperature;
     float currentTemperature;
     float simulatedRoomTemp;
+    uint8_t fanSpeed;
     unsigned long lastUpdateTime;
     bool isHeating;
     bool isCooling;
@@ -35,6 +36,9 @@ public:
     bool setTargetTemperature(float temperature) override;
     float getTargetTemperature() const override;
     float getCurrentTemperature() const override;
+    
+    bool setFanSpeed(uint8_t speed) override;
+    uint8_t getFanSpeed() const override;
     
     void update() override;
     

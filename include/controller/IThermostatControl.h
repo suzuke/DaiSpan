@@ -21,6 +21,10 @@ public:
   virtual float getTargetTemperature() const = 0;
   virtual float getCurrentTemperature() const = 0;
   
+  // 風量控制
+  virtual bool setFanSpeed(uint8_t speed) = 0;
+  virtual uint8_t getFanSpeed() const = 0;
+  
   // 更新狀態
   virtual void update() = 0;
 };

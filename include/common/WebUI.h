@@ -751,8 +751,8 @@ namespace WebUI {
     String getSimulationControlPage(const String& saveEndpoint = "/simulation-control",
                                    bool power = false, int mode = 0, 
                                    float targetTemp = 22.0, float currentTemp = 25.0, float roomTemp = 25.0,
-                                   bool isHeating = false, bool isCooling = false) {
-        const size_t bufferSize = 4096;
+                                   bool isHeating = false, bool isCooling = false, int fanSpeed = 0) {
+        const size_t bufferSize = 6144;
         auto buffer = std::make_unique<char[]>(bufferSize);
         if (!buffer) { return "<div class='error'>Memory allocation failed.</div>"; }
 
@@ -760,13 +760,22 @@ namespace WebUI {
         int remaining = bufferSize;
         int written;
 
+        bool overflow = false;
         auto append = [&](const char* format, ...) {
-            if (remaining <= 1) return;
+            if (remaining <= 10 || overflow) {
+                overflow = true;
+                return;
+            }
             va_list args;
             va_start(args, format);
             written = vsnprintf(p, remaining, format, args);
             va_end(args);
-            if (written > 0) { p += written; remaining -= written; }
+            if (written > 0 && written < remaining) {
+                p += written;
+                remaining -= written;
+            } else {
+                overflow = true;
+            }
         };
 
         append("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>模擬控制</title><style>%s</style></head><body>", getCompactCSS());
@@ -780,13 +789,25 @@ namespace WebUI {
           case 3: modeText = "(自動)"; break;
         }
         const char* runStatus = isHeating ? "🔥 加熱中" : (isCooling ? "❄️ 制冷中" : "⏸️ 待機");
+        const char* fanSpeedText = "";
+        switch(fanSpeed) {
+          case 0: fanSpeedText = "自動"; break;
+          case 1: fanSpeedText = "1檔"; break;
+          case 2: fanSpeedText = "2檔"; break;
+          case 3: fanSpeedText = "3檔"; break;
+          case 4: fanSpeedText = "4檔"; break;
+          case 5: fanSpeedText = "5檔"; break;
+          case 6: fanSpeedText = "安靜"; break;
+          default: fanSpeedText = "未知"; break;
+        }
 
-        append("<div class=\"status-card\"><h3>📊 當前狀態</h3><p><strong>電源：</strong>%s</p><p><strong>模式：</strong>%d %s</p><p><strong>當前溫度：</strong>%.1f°C</p><p><strong>目標溫度：</strong>%.1f°C</p><p><strong>環境溫度：</strong>%.1f°C</p><p><strong>運行狀態：</strong>%s</p></div>", power ? "開啟" : "關閉", mode, modeText, currentTemp, targetTemp, roomTemp, runStatus);
+        append("<div class=\"status-card\"><h3>📊 當前狀態</h3><p><strong>電源：</strong>%s</p><p><strong>模式：</strong>%d %s</p><p><strong>當前溫度：</strong>%.1f°C</p><p><strong>目標溫度：</strong>%.1f°C</p><p><strong>環境溫度：</strong>%.1f°C</p><p><strong>風量：</strong>%d (%s)</p><p><strong>運行狀態：</strong>%s</p></div>", power ? "開啟" : "關閉", mode, modeText, currentTemp, targetTemp, roomTemp, fanSpeed, fanSpeedText, runStatus);
         append("<div style=\"text-align:center;margin:15px 0;\"><button onclick=\"window.location.reload()\" class=\"button\">🔄 刷新狀態</button></div>");
         append("<div class=\"warning\"><h3>💡 使用說明</h3><ul><li>🔧 這是模擬模式，所有操作都是虛擬的</li><li>📱 HomeKit指令會即時反映在這裡</li><li>🌡️ 溫度會根據運行模式自動變化</li><li>🔄 點擊「刷新狀態」按鈕查看最新狀態</li><li>⚡ 可手動控制電源、模式和溫度參數</li></ul></div>");
         append("<form action=\"%s\" method=\"POST\"><h3>🎛️ 手動控制</h3>", saveEndpoint.c_str());
         append("<div class=\"form-group\"><label for=\"power\">電源控制:</label><select id=\"power\" name=\"power\"><option value=\"1\"%s>開啟</option><option value=\"0\"%s>關閉</option></select></div>", power ? " selected" : "", !power ? " selected" : "");
         append("<div class=\"form-group\"><label for=\"mode\">運行模式:</label><select id=\"mode\" name=\"mode\"><option value=\"0\"%s>關閉</option><option value=\"1\"%s>制熱</option><option value=\"2\"%s>制冷</option><option value=\"3\"%s>自動</option></select></div>", mode == 0 ? " selected" : "", mode == 1 ? " selected" : "", mode == 2 ? " selected" : "", mode == 3 ? " selected" : "");
+        append("<div class=\"form-group\"><label for=\"fan_speed\">風量設置:</label><select id=\"fan_speed\" name=\"fan_speed\"><option value=\"0\"%s>自動</option><option value=\"1\"%s>1檔 (低速)</option><option value=\"2\"%s>2檔</option><option value=\"3\"%s>3檔 (中速)</option><option value=\"4\"%s>4檔</option><option value=\"5\"%s>5檔 (高速)</option><option value=\"6\"%s>安靜模式</option></select></div>", fanSpeed == 0 ? " selected" : "", fanSpeed == 1 ? " selected" : "", fanSpeed == 2 ? " selected" : "", fanSpeed == 3 ? " selected" : "", fanSpeed == 4 ? " selected" : "", fanSpeed == 5 ? " selected" : "", fanSpeed == 6 ? " selected" : "");
         append("<div class=\"form-group\"><label for=\"target_temp\">目標溫度 (°C):</label><input type=\"number\" id=\"target_temp\" name=\"target_temp\" min=\"16\" max=\"30\" step=\"0.5\" value=\"%.1f\"></div>", targetTemp);
         append("<div class=\"form-group\"><label for=\"current_temp\">設置當前溫度 (°C):</label><input type=\"number\" id=\"current_temp\" name=\"current_temp\" min=\"10\" max=\"40\" step=\"0.1\" value=\"%.1f\"></div>", currentTemp);
         append("<div class=\"form-group\"><label for=\"room_temp\">設置環境溫度 (°C):</label><input type=\"number\" id=\"room_temp\" name=\"room_temp\" min=\"10\" max=\"40\" step=\"0.1\" value=\"%.1f\"></div>", roomTemp);
@@ -794,6 +815,9 @@ namespace WebUI {
         append("<div style=\"text-align:center;margin:20px 0;\"><a href=\"/\" class=\"button secondary\">⬅️ 返回主頁</a><a href=\"/simulation-toggle\" class=\"button danger\">🔄 切換到真實模式</a></div></div>");
         append("</body></html>");
 
+        if (overflow) {
+            return "<div style='color:red;'>Error: HTML too large for buffer (6144 bytes). Remaining: " + String(remaining) + "</div>";
+        }
         return String(buffer.get());
     }
 

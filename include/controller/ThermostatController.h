@@ -57,6 +57,9 @@ public:
     
     float getCurrentTemperature() const override { return currentTemperature; }
     
+    bool setFanSpeed(uint8_t speed) override;
+    uint8_t getFanSpeed() const override { return fanSpeed; }
+    
     void update() override;
     
     // 協議相關查詢方法
