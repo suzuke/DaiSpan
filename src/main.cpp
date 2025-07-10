@@ -17,6 +17,8 @@
 #include "ArduinoOTA.h"
 #include "common/WebUI.h"
 #include "common/WebTemplates.h"
+#include "common/RemoteDebugger.h"
+#include "common/DebugWebClient.h"
 
 
 //根據platformio.ini的env選擇進行define
@@ -151,6 +153,7 @@ void initializeMonitoring() {
       append("<a href=\"/simulation\" class=\"button\">模擬控制</a>");
     }
     append("<a href=\"/simulation-toggle\" class=\"button\">切換%s模式</a>", configManager.getSimulationMode() ? "真實" : "模擬");
+    append("<a href=\"/debug\" class=\"button\">遠端調試</a>");
     append("<a href=\"/ota\" class=\"button\">OTA更新</a></div></div></body></html>");
     
     // 檢查溢出
@@ -529,6 +532,12 @@ void initializeMonitoring() {
     safeRestart();
   });
   
+  // 遠端調試界面
+  webServer->on("/debug", [](){
+    String html = DebugWebClient::getDebugHTML();
+    webServer->send(200, "text/html", html);
+  });
+  
   // 設置WebServer超時和連接限制
   webServer->onNotFound([](){
     webServer->sendHeader("Connection", "close");
@@ -540,6 +549,15 @@ void initializeMonitoring() {
   
   DEBUG_INFO_PRINT("[Main] WebServer監控功能已啟動: http://%s:8080\n", WiFi.localIP().toString().c_str());
   DEBUG_INFO_PRINT("[Main] 注意：HomeKit配對期間WebServer將暫停響應\n");
+  
+  // 初始化遠端調試系統
+  RemoteDebugger& debugger = RemoteDebugger::getInstance();
+  if (debugger.begin(8081)) {
+    DEBUG_INFO_PRINT("[Main] 遠端調試系統已啟動: ws://%s:8081\n", WiFi.localIP().toString().c_str());
+    DEBUG_INFO_PRINT("[Main] 調試界面: http://%s:8080/debug\n", WiFi.localIP().toString().c_str());
+  } else {
+    DEBUG_ERROR_PRINT("[Main] 遠端調試系統啟動失敗\n");
+  }
 }
 
 // 初始化HomeKit功能（只有在WiFi穩定連接後調用）
@@ -880,6 +898,9 @@ void setup() {
 }
 
 void loop() {
+  // 處理遠端調試器
+  RemoteDebugger::getInstance().loop();
+  
   // 使用系統管理器處理主迴圈邏輯
   if (systemManager) {
     systemManager->processMainLoop();

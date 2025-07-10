@@ -21,8 +21,8 @@
 #define MAX_TEMP         30.0f   // 最高溫度限制
 #define TEMP_STEP        0.5f    // 溫度調節步長
 
-// 更新間隔設定（毫秒）- 與 ThermostatController 保持一致
-#define UPDATE_INTERVAL    8000   // 狀態更新間隔（8秒，減少協議查詢頻率）
+// 更新間隔設定（毫秒）- 優化HomeKit響應速度
+#define UPDATE_INTERVAL    2000   // 狀態更新間隔（2秒，快速響應HomeKit操作）
 // HEARTBEAT_INTERVAL 已在 Debug.h 中定義
 
 class ThermostatDevice : public Service::Thermostat {

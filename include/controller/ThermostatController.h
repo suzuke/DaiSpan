@@ -20,9 +20,13 @@ private:
     unsigned long lastUpdateTime;
     unsigned long lastSuccessfulUpdate;
     
+    // 用戶互動追蹤，防止風速設置被queryStatus覆蓋
+    unsigned long lastFanSpeedSetTime;
+    uint8_t lastUserFanSpeed;
+    
     // 高性能錯誤處理和重試邏輯
-    static constexpr unsigned long MAX_CONSECUTIVE_ERRORS = 3;      // 進一步降低錯誤閾值
-    static constexpr unsigned long ERROR_RECOVERY_INTERVAL = 20000; // 20秒（減少恢復間隔）
+    static constexpr unsigned long MAX_CONSECUTIVE_ERRORS = 10;     // 增加錯誤閾值，避免過早進入恢復模式
+    static constexpr unsigned long ERROR_RECOVERY_INTERVAL = 30000; // 30秒恢復間隔
     static constexpr unsigned long UPDATE_INTERVAL = 6000;         // 6秒（提高查詢頻率但保持合理）
     
     // 內部輔助方法
@@ -73,6 +77,7 @@ public:
     unsigned long getConsecutiveErrors() const { return consecutiveErrors; }
     unsigned long getLastUpdateTime() const { return lastUpdateTime; }
     bool isProtocolHealthy() const { return consecutiveErrors < MAX_CONSECUTIVE_ERRORS; }
+    void forceResetErrorState() { consecutiveErrors = 0; lastSuccessfulUpdate = millis(); }
     
     // 獲取底層協議實例（用於特殊操作）
     IACProtocol* getProtocol() const { return protocol.get(); }

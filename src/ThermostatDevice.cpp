@@ -1,5 +1,6 @@
 #include "device/ThermostatDevice.h"
 #include "common/Debug.h"
+#include "common/RemoteDebugger.h"
 
 // 靜態變量用於記錄上一次輸出的值
 static float lastOutputCurrentTemp = 0;
@@ -111,9 +112,19 @@ boolean ThermostatDevice::update() {
         if (controller.setTargetMode(newMode)) {
             changed = true;
             DEBUG_INFO_PRINT("[Device] 模式變更成功應用\n");
+            // 記錄HomeKit操作到遠端調試器
+            REMOTE_LOG_HOMEKIT_OP("設定模式", "恆溫器", 
+                                 String(targetMode->getVal()) + "(" + getHomeKitModeText(targetMode->getVal()) + ")",
+                                 String(newMode) + "(" + getHomeKitModeText(newMode) + ")",
+                                 true, "");
         } else {
-            DEBUG_INFO_PRINT("[Device] 模式變更請求被拒絕\n");
-            return false;
+            DEBUG_WARN_PRINT("[Device] 模式變更請求被拒絕，但繼續處理其他更新\n");
+            // 記錄失敗的HomeKit操作
+            REMOTE_LOG_HOMEKIT_OP("設定模式", "恆溫器", 
+                                 String(targetMode->getVal()) + "(" + getHomeKitModeText(targetMode->getVal()) + ")",
+                                 String(newMode) + "(" + getHomeKitModeText(newMode) + ")",
+                                 false, "控制器拒絕模式變更");
+            // 不直接返回 false，允許繼續處理其他更新
         }
     }
     
@@ -126,19 +137,31 @@ boolean ThermostatDevice::update() {
         if (controller.setTargetTemperature(newTemp)) {
             changed = true;
             DEBUG_INFO_PRINT("[Device] 溫度變更成功應用\n");
+            // 記錄HomeKit操作到遠端調試器
+            REMOTE_LOG_HOMEKIT_OP("設定溫度", "恆溫器", 
+                                 String(targetTemp->getVal(), 1) + "°C",
+                                 String(newTemp, 1) + "°C",
+                                 true, "");
         } else {
-            DEBUG_INFO_PRINT("[Device] 溫度變更請求被拒絕\n");
-            return false;
+            DEBUG_WARN_PRINT("[Device] 溫度變更請求被拒絕，但繼續處理其他更新\n");
+            // 記錄失敗的HomeKit操作
+            REMOTE_LOG_HOMEKIT_OP("設定溫度", "恆溫器", 
+                                 String(targetTemp->getVal(), 1) + "°C",
+                                 String(newTemp, 1) + "°C",
+                                 false, "控制器拒絕溫度變更");
+            // 不直接返回 false，允許繼續處理其他更新
         }
     }
     
     if (changed) {
         DEBUG_INFO_PRINT("[Device] HomeKit 變更處理完成，已應用到設備\n");
+        // 立即觸發狀態同步，提供快速響應
+        lastUpdateTime = 0; // 重置更新時間，強制下次loop()立即執行同步
     } else {
         DEBUG_INFO_PRINT("[Device] HomeKit update() 被調用但未檢測到變更\n");
     }
     
-    return changed;
+    return true; // 總是返回 true，讓 HomeKit 認為操作成功
 }
 
 // 每秒調用一次，用於同步 HomeKit 和機器狀態（設備 → HomeKit）

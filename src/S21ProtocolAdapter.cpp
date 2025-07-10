@@ -73,7 +73,10 @@ bool S21ProtocolAdapter::setPowerAndMode(bool power, uint8_t mode, float tempera
     payload[0] = power ? '1' : '0';
     payload[1] = '0' + mode;
     payload[2] = s21_encode_target_temp(temperature);
-    payload[3] = fanSpeed;
+    payload[3] = convertFanSpeedToAC(fanSpeed);  // 轉換數值到協議字符
+    
+    DEBUG_INFO_PRINT("[S21Adapter] 風速轉換: 數值=%d (%s) -> 協議字符='%c'\n",
+                      fanSpeed, getFanSpeedText(fanSpeed), payload[3]);
     
     // 發送S21命令
     bool success = s21Protocol->sendCommand('D', '1', payload, 4);
@@ -159,8 +162,13 @@ bool S21ProtocolAdapter::queryStatus(ACStatus& status) {
     status.power = (payload[0] == '1');
     status.mode = payload[1] - '0';
     status.targetTemperature = s21_decode_target_temp(payload[2]);
-    status.fanSpeed = payload[3];
+    
+    // 正確轉換風速字符到數值
+    status.fanSpeed = convertACToFanSpeed(payload[3]);
     status.isValid = true;
+    
+    DEBUG_INFO_PRINT("[S21Adapter] 風速解析: 原始字符='%c' -> 數值=%d (%s)\n",
+                      payload[3], status.fanSpeed, getFanSpeedText(status.fanSpeed));
     
     // 更新內部緩存
     lastStatus = status;
@@ -236,7 +244,11 @@ bool S21ProtocolAdapter::supportsMode(uint8_t mode) const {
 }
 
 bool S21ProtocolAdapter::supportsFanSpeed(uint8_t fanSpeed) const {
-    auto it = std::find(SUPPORTED_FAN_SPEEDS.begin(), SUPPORTED_FAN_SPEEDS.end(), fanSpeed);
+    // 將數値風速轉換為協議字符
+    char acFanSpeed = convertFanSpeedToAC(fanSpeed);
+    
+    // 檢查轉換後的字符是否在支持列表中
+    auto it = std::find(SUPPORTED_FAN_SPEEDS.begin(), SUPPORTED_FAN_SPEEDS.end(), acFanSpeed);
     return it != SUPPORTED_FAN_SPEEDS.end();
 }
 
