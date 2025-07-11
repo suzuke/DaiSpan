@@ -18,6 +18,9 @@
 # .vscode/settings.json
 # .vscode/extensions.json
 
+# Claude Code Settings
+.claude/settings.local.json
+
 # Build Artifacts
 build/
 *.bin
