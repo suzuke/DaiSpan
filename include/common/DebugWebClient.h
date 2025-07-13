@@ -27,6 +27,7 @@ const char DEBUG_HTML_TEMPLATE[] PROGMEM = R"HTML(
 <button class="btn" onclick="sendCommand('diagnostics')">診斷</button>
 <button class="btn" onclick="clearLogs()">清除</button>
 <button class="btn" onclick="toggleSerialLog()">串口日誌</button>
+<button class="btn" onclick="window.location.href='/'">返回主頁</button>
 </div>
 <div class="panel"><h3>日誌</h3>
 <div style="margin-bottom:5px">

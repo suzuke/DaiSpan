@@ -17,6 +17,7 @@
 
 // 更新間隔設定（優化HomeKit響應速度）
 #define FAN_UPDATE_INTERVAL  2000   // 風扇狀態更新間隔（2秒，快速響應HomeKit操作）
+#define FAN_SPEED_TOLERANCE  10     // 風扇速度容忍度（10%，減少頻繁調整）
 
 class FanDevice : public Service::Fan {
 private:

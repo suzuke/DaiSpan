@@ -358,7 +358,7 @@ void RemoteDebugger::onWebSocketEvent(uint8_t num, WStype_t type, uint8_t* paylo
         case WStype_TEXT:
             {
                 String message = String((char*)payload);
-                DEBUG_INFO_PRINT("[RemoteDebug] 收到訊息: %s\n", message.c_str());
+                DEBUG_VERBOSE_PRINT("[RemoteDebug] 收到訊息: %s\n", message.c_str());
                 
                 // 解析 JSON 命令
                 JsonDocument doc;

@@ -22,7 +22,8 @@ ThermostatDevice::ThermostatDevice(IThermostatControl& thermostatControl)
     : Service::Thermostat(),
       controller(thermostatControl),
       lastUpdateTime(0),
-      lastHeartbeatTime(0) {
+      lastHeartbeatTime(0),
+      lastSignificantChange(0) {
     
     // 初始化特性（使用HomeSpan推薦方式，支持NVS存儲）
     currentTemp = new Characteristic::CurrentTemperature(21.0);
@@ -169,6 +170,8 @@ void ThermostatDevice::loop() {
     unsigned long currentTime = millis();
     bool changed = false; // 追蹤是否有狀態變更
     
+    // 移除調試日誌以節省資源
+    
     // 檢查是否需要輸出心跳信息和當前狀態
     if (currentTime - lastHeartbeatTime >= HEARTBEAT_INTERVAL) {
         DEBUG_INFO_PRINT("[Device] HomeSpan loop 運行中... 電源:%s 模式:%d 當前溫度:%.1f°C 目標溫度:%.1f°C\n", 
@@ -179,10 +182,8 @@ void ThermostatDevice::loop() {
         lastHeartbeatTime = currentTime;
     }
     
-    // 檢查是否需要更新狀態
-    if (currentTime - lastUpdateTime < UPDATE_INTERVAL) {
-        return;
-    }
+    // 強制每次都執行狀態更新檢查 - 確保 HomeKit 狀態同步
+    // 移除間隔限制，讓 HomeKit 狀態同步更頻繁
     lastUpdateTime = currentTime;
     
     controller.update();
@@ -213,6 +214,7 @@ void ThermostatDevice::loop() {
                       newTargetMode, getHomeKitModeText(newTargetMode),
                       devicePowerState ? "開啟" : "關閉");
         changed = true; // 標記有變更，確保HomeKit客戶端收到通知
+        lastSignificantChange = currentTime; // 記錄重要變化時間
     }
     
     // 同步目標溫度
@@ -222,6 +224,7 @@ void ThermostatDevice::loop() {
         targetTemp->timeVal(); // 強制更新時間戳，觸發HomeKit通知
         DEBUG_INFO_PRINT("[Device] 更新目標溫度：%.1f°C (強制通知)\n", newTargetTemp);
         changed = true; // 標記有變更，確保HomeKit客戶端收到通知
+        lastSignificantChange = currentTime; // 記錄重要變化時間
     }
     
     // 同步當前溫度並強制通知HomeKit客戶端
@@ -232,6 +235,7 @@ void ThermostatDevice::loop() {
         currentTemp->timeVal(); // 強制更新時間戳，觸發HomeKit通知
         DEBUG_INFO_PRINT("[Device] 更新當前溫度：%.1f°C (強制通知)\n", newCurrentTemp);
         changed = true; // 標記有變更，確保HomeKit客戶端收到通知
+        lastSignificantChange = currentTime; // 記錄重要變化時間
     }
     
     // 更新當前模式 - 必須與電源狀態保持一致
@@ -277,6 +281,7 @@ void ThermostatDevice::loop() {
                       newCurrentMode, getHomeKitModeText(newCurrentMode), 
                       devicePower ? "開啟" : "關閉");
         changed = true; // 標記有變更，確保HomeKit客戶端收到通知
+        lastSignificantChange = currentTime; // 記錄重要變化時間
     }
     
     // 如果有任何狀態變更，立即通知HomeSpan處理

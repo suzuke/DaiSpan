@@ -187,10 +187,11 @@ void FanDevice::loop() {
         stateChanged = true;
     }
     
-    // 同步速度狀態 - 檢查是否與用戶上次設置不同
-    if (fanSpeed->getVal() != currentHomeKitSpeed) {
-        DEBUG_INFO_PRINT("[FanDevice] 發現速度差異 - HomeKit: %d%%, AC對應: %d%% (AC速度: %d)\n",
-                        fanSpeed->getVal(), currentHomeKitSpeed, currentACSpeed);
+    // 同步速度狀態 - 使用容忍度減少頻繁調整
+    int speedDifference = abs(fanSpeed->getVal() - currentHomeKitSpeed);
+    if (speedDifference > FAN_SPEED_TOLERANCE) {
+        DEBUG_INFO_PRINT("[FanDevice] 發現顯著速度差異 - HomeKit: %d%%, AC對應: %d%% (差異: %d%%, AC速度: %d)\n",
+                        fanSpeed->getVal(), currentHomeKitSpeed, speedDifference, currentACSpeed);
         
         // 如果用戶最近設置過速度，且當前AC速度與用戶設置相符，則不覆蓋
         if (lastUserSetSpeed >= 0 && 
@@ -205,7 +206,8 @@ void FanDevice::loop() {
             stateChanged = true;
         }
     } else {
-        DEBUG_VERBOSE_PRINT("[FanDevice] 風扇速度無變化：%d%%\n", fanSpeed->getVal());
+        DEBUG_VERBOSE_PRINT("[FanDevice] 風扇速度差異在容忍範圍內：%d%% (差異: %d%%)\n", 
+                           fanSpeed->getVal(), speedDifference);
     }
     
     if (stateChanged) {
