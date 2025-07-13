@@ -13,14 +13,14 @@ class OTAManager;
 // 系統常數
 static constexpr unsigned long POWER_CHECK_INTERVAL = 30000;     // ESP32-C3 功率檢查間隔
 static constexpr unsigned long OTA_HANDLE_INTERVAL = 100;        // OTA 處理間隔
-static constexpr unsigned long PAIRING_CHECK_INTERVAL = 5000;    // 配對檢測間隔
+static constexpr unsigned long PAIRING_CHECK_INTERVAL = 3000;    // 配對檢測間隔（優化：從5秒縮短）
 static constexpr unsigned long WEBSERVER_STARTUP_DELAY = 5000;   // WebServer 啟動延遲
 static constexpr unsigned long SYSTEM_HEARTBEAT_INTERVAL = 30000; // 系統心跳間隔
 
-// 記憶體閾值
-static constexpr uint32_t MEMORY_DROP_THRESHOLD = 20000;         // 記憶體下降閾值
-static constexpr uint32_t MEMORY_TIGHT_THRESHOLD = 60000;        // 記憶體緊張閾值
-static constexpr uint32_t MEMORY_MEDIUM_THRESHOLD = 80000;       // 記憶體中等閾值
+// 記憶體閾值 - 優化後減少偽休眠問題
+static constexpr uint32_t MEMORY_DROP_THRESHOLD = 35000;         // 記憶體下降閾值（提高避免誤判）
+static constexpr uint32_t MEMORY_TIGHT_THRESHOLD = 40000;        // 記憶體緊張閾值（降低減少觸發）
+static constexpr uint32_t MEMORY_MEDIUM_THRESHOLD = 70000;       // 記憶體中等閾值（調整平衡點）
 
 SystemManager::SystemManager(ConfigManager& config, WiFiManager*& wifi, WebServer*& web,
                            IThermostatControl*& controller, MockThermostatController*& mock,
@@ -64,18 +64,15 @@ void SystemManager::handleOptimizedTimingTasks(unsigned long currentTime) {
     
     // 全局WiFi監控 (最高優先級 - 快速重連)
     if (currentTime >= state.nextWiFiCheck) {
-        state.nextWiFiCheck = currentTime + 15000; // 15秒檢查間隔
+        state.nextWiFiCheck = currentTime + 5000; // 5秒檢查間隔（優化：從15秒縮短）
         handleGlobalWiFiMonitoring(currentTime);
     }
     
-    // ESP32-C3 功率管理檢查
+    // WiFi 智能功率管理檢查
     if (currentTime >= state.nextPowerCheck) {
         state.nextPowerCheck = currentTime + POWER_CHECK_INTERVAL;
         #if defined(ESP32C3_SUPER_MINI)
-        if (WiFi.status() == WL_DISCONNECTED && WiFi.getTxPower() != WIFI_POWER_8_5dBm) {
-            WiFi.setTxPower(WIFI_POWER_8_5dBm);
-            DEBUG_VERBOSE_PRINT("[SystemManager] ESP32-C3 調整WiFi功率為節能模式\n");
-        }
+        handleSmartWiFiPowerManagement();
         #endif
     }
     
@@ -121,8 +118,8 @@ void SystemManager::handleGlobalWiFiMonitoring(unsigned long currentTime) {
         wifiFailureCount++;
         DEBUG_WARN_PRINT("[SystemManager] WiFi斷線檢測 (狀態: %d, 失敗計數: %d)\n", wifiStatus, wifiFailureCount);
         
-        // 快速重連策略：30秒間隔，不等待多次失敗
-        if (currentTime - lastWiFiReconnectAttempt >= 30000) { // 30秒重連間隔
+        // 快速重連策略：10秒間隔，快速恢復連接（優化：從30秒縮短）
+        if (currentTime - lastWiFiReconnectAttempt >= 10000) { // 10秒重連間隔
             lastWiFiReconnectAttempt = currentTime;
             
             // 獲取WiFi憑證
@@ -171,6 +168,38 @@ void SystemManager::handleESP32C3PowerManagement(unsigned long currentTime) {
 void SystemManager::handleOTAUpdates() {
     if (WiFi.status() == WL_CONNECTED) {
         ArduinoOTA.handle();
+    }
+}
+
+void SystemManager::handleSmartWiFiPowerManagement() {
+    // 智能WiFi功率管理 - 根據連接狀態和信號強度動態調整
+    wl_status_t wifiStatus = WiFi.status();
+    
+    if (wifiStatus == WL_CONNECTED) {
+        // 連接正常時，根據信號強度調整功率
+        int32_t rssi = WiFi.RSSI();
+        wifi_power_t currentPower = WiFi.getTxPower();
+        wifi_power_t targetPower = WIFI_POWER_11dBm; // 預設中等功率
+        
+        if (rssi < -75) {
+            // 信號弱，使用較高功率
+            targetPower = WIFI_POWER_15dBm;
+        } else if (rssi > -50) {
+            // 信號很強，可以使用較低功率
+            targetPower = WIFI_POWER_8_5dBm;
+        }
+        
+        if (currentPower != targetPower) {
+            WiFi.setTxPower(targetPower);
+            DEBUG_INFO_PRINT("[SystemManager] 智能調整WiFi功率: %d dBm (RSSI: %d dBm)\n", 
+                            (int)targetPower, rssi);
+        }
+    } else {
+        // 連接斷開時，使用較高功率以確保能夠重連
+        if (WiFi.getTxPower() < WIFI_POWER_11dBm) {
+            WiFi.setTxPower(WIFI_POWER_11dBm);
+            DEBUG_INFO_PRINT("[SystemManager] 斷線時提升WiFi功率至11dBm以增強重連能力\n");
+        }
     }
 }
 
@@ -272,17 +301,46 @@ unsigned long SystemManager::calculateWebServerInterval(uint32_t freeMemory) {
 }
 
 bool SystemManager::shouldSkipWebServerProcessing() const {
-    // 記憶體嚴重不足時偶爾跳過WebServer處理
-    return (state.webServerSkipCounter > 10 && (state.webServerSkipCounter % 3) != 0);
+    // 優化WebServer跳過邏輯 - 減少跳過頻率，提高響應性
+    // 只有在真正記憶體不足時才跳過，且跳過比例從2/3降低為1/2
+    if (state.webServerSkipCounter <= 5) {
+        return false; // 初期不跳過，確保基本響應
+    }
+    
+    // 記憶體嚴重不足時，每2次跳過1次（改善前是每3次跳過2次）
+    return (state.webServerSkipCounter % 2) != 0;
 }
 
 void SystemManager::updatePairingDetection(uint32_t currentMemory) {
-    // 高性能記憶體檢測，不需要複雜的計數器
-    state.avgMemory = (state.avgMemory * 3 + currentMemory) / 4; // 移動平均
+    // 高性能記憶體檢測，使用移動平均減少波動影響
+    state.avgMemory = (state.avgMemory * 7 + currentMemory) / 8; // 更穩定的移動平均
     
-    // 簡化的配對檢測邏輯
-    bool significantMemoryDrop = currentMemory < state.avgMemory - MEMORY_DROP_THRESHOLD;
-    homeKitPairingActive = significantMemoryDrop;
+    // 改良的配對檢測邏輯 - 增加多重驗證避免誤判
+    bool significantMemoryDrop = currentMemory < (state.avgMemory - MEMORY_DROP_THRESHOLD);
+    
+    // 額外驗證條件：WiFi必須連接正常且記憶體下降持續一定時間
+    static unsigned long lastMemoryDropTime = 0;
+    static bool previousMemoryDrop = false;
+    
+    if (significantMemoryDrop && WiFi.status() == WL_CONNECTED) {
+        if (!previousMemoryDrop) {
+            lastMemoryDropTime = millis();
+        } else if (millis() - lastMemoryDropTime > 3000) {
+            // 記憶體下降持續3秒以上，且WiFi正常，才判定為配對中
+            homeKitPairingActive = true;
+            DEBUG_INFO_PRINT("[SystemManager] 檢測到HomeKit配對活動（記憶體持續下降: %d bytes < %d bytes）\n", 
+                            currentMemory, (int)(state.avgMemory - MEMORY_DROP_THRESHOLD));
+        }
+    } else {
+        // 記憶體恢復正常或WiFi異常，清除配對狀態
+        if (homeKitPairingActive) {
+            homeKitPairingActive = false;
+            DEBUG_INFO_PRINT("[SystemManager] HomeKit配對活動結束（記憶體恢復或WiFi異常）\n");
+        }
+        lastMemoryDropTime = 0;
+    }
+    
+    previousMemoryDrop = significantMemoryDrop;
 }
 
 void SystemManager::getSystemStats(String& mode, String& wifiStatus, String& deviceStatus, String& ipAddress) {

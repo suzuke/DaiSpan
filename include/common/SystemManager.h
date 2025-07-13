@@ -73,6 +73,7 @@ private:
     void handleWebServerProcessing(unsigned long currentTime);
     void handlePeriodicTasks(unsigned long currentTime);
     void printHeartbeatInfo(unsigned long currentTime);
+    void handleSmartWiFiPowerManagement();
     
     // 輔助方法
     bool shouldStartWebServer(unsigned long currentTime) const;
