@@ -20,9 +20,11 @@ private:
     unsigned long lastUpdateTime;
     unsigned long lastSuccessfulUpdate;
     
-    // 用戶互動追蹤，防止風速設置被queryStatus覆蓋
+    // 用戶互動追蹤，防止設置被queryStatus覆蓋
     unsigned long lastFanSpeedSetTime;
     uint8_t lastUserFanSpeed;
+    unsigned long lastModeSetTime;
+    uint8_t lastUserMode;
     
     // 高性能錯誤處理和重試邏輯
     static constexpr unsigned long MAX_CONSECUTIVE_ERRORS = 10;     // 增加錯誤閾值，避免過早進入恢復模式

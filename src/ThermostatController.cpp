@@ -12,7 +12,9 @@ ThermostatController::ThermostatController(std::unique_ptr<IACProtocol> p)
       lastUpdateTime(0),
       lastSuccessfulUpdate(0),
       lastFanSpeedSetTime(0),
-      lastUserFanSpeed(AC_FAN_AUTO) {
+      lastUserFanSpeed(AC_FAN_AUTO),
+      lastModeSetTime(0),
+      lastUserMode(AC_MODE_AUTO) {
     
     if (!protocol) {
         DEBUG_ERROR_PRINT("[Controller] 錯誤：協議實例為空\n");
@@ -135,9 +137,12 @@ bool ThermostatController::setTargetMode(uint8_t newMode) {
     
     if (success) {
         mode = acMode;
+        // 記錄用戶設定的模式，防止被queryStatus覆蓋
+        lastModeSetTime = millis();
+        lastUserMode = acMode;
         resetErrorCount();
         lastSuccessfulUpdate = millis(); // 記錄成功操作時間
-        DEBUG_INFO_PRINT("[Controller] 模式設置成功：%d\n", newMode);
+        DEBUG_INFO_PRINT("[Controller] 模式設置成功：%d，啟用10秒保護期\n", newMode);
     } else {
         handleProtocolError("setTargetMode");
     }
@@ -265,7 +270,25 @@ void ThermostatController::update() {
     if (protocol->queryStatus(status)) {
         if (status.isValid) {
             power = status.power;
-            mode = status.mode;
+            
+            // 用戶互動保護：如果用戶在10秒內設置過模式，不要被AC狀態覆蓋
+            const unsigned long MODE_PROTECTION_PERIOD = 10000; // 10秒保護期
+            unsigned long timeSinceLastModeSet = currentTime - lastModeSetTime;
+            
+            if (lastModeSetTime > 0 && timeSinceLastModeSet < MODE_PROTECTION_PERIOD) {
+                DEBUG_INFO_PRINT("[Controller] 用戶模式保護期內，跳過模式更新 (剩餘: %lu ms, 用戶設置: %d, AC回報: %d)\n",
+                                MODE_PROTECTION_PERIOD - timeSinceLastModeSet,
+                                lastUserMode, status.mode);
+                // 保持用戶設置的模式
+                mode = lastUserMode;
+            } else {
+                // 保護期外，正常更新模式
+                if (mode != status.mode) {
+                    DEBUG_INFO_PRINT("[Controller] 模式從AC狀態更新：%d -> %d\n", mode, status.mode);
+                }
+                mode = status.mode;
+            }
+            
             targetTemperature = status.targetTemperature;
             
             // 用戶互動保護：如果用戶在10秒內設置過風速，不要被AC狀態覆蓋

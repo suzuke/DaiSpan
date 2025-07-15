@@ -1,5 +1,6 @@
 #include "protocol/S21ProtocolAdapter.h"
 #include <algorithm>
+#include <cmath>
 
 // 支持的模式和風扇速度定義
 const std::vector<uint8_t> S21ProtocolAdapter::SUPPORTED_MODES = {
@@ -105,9 +106,41 @@ bool S21ProtocolAdapter::setPowerAndMode(bool power, uint8_t mode, float tempera
 bool S21ProtocolAdapter::setTemperature(float temperature) {
     DEBUG_INFO_PRINT("[S21Adapter] 設置溫度=%.1f°C\n", temperature);
     
+    // S21協議溫度精度修正：四捨五入到最接近的0.5°C
+    float correctedTemp = round(temperature * 2.0f) / 2.0f;
+    if (fabs(correctedTemp - temperature) > 0.01f) {
+        DEBUG_INFO_PRINT("[S21Adapter] 溫度精度修正：%.1f°C -> %.1f°C\n", temperature, correctedTemp);
+        temperature = correctedTemp;
+    }
+    
     if (!validateTemperature(temperature)) {
+        DEBUG_ERROR_PRINT("[S21Adapter] 溫度值超出範圍：%.1f°C (有效範圍: %.1f-%.1f°C)\n", 
+                          temperature, MIN_TEMPERATURE, MAX_TEMPERATURE);
         setLastError("溫度值超出範圍");
         return false;
+    }
+    
+    // 檢查空調電源狀態，如果狀態不確定則查詢一次
+    DEBUG_INFO_PRINT("[S21Adapter] 溫度設置檢查：目標溫度=%.1f°C，當前電源狀態=%s\n", 
+                      temperature, lastStatus.power ? "開啟" : "關閉");
+    
+    // 如果最近有電源變更，重新查詢狀態確保準確性
+    if (!lastStatus.isValid) {
+        DEBUG_INFO_PRINT("[S21Adapter] 狀態無效，重新查詢空調狀態\n");
+        ACStatus currentStatus;
+        if (queryStatus(currentStatus)) {
+            lastStatus = currentStatus;
+        }
+    }
+    
+    // 如果空調關機，記錄溫度設置但不發送命令（HomeKit用戶體驗優化）
+    if (!lastStatus.power) {
+        DEBUG_INFO_PRINT("[S21Adapter] 空調關機時記錄目標溫度：%.1f°C（不發送S21命令）\n", temperature);
+        // 更新內部狀態以支持 HomeKit 用戶體驗
+        lastStatus.targetTemperature = temperature;
+        lastOperationSuccess = true;
+        setLastError("");
+        return true; // 返回成功，讓用戶感覺設置已生效
     }
     
     // 保持當前的電源和模式狀態，只更新溫度
@@ -115,7 +148,10 @@ bool S21ProtocolAdapter::setTemperature(float temperature) {
     payload[0] = lastStatus.power ? '1' : '0';
     payload[1] = '0' + lastStatus.mode;
     payload[2] = s21_encode_target_temp(temperature);
-    payload[3] = lastStatus.fanSpeed;
+    payload[3] = convertFanSpeedToAC(lastStatus.fanSpeed);  // 修復：轉換風速到協議字符
+    
+    DEBUG_INFO_PRINT("[S21Adapter] S21命令組裝：電源=%c, 模式=%c, 溫度編碼=0x%02X('%c'), 風速=0x%02X('%c')\n",
+                      payload[0], payload[1], payload[2], payload[2], payload[3], payload[3]);
     
     bool success = s21Protocol->sendCommand('D', '1', payload, 4);
     

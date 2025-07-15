@@ -39,7 +39,7 @@
 // HomeKit 模式轉換函數
 static uint8_t convertHomeKitToACMode(uint8_t hapMode) {
     switch (hapMode) {
-        case HAP_MODE_OFF:  return AC_MODE_INVALID;  // 關機狀態用自動模式
+        case HAP_MODE_OFF:  return AC_MODE_AUTO;  // OFF 模式通過電源控制，使用自動模式
         case HAP_MODE_HEAT: return AC_MODE_HEAT;  // 製熱
         case HAP_MODE_COOL: return AC_MODE_COOL;  // 製冷
         case HAP_MODE_AUTO: return AC_MODE_AUTO;  // 自動

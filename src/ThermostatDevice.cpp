@@ -63,26 +63,23 @@ boolean ThermostatDevice::update() {
                        targetMode->getVal(), getHomeKitModeText(targetMode->getVal()),
                        targetMode->getNewVal(), getHomeKitModeText(targetMode->getNewVal()));
         
-        uint8_t newMode = targetMode->getNewVal();
+        uint8_t newMode = targetMode->getNewVal<uint8_t>();
         
-        // 重要：如果從關閉模式切換到任何運行模式，自動開啟電源
-        if (targetMode->getVal() == HAP_MODE_OFF && newMode != HAP_MODE_OFF) {
-            DEBUG_INFO_PRINT("[Device] 檢測到從關閉模式切換到運行模式，自動開啟電源\n");
-            if (controller.setPower(true)) {
-                DEBUG_INFO_PRINT("[Device] 電源自動開啟成功\n");
-            }
-        }
-        // 如果切換到關閉模式，自動關閉電源
-        else if (newMode == HAP_MODE_OFF) {
+        // 處理電源和模式的設定順序很重要：
+        // 1. 如果要切換到關閉模式，直接關閉電源
+        // 2. 如果要切換到運行模式，先設定模式（會自動處理電源）
+        if (newMode == HAP_MODE_OFF) {
             DEBUG_INFO_PRINT("[Device] 切換到關閉模式，自動關閉電源\n");
             if (controller.setPower(false)) {
                 DEBUG_INFO_PRINT("[Device] 電源自動關閉成功\n");
             }
         }
+        // 注意：從關閉模式切換到運行模式時，不在這裡開啟電源
+        // 而是在後面的 setTargetMode 中處理，這樣可以確保模式正確
         
         // 只在沒有收到溫度設定時才自動調整溫度
         if (!targetTemp->updated()) {
-            float newTargetTemp = targetTemp->getVal();  // 使用當前的目標溫度作為基礎
+            float newTargetTemp = targetTemp->getVal<float>();  // 使用當前的目標溫度作為基礎
             float currentTemp = controller.getCurrentTemperature();
             
             // 當切換到製冷模式時，自動調整目標溫度
@@ -132,22 +129,22 @@ boolean ThermostatDevice::update() {
     // 檢查目標溫度變更
     if (targetTemp->updated()) {
         DEBUG_INFO_PRINT("[Device] 收到 HomeKit 溫度變更請求：%.1f°C -> %.1f°C\n",
-                       targetTemp->getVal(), targetTemp->getNewVal());
+                       targetTemp->getVal<float>(), targetTemp->getNewVal<float>());
         
-        float newTemp = targetTemp->getNewVal();
+        float newTemp = targetTemp->getNewVal<float>();
         if (controller.setTargetTemperature(newTemp)) {
             changed = true;
             DEBUG_INFO_PRINT("[Device] 溫度變更成功應用\n");
             // 記錄HomeKit操作到遠端調試器
             REMOTE_LOG_HOMEKIT_OP("設定溫度", "恆溫器", 
-                                 String(targetTemp->getVal(), 1) + "°C",
+                                 String(targetTemp->getVal<float>(), 1) + "°C",
                                  String(newTemp, 1) + "°C",
                                  true, "");
         } else {
             DEBUG_WARN_PRINT("[Device] 溫度變更請求被拒絕，但繼續處理其他更新\n");
             // 記錄失敗的HomeKit操作
             REMOTE_LOG_HOMEKIT_OP("設定溫度", "恆溫器", 
-                                 String(targetTemp->getVal(), 1) + "°C",
+                                 String(targetTemp->getVal<float>(), 1) + "°C",
                                  String(newTemp, 1) + "°C",
                                  false, "控制器拒絕溫度變更");
             // 不直接返回 false，允許繼續處理其他更新
