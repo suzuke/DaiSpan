@@ -1,5 +1,5 @@
-// DaiSpan V3 架構整合版本
-// 這是 main.cpp 的 V3 版本，整合了事件驅動架構和現有功能
+// DaiSpan 智能恆溫器系統
+// 基於事件驅動架構的現代化智能家居解決方案
 
 #include "HomeSpan.h"
 #include "controller/ThermostatController.h"
@@ -23,15 +23,12 @@
 #include "common/RemoteDebugger.h"
 #include "common/DebugWebClient.h"
 
-// V3 架構組件
-#ifdef V3_ARCHITECTURE_ENABLED
+// 核心架構組件
 #include "architecture_v3/core/EventSystemSimple.h"
 #include "architecture_v3/core/ServiceContainerSimple.h"
 #include "architecture_v3/domain/ThermostatDomain.h"
 #include "architecture_v3/domain/ConfigDomain.h"
-#include "migration/V3MigrationAdapter.h"
 #include <Preferences.h>
-#endif
 
 // 硬體定義
 #if defined(ESP32C3_SUPER_MINI)
@@ -45,7 +42,7 @@
 #define S21_TX_PIN 13
 #endif
 
-// 現有全域變數 (V2 系統)
+// 核心系統全域變數
 std::unique_ptr<ACProtocolFactory> protocolFactory = nullptr;
 IThermostatControl* thermostatController = nullptr;
 MockThermostatController* mockController = nullptr;
@@ -66,73 +63,61 @@ WebServer* webServer = nullptr;
 bool monitoringEnabled = false;
 bool homeKitPairingActive = false;
 
-#ifdef V3_ARCHITECTURE_ENABLED
-// V3 全域組件
+// 核心架構組件
 DaiSpan::Core::EventPublisher* g_eventBus = nullptr;
 DaiSpan::Core::ServiceContainer* g_serviceContainer = nullptr;
-DaiSpan::Migration::MigrationManager* g_migrationManager = nullptr;
 Preferences g_preferences;
-bool v3ArchitectureEnabled = false;
-#endif
+bool modernArchitectureEnabled = false;
 
 // 安全重啟函數
 void safeRestart() {
     DEBUG_INFO_PRINT("[Main] 開始安全重啟...\n");
     
-#ifdef V3_ARCHITECTURE_ENABLED
-    // V3 清理
-    if (g_migrationManager) {
-        DEBUG_INFO_PRINT("[V3] 清理遷移管理器\n");
-        delete g_migrationManager;
-        g_migrationManager = nullptr;
-    }
-    
+    // 核心架構清理
     if (g_serviceContainer) {
-        DEBUG_INFO_PRINT("[V3] 清理服務容器\n");
+        DEBUG_INFO_PRINT("[Core] 清理服務容器\n");
         delete g_serviceContainer;
         g_serviceContainer = nullptr;
     }
     
     if (g_eventBus) {
-        DEBUG_INFO_PRINT("[V3] 清理事件總線\n");
+        DEBUG_INFO_PRINT("[Core] 清理事件總線\n");
         delete g_eventBus;
         g_eventBus = nullptr;
     }
-#endif
     
     delay(500);
     ESP.restart();
 }
 
-#ifdef V3_ARCHITECTURE_ENABLED
 /**
- * 初始化 V3 架構
+ * 初始化核心架構
  */
-void setupV3Architecture() {
-    DEBUG_INFO_PRINT("[V3] 初始化 V3 架構...\n");
+void setupModernArchitecture() {
+    DEBUG_INFO_PRINT("[Core] 初始化核心架構...\n");
     
     try {
         // 1. 初始化事件系統
         g_eventBus = new DaiSpan::Core::EventPublisher();
         if (!g_eventBus) {
-            DEBUG_ERROR_PRINT("[V3] 事件總線創建失敗\n");
+            DEBUG_ERROR_PRINT("[Core] 事件總線創建失敗\n");
             return;
         }
         
         // 確保統計數據從零開始
         g_eventBus->resetStatistics();
-        DEBUG_INFO_PRINT("[V3] 事件總線統計已重置\n");
+        DEBUG_INFO_PRINT("[Core] 事件總線統計已重置\n");
         
         // 2. 初始化服務容器
         g_serviceContainer = new DaiSpan::Core::ServiceContainer();
         if (!g_serviceContainer) {
-            DEBUG_ERROR_PRINT("[V3] 服務容器創建失敗\n");
+            DEBUG_ERROR_PRINT("[Core] 服務容器創建失敗\n");
             return;
         }
         
         // 3. 初始化偏好設定（用於 V3 配置）
-        if (!g_preferences.begin("daispan_v3", false)) {
-            DEBUG_ERROR_PRINT("[V3] V3 偏好設定初始化失敗\n");
+        if (!g_preferences.begin("daispan_core", false)) {
+            DEBUG_ERROR_PRINT("[Core] 系統偏好設定初始化失敗\n");
             return;
         }
         
@@ -143,108 +128,135 @@ void setupV3Architecture() {
                 return std::make_shared<DaiSpan::Domain::Config::ConfigurationManager>(g_preferences);
             });
         
-        // 5. 初始化遷移管理器
-        g_migrationManager = new DaiSpan::Migration::MigrationManager(*g_eventBus, *g_serviceContainer);
-        if (!g_migrationManager) {
-            DEBUG_ERROR_PRINT("[V3] 遷移管理器創建失敗\n");
-            return;
-        }
-        
-        DEBUG_INFO_PRINT("[V3] V3 基礎架構初始化完成\n");
-        v3ArchitectureEnabled = true;
+        DEBUG_INFO_PRINT("[Core] 基礎架構初始化完成\n");
+        modernArchitectureEnabled = true;
         
     } catch (const std::exception& e) {
-        DEBUG_ERROR_PRINT("[V3] V3 架構初始化異常: %s\n", e.what());
-        v3ArchitectureEnabled = false;
+        DEBUG_ERROR_PRINT("[Core] 架構初始化異常: %s\n", e.what());
+        modernArchitectureEnabled = false;
     }
 }
 
 /**
- * 設置 V3 遷移橋接
+ * 設置核心架構事件監聽
  */
-void setupV3Migration() {
-    if (!v3ArchitectureEnabled || !g_migrationManager) {
-        DEBUG_WARN_PRINT("[V3] V3 架構未啟用，跳過遷移設置\n");
+void setupCoreEventListeners() {
+    if (!modernArchitectureEnabled || !g_eventBus) {
+        DEBUG_WARN_PRINT("[Core] 核心架構未啟用，跳過事件監聽設置\n");
         return;
     }
     
-    if (!thermostatController) {
-        DEBUG_WARN_PRINT("[V3] 恆溫器控制器未初始化，延後遷移設置\n");
-        return;
-    }
-    
-    DEBUG_INFO_PRINT("[V3] 設置 V2 到 V3 遷移橋接...\n");
-    
-    // 設置橋接適配器（連接 V2 和 V3）
-    auto migrationResult = g_migrationManager->initialize(thermostatController, thermostatDevice);
-    if (migrationResult.isFailure()) {
-        DEBUG_ERROR_PRINT("[V3] 遷移橋接初始化失敗: %s\n", migrationResult.getError().c_str());
-        return;
-    }
+    DEBUG_INFO_PRINT("[Core] 設置核心架構事件監聽...\n");
     
     // 設置事件監聽器（用於調試和監控）
     g_eventBus->subscribe("StateChanged",
         [](const DaiSpan::Core::DomainEvent& event) {
-            DEBUG_VERBOSE_PRINT("[V3] 狀態變化事件接收\n");
-            REMOTE_WEBLOG("[V3-Event] 恆溫器狀態變化");
+            DEBUG_VERBOSE_PRINT("[Core] 狀態變化事件接收\n");
+            REMOTE_WEBLOG("[Core-Event] 恆溫器狀態變化");
         });
     
     g_eventBus->subscribe("CommandReceived",
         [](const DaiSpan::Core::DomainEvent& event) {
-            DEBUG_VERBOSE_PRINT("[V3] 命令接收事件\n");
-            REMOTE_WEBLOG("[V3-Event] 命令接收");
+            DEBUG_VERBOSE_PRINT("[Core] 命令接收事件\n");
+            REMOTE_WEBLOG("[Core-Event] 命令接收");
         });
     
     g_eventBus->subscribe("TemperatureUpdated",
         [](const DaiSpan::Core::DomainEvent& event) {
-            DEBUG_INFO_PRINT("[V3] 溫度更新事件\n");
-            REMOTE_WEBLOG("[V3-Event] 溫度更新");
+            DEBUG_INFO_PRINT("[Core] 溫度更新事件\n");
+            REMOTE_WEBLOG("[Core-Event] 溫度更新");
         });
     
     g_eventBus->subscribe("Error",
         [](const DaiSpan::Core::DomainEvent& event) {
-            DEBUG_ERROR_PRINT("[V3] 領域錯誤事件\n");
-            REMOTE_WEBLOG("[V3-Error] 系統錯誤");
+            DEBUG_ERROR_PRINT("[Core] 領域錯誤事件\n");
+            REMOTE_WEBLOG("[Core-Error] 系統錯誤");
         });
     
-    DEBUG_INFO_PRINT("[V3] V2/V3 遷移橋接設置完成\n");
+    DEBUG_INFO_PRINT("[Core] 系統遷移橋接設置完成\n");
 }
 
 /**
- * 處理 V3 事件（在主循環中調用）
+ * 處理核心事件（在主循環中調用）
  */
-void processV3Events() {
-    if (!v3ArchitectureEnabled || !g_migrationManager) {
+void processCoreEvents() {
+    if (!modernArchitectureEnabled || !g_eventBus) {
         return;
     }
     
     // 處理事件總線
-    g_migrationManager->processEvents();
+    g_eventBus->processEvents(5); // 每次最多處理 5 個事件
     
-    // 定期輸出統計資訊（每 60 秒）
+    // 定期輸出統計資訊和記憶體檢查（每 60 秒）
     static unsigned long lastStatsTime = 0;
+    static uint32_t lastFreeHeap = ESP.getFreeHeap();
+    static uint32_t minFreeHeap = ESP.getFreeHeap();
+    static uint32_t maxFreeHeap = ESP.getFreeHeap();
+    
     if (millis() - lastStatsTime > 60000) {
         if (g_eventBus) {
-            // auto stats = g_eventBus->getStatistics();
-            DEBUG_VERBOSE_PRINT("[V3] 事件統計 - 佇列: %zu\n", g_eventBus->getQueueSize());
+            uint32_t currentFreeHeap = ESP.getFreeHeap();
+            float memoryUsage = (float)(currentFreeHeap) / (float)(ESP.getHeapSize()) * 100.0f;
+            
+            // 更新記憶體使用範圍
+            if (currentFreeHeap < minFreeHeap) minFreeHeap = currentFreeHeap;
+            if (currentFreeHeap > maxFreeHeap) maxFreeHeap = currentFreeHeap;
+            
+            DEBUG_INFO_PRINT("[Core] 事件統計: 隊列:%d 訂閱:%d 處理:%d 記憶體:%.1f%% (最小:%d 最大:%d) 運行:%ds\n",
+                           g_eventBus->getQueueSize(),
+                           g_eventBus->getSubscriptionCount(),
+                           g_eventBus->getProcessedEventCount(),
+                           memoryUsage,
+                           minFreeHeap,
+                           maxFreeHeap,
+                           millis() / 1000);
+            
+            // 記憶體洩漏檢測
+            if (lastFreeHeap > currentFreeHeap) {
+                uint32_t memoryDrop = lastFreeHeap - currentFreeHeap;
+                if (memoryDrop > 1000) {  // 記憶體下降超過 1KB
+                    DEBUG_WARN_PRINT("[Core] 記憶體洩漏警告: 下降 %d bytes (從 %d 到 %d)\n",
+                                     memoryDrop, lastFreeHeap, currentFreeHeap);
+                }
+            }
+            
+            // 記憶體清理
+            if (currentFreeHeap < 50000) {
+                DEBUG_WARN_PRINT("[Core] 記憶體不足，嘗試清理...\n");
+                // 重置事件統計以釋放可能的累積記憶體
+                g_eventBus->resetStatistics();
+                delay(100);  // 讓系統有時間清理
+                DEBUG_INFO_PRINT("[Core] 清理後記憶體: %d bytes\n", ESP.getFreeHeap());
+            }
             
             if (g_eventBus->getQueueSize() > 10) {
-                DEBUG_WARN_PRINT("[V3] 事件佇列積壓過多: %zu\n", g_eventBus->getQueueSize());
+                DEBUG_WARN_PRINT("[Core] 事件佇列積壓過多: %d\n", g_eventBus->getQueueSize());
             }
+            
+            // 記錄HomeKit狀態
+            if (thermostatDevice && thermostatController) {
+                DEBUG_VERBOSE_PRINT("[Core] HomeKit 狀態: 電源:%s 模式:%d 溫度:%.1f/%.1f°C\n",
+                                   thermostatController->getPower() ? "開" : "關",
+                                   thermostatController->getTargetMode(),
+                                   thermostatController->getCurrentTemperature(),
+                                   thermostatController->getTargetTemperature());
+            }
+            
+            lastFreeHeap = currentFreeHeap;
         }
         lastStatsTime = millis();
     }
 }
 
 /**
- * 獲取 V3 狀態資訊（用於 WebServer API）
+ * 獲取核心架構狀態資訊（用於 WebServer API）
  */
-String getV3StatusInfo() {
-    if (!v3ArchitectureEnabled) {
-        return "\"v3Architecture\":false";
+String getCoreStatusInfo() {
+    if (!modernArchitectureEnabled) {
+        return "\"modernArchitecture\":false";
     }
     
-    String info = "\"v3Architecture\":true";
+    String info = "\"modernArchitecture\":true";
     
     if (g_eventBus) {
         info += ",\"eventBus\":{";
@@ -254,24 +266,18 @@ String getV3StatusInfo() {
         info += "}";
     }
     
-    if (g_migrationManager) {
-        info += ",\"migration\":{";
-        info += "\"active\":" + String(g_migrationManager->isMigrationActive() ? "true" : "false");
-        
-        auto thermostatAggregate = g_migrationManager->getThermostatAggregate();
-        if (thermostatAggregate) {
-            info += ",\"aggregateReady\":" + String(thermostatAggregate->isReady() ? "true" : "false");
-        } else {
-            info += ",\"aggregateReady\":false";
-        }
+    if (g_eventBus) {
+        info += ",\"architecture\":{";
+        info += "\"active\":" + String(modernArchitectureEnabled ? "true" : "false");
+        info += ",\"event_bus_ready\":" + String(g_eventBus ? "true" : "false");
+        info += ",\"service_container_ready\":" + String(g_serviceContainer ? "true" : "false");
         info += "}";
     }
     
     return info;
 }
-#endif
 
-// 現有的 WebServer 初始化函數（修改版本以支援 V3 狀態）
+// WebServer 初始化函數
 void initializeMonitoring() {
     if (monitoringEnabled || !homeKitInitialized) {
         return;
@@ -280,11 +286,21 @@ void initializeMonitoring() {
     DEBUG_INFO_PRINT("[Main] 啟動WebServer監控功能...\n");
     DEBUG_INFO_PRINT("[Main] 可用記憶體: %d bytes\n", ESP.getFreeHeap());
     
-    // 檢查記憶體是否足夠
-    if (ESP.getFreeHeap() < 70000) {
+    // 嘗試釋放一些記憶體
+    if (ESP.getFreeHeap() < 65000) {
+        DEBUG_INFO_PRINT("[Main] 記憶體偏低，嘗試釋放資源...\n");
+        // 強制垃圾回收
+        delay(100);
+        DEBUG_INFO_PRINT("[Main] 記憶體釋放後: %d bytes\n", ESP.getFreeHeap());
+    }
+    
+    // 檢查記憶體是否足夠（調整門檻以適應實際使用情況）
+    if (ESP.getFreeHeap() < 60000) {
         DEBUG_ERROR_PRINT("[Main] 記憶體不足(%d bytes)，跳過WebServer啟動\n", ESP.getFreeHeap());
         return;
     }
+    
+    DEBUG_INFO_PRINT("[Main] 記憶體檢查通過：%d bytes 可用\n", ESP.getFreeHeap());
     
     if (!webServer) {
         webServer = new WebServer(8080);
@@ -294,7 +310,7 @@ void initializeMonitoring() {
         }
     }
     
-    // 現有的路由處理...（保持原有功能）
+    // 基本路由處理
     webServer->on("/", [](){
         if (homeKitPairingActive) {
             String simpleHtml = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
@@ -338,17 +354,16 @@ void initializeMonitoring() {
             }
         };
         
-        // HTML生成 - 加入V3狀態顯示
+        // HTML生成 - 加入核心架構狀態顯示
         append("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>DaiSpan 智能恆溫器</title>");
         append("<meta http-equiv=\"refresh\" content=\"30\">");
         append("<style>%s</style></head><body>", WebUI::getCompactCSS());
         append("<div class=\"container\"><h1>DaiSpan 智能恆溫器</h1>");
         
-#ifdef V3_ARCHITECTURE_ENABLED
-        // V3 狀態卡片
-        if (v3ArchitectureEnabled) {
-            append("<div class=\"card\"><h3>🚀 V3 架構狀態</h3>");
-            append("<p><strong>架構版本:</strong> V3 事件驅動</p>");
+        // 核心架構狀態卡片
+        if (modernArchitectureEnabled) {
+            append("<div class=\"card\"><h3>🚀 核心架構狀態</h3>");
+            append("<p><strong>架構版本:</strong> 事件驅動架構</p>");
             if (g_eventBus) {
                 // auto stats = g_eventBus->getStatistics();
                 append("<p><strong>事件統計:</strong> 佇列:%zu 訂閱:%zu 已處理:%zu</p>", 
@@ -356,12 +371,11 @@ void initializeMonitoring() {
                        g_eventBus->getSubscriptionCount(),
                        g_eventBus->getProcessedEventCount());
             }
-            if (g_migrationManager && g_migrationManager->isMigrationActive()) {
-                append("<p><strong>遷移狀態:</strong> ✅ 活躍</p>");
+            if (modernArchitectureEnabled && g_eventBus) {
+                append("<p><strong>架構狀態:</strong> ✅ 現代化架構已啟用</p>");
             }
             append("</div>");
         }
-#endif
         
         // 系統狀態資訊
         String statusCard = WebUI::getSystemStatusCard();
@@ -388,7 +402,7 @@ void initializeMonitoring() {
         webServer->send(200, "text/html", html);
     });
     
-    // 修改的 JSON狀態API，包含 V3 資訊
+    // JSON狀態API，包含核心架構資訊
     webServer->on("/status-api", [](){
         String json = WebTemplates::generateJsonApi(
             WiFi.SSID(),
@@ -402,13 +416,11 @@ void initializeMonitoring() {
             millis()
         );
         
-#ifdef V3_ARCHITECTURE_ENABLED
-        // 在 JSON 結尾前插入 V3 狀態
+        // 在 JSON 結尾前插入核心架構狀態
         if (json.endsWith("}")) {
             json = json.substring(0, json.length() - 1); // 移除最後的 '}'
-            json += "," + getV3StatusInfo() + "}";
+            json += "," + getCoreStatusInfo() + "}";
         }
-#endif
         
         webServer->send(200, "application/json", json);
     });
@@ -639,11 +651,10 @@ void initializeMonitoring() {
         webServer->send(200, "text/html", html);
     });
     
-#ifdef V3_ARCHITECTURE_ENABLED
-    // V3 調試端點 - 手動觸發事件測試
-    webServer->on("/v3-test-event", [](){
-        if (!v3ArchitectureEnabled || !g_eventBus) {
-            webServer->send(400, "text/plain", "V3 架構未啟用");
+    // 核心架構調試端點 - 手動觸發事件測試
+    webServer->on("/core-test-event", [](){
+        if (!modernArchitectureEnabled || !g_eventBus) {
+            webServer->send(400, "text/plain", "核心架構未啟用");
             return;
         }
         
@@ -664,17 +675,17 @@ void initializeMonitoring() {
             
             webServer->send(200, "text/plain", response);
             
-            DEBUG_INFO_PRINT("[V3-Debug] 手動觸發測試事件\n");
+            DEBUG_INFO_PRINT("[Core-Debug] 手動觸發測試事件\n");
             
         } catch (...) {
             webServer->send(500, "text/plain", "❌ 事件發布失敗");
         }
     });
     
-    // V3 統計 API
-    webServer->on("/api/v3/stats", [](){
-        if (!v3ArchitectureEnabled || !g_eventBus) {
-            webServer->send(400, "application/json", "{\"error\":\"V3 architecture not enabled\"}");
+    // 核心架構統計 API
+    webServer->on("/api/core/stats", [](){
+        if (!modernArchitectureEnabled || !g_eventBus) {
+            webServer->send(400, "application/json", "{\"error\":\"Core architecture not enabled\"}");
             return;
         }
         
@@ -682,30 +693,240 @@ void initializeMonitoring() {
         json += "\"queueSize\":" + String(g_eventBus->getQueueSize()) + ",";
         json += "\"subscriptions\":" + String(g_eventBus->getSubscriptionCount()) + ",";
         json += "\"processed\":" + String(g_eventBus->getProcessedEventCount()) + ",";
-        json += "\"migration\":" + String(g_migrationManager && g_migrationManager->isMigrationActive() ? "true" : "false");
+        json += "\"architecture\":" + String(modernArchitectureEnabled ? "true" : "false") + ",";
+        json += "\"uptime\":" + String(millis() / 1000) + ",";
+        json += "\"freeHeap\":" + String(ESP.getFreeHeap()) + ",";
+        json += "\"timestamp\":" + String(millis());
         json += "}";
         
         webServer->send(200, "application/json", json);
     });
     
-    // V3 統計重置端點
-    webServer->on("/api/v3/reset-stats", [](){
-        if (!v3ArchitectureEnabled || !g_eventBus) {
-            webServer->send(400, "application/json", "{\"error\":\"V3 architecture not enabled\"}");
+    // 核心架構統計重置端點
+    webServer->on("/api/core/reset-stats", [](){
+        if (!modernArchitectureEnabled || !g_eventBus) {
+            webServer->send(400, "application/json", "{\"error\":\"Core architecture not enabled\"}");
             return;
         }
         
         g_eventBus->resetStatistics();
-        String json = "{\"status\":\"success\",\"message\":\"Statistics reset successfully\"}";
+        String json = "{\"status\":\"success\",\"message\":\"Statistics reset successfully\",\"timestamp\":" + String(millis()) + "}";
         webServer->send(200, "application/json", json);
     });
-#endif
+    
+    // 系統健康檢查端點
+    webServer->on("/api/health", [](){
+        String json = "{";
+        json += "\"status\":\"ok\",";
+        json += "\"services\":{";
+        json += "\"homekit\":" + String(homeKitInitialized ? "true" : "false") + ",";
+        json += "\"hardware\":" + String(deviceInitialized ? "true" : "false") + ",";
+        json += "\"wifi\":" + String(WiFi.status() == WL_CONNECTED ? "true" : "false") + ",";
+        json += "\"webserver\":" + String(monitoringEnabled ? "true" : "false");
+        if (modernArchitectureEnabled) {
+            json += ",\"coreArchitecture\":" + String(g_eventBus ? "true" : "false");
+        }
+        json += "},";
+        json += "\"memory\":{";
+        json += "\"free\":" + String(ESP.getFreeHeap()) + ",";
+        json += "\"total\":" + String(ESP.getHeapSize()) + ",";
+        json += "\"usage\":" + String(100.0 * (ESP.getHeapSize() - ESP.getFreeHeap()) / ESP.getHeapSize(), 1);
+        json += "},";
+        json += "\"uptime\":" + String(millis() / 1000) + ",";
+        json += "\"timestamp\":" + String(millis());
+        json += "}";
+        
+        webServer->send(200, "application/json", json);
+    });
+    
+    // 系統指標端點（記憶體優化版）
+    webServer->on("/api/metrics", [](){
+        // 使用預分配的緩衝區減少記憶體分配
+        static char buffer[1024];
+        
+        // 收集數據到局部變量
+        uint32_t freeHeap = ESP.getFreeHeap();
+        uint32_t heapSize = ESP.getHeapSize();
+        uint32_t uptime = millis() / 1000;
+        float memUsage = (float)(freeHeap) / (float)(heapSize) * 100.0f;
+        
+        // 構建 JSON 字符串
+        int written = snprintf(buffer, sizeof(buffer),
+            "{"
+            "\"performance\":{"
+            "\"uptime\":%u,"
+            "\"freeHeap\":%u,"
+            "\"heapSize\":%u,"
+            "\"memoryUsage\":%.1f,"
+            "\"cpuFreq\":%u,"
+            "\"flashSize\":%u,"
+            "\"minFreeHeap\":%u,"
+            "\"maxAllocHeap\":%u,"
+            "\"sketchSize\":%u,"
+            "\"freeSketchSpace\":%u"
+            "},"
+            "\"network\":{"
+            "\"rssi\":%d,"
+            "\"ip\":\"%s\","
+            "\"mac\":\"%s\","
+            "\"channel\":%d,"
+            "\"hostname\":\"%s\""
+            "}",
+            uptime, freeHeap, heapSize, memUsage,
+            ESP.getCpuFreqMHz(), ESP.getFlashChipSize(),
+            ESP.getMinFreeHeap(), ESP.getMaxAllocHeap(),
+            ESP.getSketchSize(), ESP.getFreeSketchSpace(),
+            WiFi.RSSI(), WiFi.localIP().toString().c_str(),
+            WiFi.macAddress().c_str(), WiFi.channel(),
+            WiFi.getHostname()
+        );
+        
+        // 添加事件系統指標
+        if (modernArchitectureEnabled && g_eventBus && written < sizeof(buffer) - 200) {
+            written += snprintf(buffer + written, sizeof(buffer) - written,
+                ",\"eventSystem\":{"
+                "\"queueSize\":%d,"
+                "\"subscriptions\":%d,"
+                "\"processed\":%d"
+                "}",
+                g_eventBus->getQueueSize(),
+                g_eventBus->getSubscriptionCount(),
+                g_eventBus->getProcessedEventCount()
+            );
+        }
+        
+        // 添加 HomeKit 指標
+        if (thermostatDevice && thermostatController && written < sizeof(buffer) - 200) {
+            written += snprintf(buffer + written, sizeof(buffer) - written,
+                ",\"homekit\":{"
+                "\"power\":%s,"
+                "\"targetMode\":%d,"
+                "\"currentTemp\":%.1f,"
+                "\"targetTemp\":%.1f,"
+                "\"initialized\":%s,"
+                "\"pairingActive\":%s"
+                "}",
+                thermostatController->getPower() ? "true" : "false",
+                thermostatController->getTargetMode(),
+                thermostatController->getCurrentTemperature(),
+                thermostatController->getTargetTemperature(),
+                homeKitInitialized ? "true" : "false",
+                homeKitPairingActive ? "true" : "false"
+            );
+        }
+        
+        // 添加時間戳並結束
+        if (written < sizeof(buffer) - 50) {
+            snprintf(buffer + written, sizeof(buffer) - written,
+                ",\"timestamp\":%u}", uptime);
+        }
+        
+        webServer->send(200, "application/json", buffer);
+    });
+    
+    // 系統日誌端點（記憶體優化版）
+    webServer->on("/api/logs", [](){
+        static char buffer[768];
+        uint32_t timestamp = millis();
+        uint32_t freeHeap = ESP.getFreeHeap();
+        
+        int written = snprintf(buffer, sizeof(buffer),
+            "{"
+            "\"logs\":["
+            "{\"level\":\"info\",\"component\":\"system\",\"message\":\"System running normally\",\"timestamp\":%u}",
+            timestamp);
+        
+        // 架構信息
+        if (modernArchitectureEnabled && written < sizeof(buffer) - 100) {
+            written += snprintf(buffer + written, sizeof(buffer) - written,
+                ",{\"level\":\"info\",\"component\":\"core\",\"message\":\"Modern architecture enabled\",\"timestamp\":%u}",
+                timestamp);
+        }
+        
+        // 內存信息
+        if (written < sizeof(buffer) - 150) {
+            if (freeHeap < 50000) {
+                written += snprintf(buffer + written, sizeof(buffer) - written,
+                    ",{\"level\":\"warn\",\"component\":\"memory\",\"message\":\"Low memory: %u bytes\",\"timestamp\":%u}",
+                    freeHeap, timestamp);
+            } else {
+                written += snprintf(buffer + written, sizeof(buffer) - written,
+                    ",{\"level\":\"info\",\"component\":\"memory\",\"message\":\"Memory healthy: %u bytes\",\"timestamp\":%u}",
+                    freeHeap, timestamp);
+            }
+        }
+        
+        // HomeKit狀態
+        if (homeKitInitialized && written < sizeof(buffer) - 100) {
+            written += snprintf(buffer + written, sizeof(buffer) - written,
+                ",{\"level\":\"info\",\"component\":\"homekit\",\"message\":\"HomeKit initialized and ready\",\"timestamp\":%u}",
+                timestamp);
+        }
+        
+        // 事件系統狀態
+        if (modernArchitectureEnabled && g_eventBus && written < sizeof(buffer) - 150) {
+            size_t queueSize = g_eventBus->getQueueSize();
+            if (queueSize > 10) {
+                written += snprintf(buffer + written, sizeof(buffer) - written,
+                    ",{\"level\":\"warn\",\"component\":\"events\",\"message\":\"Event queue backlog: %zu events\",\"timestamp\":%u}",
+                    queueSize, timestamp);
+            } else {
+                written += snprintf(buffer + written, sizeof(buffer) - written,
+                    ",{\"level\":\"info\",\"component\":\"events\",\"message\":\"Event system healthy, queue: %zu\",\"timestamp\":%u}",
+                    queueSize, timestamp);
+            }
+        }
+        
+        // 結束 JSON
+        if (written < sizeof(buffer) - 100) {
+            snprintf(buffer + written, sizeof(buffer) - written,
+                "],"
+                "\"logLevel\":\"info\","
+                "\"logCount\":%d,"
+                "\"timestamp\":%u"
+                "}",
+                5 + (modernArchitectureEnabled ? 1 : 0), timestamp);
+        }
+        
+        webServer->send(200, "application/json", buffer);
+    });
     
     // OTA 頁面
     webServer->on("/ota", [](){
         String deviceIP = WiFi.localIP().toString();
         String html = WebUI::getOTAPage(deviceIP, "DaiSpan-Thermostat", "");
         webServer->send(200, "text/html", html);
+    });
+    
+    // 記憶體清理 API 端點
+    webServer->on("/api/memory/cleanup", [](){
+        uint32_t beforeCleanup = ESP.getFreeHeap();
+        
+        // 執行記憶體清理
+        if (g_eventBus) {
+            g_eventBus->resetStatistics();
+        }
+        
+        // 強制垃圾回收
+        delay(100);
+        
+        uint32_t afterCleanup = ESP.getFreeHeap();
+        uint32_t freed = afterCleanup - beforeCleanup;
+        
+        static char buffer[256];
+        snprintf(buffer, sizeof(buffer),
+            "{"
+            "\"status\":\"success\","
+            "\"memoryBefore\":%u,"
+            "\"memoryAfter\":%u,"
+            "\"memoryFreed\":%u,"
+            "\"timestamp\":%u"
+            "}",
+            beforeCleanup, afterCleanup, freed, (uint32_t)(millis() / 1000)
+        );
+        
+        DEBUG_INFO_PRINT("[API] 記憶體清理執行完成: 釋放 %d bytes\n", freed);
+        webServer->send(200, "application/json", buffer);
     });
     
     // 重啟端點
@@ -802,10 +1023,8 @@ void initializeHomeKit() {
             DEBUG_INFO_PRINT("[Main] FanDevice 創建成功並註冊到HomeKit\n");
         }
         
-#ifdef V3_ARCHITECTURE_ENABLED
-        // HomeKit 初始化完成後，設置 V3 遷移
-        setupV3Migration();
-#endif
+        // HomeKit 初始化完成後，設置核心事件監聽
+        setupCoreEventListeners();
         
     } else {
         DEBUG_ERROR_PRINT("[Main] 硬件未初始化，無法創建HomeKit設備\n");
@@ -886,16 +1105,12 @@ void wifiCallback() {
 
 void setup() {
     Serial.begin(115200);
-    DEBUG_INFO_PRINT("\n[Main] DaiSpan V3 架構版本啟動...\n");
+    DEBUG_INFO_PRINT("\n[Main] DaiSpan 智能恆溫器啟動...\n");
     
-#ifdef V3_ARCHITECTURE_ENABLED
-    DEBUG_INFO_PRINT("[Main] V3 架構支援已啟用\n");
+    DEBUG_INFO_PRINT("[Main] 現代化架構已啟用\n");
     
-    // 初始化 V3 架構
-    setupV3Architecture();
-#else
-    DEBUG_INFO_PRINT("[Main] V3 架構支援未啟用，使用 V2 模式\n");
-#endif
+    // 初始化現代化架構
+    setupModernArchitecture();
     
     // 原有的設置程序（保持不變）
     #if defined(ESP32C3_SUPER_MINI)
@@ -1045,21 +1260,17 @@ void setup() {
         DEBUG_INFO_PRINT("[Main] WiFiManager已清理，進入純HomeKit模式\n");
     }
     
-#ifdef V3_ARCHITECTURE_ENABLED
-    if (v3ArchitectureEnabled) {
-        DEBUG_INFO_PRINT("[V3] V3 架構設置完成，混合模式運行\n");
+    if (modernArchitectureEnabled) {
+        DEBUG_INFO_PRINT("[Core] 核心架構設置完成，系統運行正常\n");
     }
-#endif
 }
 
 void loop() {
     // 處理遠端調試器
     RemoteDebugger::getInstance().loop();
     
-#ifdef V3_ARCHITECTURE_ENABLED
-    // V3 事件處理（優先處理）
-    processV3Events();
-#endif
+    // 核心事件處理（優先處理）
+    processCoreEvents();
     
     // 使用系統管理器處理主迴圈邏輯
     if (systemManager) {

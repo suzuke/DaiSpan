@@ -315,32 +315,51 @@ void SystemManager::updatePairingDetection(uint32_t currentMemory) {
     // 高性能記憶體檢測，使用移動平均減少波動影響
     state.avgMemory = (state.avgMemory * 7 + currentMemory) / 8; // 更穩定的移動平均
     
-    // 改良的配對檢測邏輯 - 增加多重驗證避免誤判
-    bool significantMemoryDrop = currentMemory < (state.avgMemory - MEMORY_DROP_THRESHOLD);
+    // 改良的配對檢測邏輯 - 使用 HomeSpan 實際連接狀態
+    static unsigned long lastPairingCheckTime = 0;
+    static uint32_t lastMemoryReading = currentMemory;
+    static int stableMemoryCount = 0;
     
-    // 額外驗證條件：WiFi必須連接正常且記憶體下降持續一定時間
-    static unsigned long lastMemoryDropTime = 0;
-    static bool previousMemoryDrop = false;
+    unsigned long currentTime = millis();
     
-    if (significantMemoryDrop && WiFi.status() == WL_CONNECTED) {
-        if (!previousMemoryDrop) {
-            lastMemoryDropTime = millis();
-        } else if (millis() - lastMemoryDropTime > 3000) {
-            // 記憶體下降持續3秒以上，且WiFi正常，才判定為配對中
-            homeKitPairingActive = true;
-            DEBUG_INFO_PRINT("[SystemManager] 檢測到HomeKit配對活動（記憶體持續下降: %d bytes < %d bytes）\n", 
-                            currentMemory, (int)(state.avgMemory - MEMORY_DROP_THRESHOLD));
+    // 每5秒檢查一次配對狀態
+    if (currentTime - lastPairingCheckTime > 5000) {
+        lastPairingCheckTime = currentTime;
+        
+        // 檢查記憶體是否穩定（5次檢查內變化小於2KB）
+        if (abs((int)currentMemory - (int)lastMemoryReading) < 2000) {
+            stableMemoryCount++;
+        } else {
+            stableMemoryCount = 0;
         }
-    } else {
-        // 記憶體恢復正常或WiFi異常，清除配對狀態
-        if (homeKitPairingActive) {
-            homeKitPairingActive = false;
-            DEBUG_INFO_PRINT("[SystemManager] HomeKit配對活動結束（記憶體恢復或WiFi異常）\n");
+        
+        // 如果記憶體穩定且不是極低，則認為配對已完成
+        if (stableMemoryCount >= 3 && currentMemory > 15000) {
+            if (homeKitPairingActive) {
+                homeKitPairingActive = false;
+                DEBUG_INFO_PRINT("[SystemManager] HomeKit配對活動結束（記憶體穩定: %d bytes，穩定計數: %d）\n", 
+                                currentMemory, stableMemoryCount);
+            }
         }
-        lastMemoryDropTime = 0;
+        // 只有在記憶體急劇下降且系統處於不穩定狀態時才認為是配對中
+        else if (currentMemory < 20000 && (state.avgMemory - currentMemory) > 10000) {
+            if (!homeKitPairingActive) {
+                homeKitPairingActive = true;
+                DEBUG_INFO_PRINT("[SystemManager] 檢測到HomeKit配對活動（記憶體急劇下降: %d bytes < %d bytes）\n", 
+                                currentMemory, (int)(state.avgMemory - 10000));
+            }
+        }
+        
+        lastMemoryReading = currentMemory;
     }
     
-    previousMemoryDrop = significantMemoryDrop;
+    // 強制清除配對狀態：如果記憶體極低但穩定，說明不是配對導致的
+    if (currentMemory < 20000 && stableMemoryCount >= 5) {
+        if (homeKitPairingActive) {
+            homeKitPairingActive = false;
+            DEBUG_INFO_PRINT("[SystemManager] 強制清除配對狀態（記憶體低但穩定: %d bytes）\n", currentMemory);
+        }
+    }
 }
 
 void SystemManager::getSystemStats(String& mode, String& wifiStatus, String& deviceStatus, String& ipAddress) {

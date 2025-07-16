@@ -50,6 +50,19 @@ private:
         }
     }
     
+    // 輔助方法
+    void autoAdjustTemperatureForMode(uint8_t mode);
+    void handleSuccessfulUpdate();
+    
+    // 同步方法
+    bool syncTargetMode(unsigned long currentTime);
+    bool syncTargetTemperature(unsigned long currentTime);
+    bool syncCurrentTemperature(unsigned long currentTime);
+    bool syncCurrentMode(unsigned long currentTime);
+    uint8_t calculateAutoModeState();
+    
+    void publishCoreEvents();
+    
 public:
     explicit ThermostatDevice(IThermostatControl& ctrl);
     void loop() override;
