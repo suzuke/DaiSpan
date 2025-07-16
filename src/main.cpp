@@ -17,7 +17,6 @@
 #include "common/OTAManager.h"
 #include "WiFi.h"
 #include "WebServer.h"
-#include "ArduinoOTA.h"
 #include "common/WebUI.h"
 #include "common/WebTemplates.h"
 #include "common/RemoteDebugger.h"
