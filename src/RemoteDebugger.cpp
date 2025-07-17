@@ -13,9 +13,11 @@ extern FanDevice* fanDevice;
 extern bool homeKitInitialized;
 extern bool deviceInitialized;
 
-// Debug.h 中的函數實作
+// Debug.h 中的函數實作 - 生產環境中禁用以節省記憶體
 void remoteWebLog(const String& message) {
+#ifndef PRODUCTION_BUILD
     RemoteDebugger::getInstance().logSerial(message);
+#endif
 }
 
 RemoteDebugger& RemoteDebugger::getInstance() {

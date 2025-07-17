@@ -69,7 +69,7 @@ private:
     }
     
     LogManager() : 
-        maxLogEntries(100),
+        maxLogEntries(50),
         currentLogLevel(LogLevel::INFO),
         enableSerial(true),
         enableWebLog(true) {
@@ -86,7 +86,7 @@ public:
     }
     
     // 配置日誌系統
-    void configure(LogLevel level = LogLevel::INFO, size_t maxEntries = 100, 
+    void configure(LogLevel level = LogLevel::INFO, size_t maxEntries = 50, 
                    bool serial = true, bool web = true) {
         std::lock_guard<std::mutex> lock(logMutex);
         currentLogLevel = level;

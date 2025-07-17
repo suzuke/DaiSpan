@@ -954,7 +954,8 @@ void initializeMonitoring() {
     DEBUG_INFO_PRINT("[Main] WebServer監控功能已啟動: http://%s:8080\n", 
                      WiFi.localIP().toString().c_str());
     
-    // 初始化遠端調試系統
+    // 初始化遠端調試系統（生產環境中禁用以節省記憶體）
+#ifndef PRODUCTION_BUILD
     RemoteDebugger& debugger = RemoteDebugger::getInstance();
     if (debugger.begin(8081)) {
         DEBUG_INFO_PRINT("[Main] 遠端調試系統已啟動: ws://%s:8081\n", 
@@ -964,6 +965,9 @@ void initializeMonitoring() {
     } else {
         DEBUG_ERROR_PRINT("[Main] 遠端調試系統啟動失敗\n");
     }
+#else
+    DEBUG_INFO_PRINT("[Main] 生產模式：遠端調試系統已禁用以節省記憶體\n");
+#endif
 }
 
 // 現有的初始化函數（保持不變）
