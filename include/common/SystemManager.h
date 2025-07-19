@@ -52,7 +52,11 @@ private:
     WiFiManager*& wifiManager;
     WebServer*& webServer;
     IThermostatControl*& thermostatController;
+    #ifndef DISABLE_MOCK_CONTROLLER
     MockThermostatController*& mockController;
+    #else
+    MockThermostatController* mockController;
+    #endif
     ThermostatDevice*& thermostatDevice;
     
     // 系統狀態標誌
@@ -83,7 +87,12 @@ private:
     
 public:
     SystemManager(ConfigManager& config, WiFiManager*& wifi, WebServer*& web,
-                 IThermostatControl*& controller, MockThermostatController*& mock,
+                 IThermostatControl*& controller, 
+                 #ifndef DISABLE_MOCK_CONTROLLER
+                 MockThermostatController*& mock,
+                 #else
+                 MockThermostatController* mock,
+                 #endif
                  ThermostatDevice*& device, bool& devInit, bool& hkInit, 
                  bool& monitoring, bool& pairing);
     

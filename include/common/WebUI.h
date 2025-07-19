@@ -3,6 +3,34 @@
 #include <Arduino.h>
 #include <WiFi.h>
 
+// 動態緩衝區大小計算
+namespace WebUIMemory {
+    inline size_t getAdaptiveBufferSize(size_t requestedSize) {
+        uint32_t freeHeap = ESP.getFreeHeap();
+        
+        // 如果可用記憶體充足 (>50KB)，使用請求的大小
+        if (freeHeap > 50000) {
+            return requestedSize;
+        }
+        // 記憶體有限 (30-50KB)，使用較小的緩衝區
+        else if (freeHeap > 30000) {
+            return min(requestedSize, (size_t)(requestedSize * 0.75));
+        }
+        // 記憶體緊張 (20-30KB)，使用最小緩衝區
+        else if (freeHeap > 20000) {
+            return min(requestedSize, (size_t)(requestedSize * 0.5));
+        }
+        // 記憶體極度緊張 (<20KB)，使用極小緩衝區
+        else {
+            return min(requestedSize, (size_t)1024);
+        }
+    }
+    
+    inline bool canAllocateBuffer(size_t size) {
+        return (ESP.getFreeHeap() > (size + 2048)); // 保留2KB余量
+    }
+}
+
 /**
  * WebUI 共用模組
  * 提供統一的 Web 介面元件，供 WiFiManager 和 main.cpp 使用
@@ -371,7 +399,13 @@ namespace WebUI {
      * 取得成功頁面 (記憶體優化版本)
      */
     String getSuccessPage(const String& title, const String& message, int countdown = 0, const String& redirectUrl = "/") {
-        const size_t bufferSize = 3072;
+        const size_t requestedSize = 3072;
+        const size_t bufferSize = WebUIMemory::getAdaptiveBufferSize(requestedSize);
+        
+        if (!WebUIMemory::canAllocateBuffer(bufferSize)) {
+            return "<div class='error'>Insufficient memory for page generation.</div>";
+        }
+        
         auto buffer = std::make_unique<char[]>(bufferSize);
         if (!buffer) {
             return "<div class='error'>Memory allocation failed.</div>";
@@ -434,7 +468,13 @@ namespace WebUI {
     String getRestartPage(const String& ip = "") {
         String finalIp = ip.length() > 0 ? ip : WiFi.localIP().toString();
         
-        const size_t bufferSize = 2048;
+        const size_t requestedSize = 2048;
+        const size_t bufferSize = WebUIMemory::getAdaptiveBufferSize(requestedSize);
+        
+        if (!WebUIMemory::canAllocateBuffer(bufferSize)) {
+            return "<div class='error'>Insufficient memory for restart page.</div>";
+        }
+        
         auto buffer = std::make_unique<char[]>(bufferSize);
         if (!buffer) { return "<div class='error'>Memory allocation failed.</div>"; }
 
@@ -481,14 +521,23 @@ namespace WebUI {
         bool overflow;
         
     public:
-        SafeHtmlBuilder(size_t size) : totalSize(size), overflow(false) {
-            buffer = std::make_unique<char[]>(size);
+        SafeHtmlBuilder(size_t requestedSize) : overflow(false) {
+            // 使用自適應緩衝區大小計算
+            totalSize = WebUIMemory::getAdaptiveBufferSize(requestedSize);
+            
+            // 檢查是否可以分配緩衝區
+            if (!WebUIMemory::canAllocateBuffer(totalSize)) {
+                overflow = true;
+                return;
+            }
+            
+            buffer = std::make_unique<char[]>(totalSize);
             if (!buffer) {
                 overflow = true;
                 return;
             }
             p = buffer.get();
-            remaining = size;
+            remaining = totalSize;
         }
         
         void append(const char* format, ...) {
@@ -612,7 +661,13 @@ namespace WebUI {
      */
     String getOTAPage(const String& deviceIP = "", const String& deviceHostname = "DaiSpan-Thermostat", 
                      const String& otaStatus = "") {
-        const size_t bufferSize = 3072;
+        const size_t requestedSize = 3072;
+        const size_t bufferSize = WebUIMemory::getAdaptiveBufferSize(requestedSize);
+        
+        if (!WebUIMemory::canAllocateBuffer(bufferSize)) {
+            return "<div class='error'>Insufficient memory for OTA page.</div>";
+        }
+        
         auto buffer = std::make_unique<char[]>(bufferSize);
         if (!buffer) { return "<div class='error'>Memory allocation failed.</div>"; }
 
@@ -712,7 +767,13 @@ namespace WebUI {
     String getLogPage(const String& logContent = "", const String& clearEndpoint = "/logs-clear", 
                      const String& apiEndpoint = "/api/logs", int totalEntries = 0, 
                      int infoCount = 0, int warningCount = 0, int errorCount = 0, int shownEntries = 0) {
-        const size_t bufferSize = 4096;
+        const size_t requestedSize = 4096;
+        const size_t bufferSize = WebUIMemory::getAdaptiveBufferSize(requestedSize);
+        
+        if (!WebUIMemory::canAllocateBuffer(bufferSize)) {
+            return "<div class='error'>Insufficient memory for log viewer.</div>";
+        }
+        
         auto buffer = std::make_unique<char[]>(bufferSize);
         if (!buffer) { return "<div class='error'>Memory allocation failed.</div>"; }
 
@@ -745,6 +806,7 @@ namespace WebUI {
         return String(buffer.get());
     }
 
+    #ifndef DISABLE_SIMULATION_MODE
     /**
      * 取得模擬控制頁面 (記憶體優化版本)
      */
@@ -752,7 +814,13 @@ namespace WebUI {
                                    bool power = false, int mode = 0, 
                                    float targetTemp = 22.0, float currentTemp = 25.0, float roomTemp = 25.0,
                                    bool isHeating = false, bool isCooling = false, int fanSpeed = 0) {
-        const size_t bufferSize = 6144;
+        const size_t requestedSize = 6144;
+        const size_t bufferSize = WebUIMemory::getAdaptiveBufferSize(requestedSize);
+        
+        if (!WebUIMemory::canAllocateBuffer(bufferSize)) {
+            return "<div class='error'>Insufficient memory for thermostat page.</div>";
+        }
+        
         auto buffer = std::make_unique<char[]>(bufferSize);
         if (!buffer) { return "<div class='error'>Memory allocation failed.</div>"; }
 
@@ -826,7 +894,13 @@ namespace WebUI {
      */
     String getSimulationTogglePage(const String& confirmEndpoint = "/simulation-toggle-confirm",
                                   bool currentMode = false) {
-        const size_t bufferSize = 3072;
+        const size_t requestedSize = 3072;
+        const size_t bufferSize = WebUIMemory::getAdaptiveBufferSize(requestedSize);
+        
+        if (!WebUIMemory::canAllocateBuffer(bufferSize)) {
+            return "<div class='error'>Insufficient memory for simulation toggle page.</div>";
+        }
+        
         auto buffer = std::make_unique<char[]>(bufferSize);
         if (!buffer) { return "<div class='error'>Memory allocation failed.</div>"; }
 
@@ -868,5 +942,6 @@ namespace WebUI {
         }
         return String(buffer.get());
     }
+    #endif // DISABLE_SIMULATION_MODE
 
 } // namespace WebUI

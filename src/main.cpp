@@ -3,7 +3,9 @@
 
 #include "HomeSpan.h"
 #include "controller/ThermostatController.h"
+#ifndef DISABLE_MOCK_CONTROLLER
 #include "controller/MockThermostatController.h"
+#endif
 #include "device/ThermostatDevice.h"
 #include "device/FanDevice.h"
 #include "protocol/S21Protocol.h"
@@ -45,7 +47,9 @@
 // 核心系統全域變數
 std::unique_ptr<ACProtocolFactory> protocolFactory = nullptr;
 IThermostatControl* thermostatController = nullptr;
+#ifndef DISABLE_MOCK_CONTROLLER
 MockThermostatController* mockController = nullptr;
+#endif
 ThermostatDevice* thermostatDevice = nullptr;
 FanDevice* fanDevice = nullptr;
 SpanAccessory* accessory = nullptr;
@@ -80,7 +84,9 @@ unsigned long systemStartTime = 0;
 void safeRestart();
 void initializeMemoryOptimization();
 void generateOptimizedMainPage();
+#ifndef DISABLE_SIMULATION_MODE
 void generateOptimizedSimulationPage();
+#endif
 void setupModernArchitecture();
 void setupCoreEventListeners();
 void processCoreEvents();
@@ -127,26 +133,39 @@ void safeRestart() {
 void initializeMemoryOptimization() {
     DEBUG_INFO_PRINT("[Main] 初始化記憶體優化組件...\n");
     
+    uint32_t availableMemory = ESP.getFreeHeap();
+    DEBUG_INFO_PRINT("[Main] 初始化前可用記憶體: %u bytes\n", availableMemory);
+    
     try {
-        // 創建記憶體管理器
+        // 總是創建記憶體管理器 (輕量級)
         memoryManager = std::make_unique<MemoryOptimization::MemoryManager>();
         
-        // 創建頁面生成器
-        pageGenerator = std::make_unique<MemoryOptimization::WebPageGenerator>();
+        // 只在記憶體充足時創建頁面生成器
+        if (availableMemory >= 70000) {
+            pageGenerator = std::make_unique<MemoryOptimization::WebPageGenerator>();
+            DEBUG_INFO_PRINT("[Main] 完整記憶體優化功能已啟用\n");
+        } else {
+            DEBUG_WARN_PRINT("[Main] 記憶體不足 (%u bytes)，使用精簡模式\n", availableMemory);
+        }
         
         // 檢查初始記憶體狀態
         auto pressure = memoryManager->updateMemoryPressure();
         auto strategy = memoryManager->getRenderStrategy();
         
         DEBUG_INFO_PRINT("[Main] 記憶體優化初始化完成\n");
-        DEBUG_INFO_PRINT("[Main] 初始記憶體壓力: %d, 渲染策略: %d\n", 
+        DEBUG_INFO_PRINT("[Main] 記憶體壓力: %d, 渲染策略: %d\n", 
                          static_cast<int>(pressure), static_cast<int>(strategy));
-        DEBUG_INFO_PRINT("[Main] 可用記憶體: %u bytes\n", ESP.getFreeHeap());
+        DEBUG_INFO_PRINT("[Main] 初始化後可用記憶體: %u bytes\n", ESP.getFreeHeap());
         
     } catch (const std::exception& e) {
         DEBUG_ERROR_PRINT("[Main] 記憶體優化初始化失敗: %s\n", e.what());
+        // 降級到不使用記憶體優化
+        pageGenerator.reset();
+        memoryManager.reset();
     } catch (...) {
         DEBUG_ERROR_PRINT("[Main] 記憶體優化初始化失敗: 未知錯誤\n");
+        pageGenerator.reset();
+        memoryManager.reset();
     }
 }
 
@@ -279,6 +298,7 @@ void generateOptimizedMainPage() {
         stream.append("<a href='/wifi' class='button'>WiFi 設定</a>");
         stream.append("<a href='/homekit' class='button'>HomeKit 設定</a>");
         
+#ifndef DISABLE_SIMULATION_MODE
         // 智能模擬控制按鈕
         if (configManager.getSimulationMode()) {
             if (mockController) {
@@ -289,6 +309,7 @@ void generateOptimizedMainPage() {
         } else {
             stream.append("<a href='/simulation-toggle' class='button' style='background:#28a745;'>🔧 啟用模擬模式</a>");
         }
+#endif
         
         stream.append("<a href='/api/memory/cleanup' class='button secondary'>記憶體清理</a>");
         stream.append("</div>");
@@ -310,6 +331,7 @@ void generateOptimizedMainPage() {
     }
 }
 
+#ifndef DISABLE_SIMULATION_MODE
 /**
  * 生成優化的模擬控制頁面（使用流式響應）
  */
@@ -468,6 +490,7 @@ void generateOptimizedSimulationPage() {
                        "<html><body><h1>頁面生成失敗</h1></body></html>");
     }
 }
+#endif // DISABLE_SIMULATION_MODE
 
 /**
  * 初始化核心架構
@@ -668,16 +691,36 @@ void initializeMonitoring() {
     // 嘗試釋放一些記憶體
     if (ESP.getFreeHeap() < 65000) {
         DEBUG_INFO_PRINT("[Main] 記憶體偏低，嘗試釋放資源...\n");
-        // 強制垃圾回收
-        delay(100);
+        
+        // 釋放事件系統統計數據
+        if (g_eventBus) {
+            g_eventBus->resetStatistics();
+        }
+        
+        // 清理未使用的記憶體優化組件
+        if (pageGenerator && ESP.getFreeHeap() < 55000) {
+            DEBUG_WARN_PRINT("[Main] 緊急釋放頁面生成器以節省記憶體\n");
+            pageGenerator.reset();
+        }
+        
+        // 強制延遲讓系統清理
+        delay(200);
         DEBUG_INFO_PRINT("[Main] 記憶體釋放後: %d bytes\n", ESP.getFreeHeap());
     }
     
-    // 檢查記憶體是否足夠（調整門檻以適應實際使用情況）
-    if (ESP.getFreeHeap() < 60000) {
-        DEBUG_ERROR_PRINT("[Main] 記憶體不足(%d bytes)，跳過WebServer啟動\n", ESP.getFreeHeap());
+    // 檢查記憶體是否足夠（降低門檻以適應開發環境）
+    uint32_t currentMemory = ESP.getFreeHeap();
+    uint32_t minThreshold = 45000;  // 降低至45KB門檻
+    
+    if (currentMemory < minThreshold) {
+        DEBUG_ERROR_PRINT("[Main] 記憶體不足(%d bytes < %d)，跳過WebServer啟動\n", currentMemory, minThreshold);
         return;
     }
+    
+    // 根據可用記憶體調整功能
+    bool enableAdvancedFeatures = currentMemory >= 70000;  // 70KB以上啟用完整功能
+    DEBUG_INFO_PRINT("[Main] WebServer啟動: %d bytes 可用 (進階功能: %s)\n", 
+                     currentMemory, enableAdvancedFeatures ? "啟用" : "精簡");
     
     DEBUG_INFO_PRINT("[Main] 記憶體檢查通過：%d bytes 可用\n", ESP.getFreeHeap());
     
@@ -718,16 +761,43 @@ void initializeMonitoring() {
             return;
         }
         
-        // 降級處理：使用傳統方法但減少記憶體使用
+        // 降級處理：使用傳統方法但採用自適應緩衝區
         webServer->sendHeader("Cache-Control", "no-cache, must-revalidate");
         webServer->sendHeader("Pragma", "no-cache");
         webServer->sendHeader("Connection", "close");
         
-        // 使用較小的緩衝區
-        const size_t bufferSize = 2048;  // 從4096減少到2048
+        // 使用自適應緩衝區大小
+        const size_t requestedSize = 4096;  // 預期需要的大小
+        uint32_t freeHeap = ESP.getFreeHeap();
+        size_t bufferSize;
+        
+        if (freeHeap > 50000) {
+            bufferSize = requestedSize;
+        } else if (freeHeap > 30000) {
+            bufferSize = requestedSize * 0.75;
+        } else if (freeHeap > 20000) {
+            bufferSize = requestedSize * 0.5;
+        } else {
+            bufferSize = 1024;  // 最小緩衝區
+        }
+        
+        // 檢查記憶體是否足夠分配，如果不夠則使用最小化頁面
+        if (freeHeap < (bufferSize + 2048)) {
+            String minimalPage = "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>DaiSpan</title></head><body>";
+            minimalPage += "<h1>🌡️ DaiSpan Thermostat</h1>";
+            minimalPage += "<p><strong>記憶體:</strong> " + String(freeHeap) + " bytes 可用</p>";
+            minimalPage += "<p><strong>WiFi:</strong> " + WiFi.SSID() + " (" + String(WiFi.RSSI()) + " dBm)</p>";
+            minimalPage += "<p><strong>IP:</strong> " + WiFi.localIP().toString() + "</p>";
+            minimalPage += "<p><a href='/api/health'>系統狀態 (JSON)</a> | <a href='/wifi'>WiFi設定</a></p>";
+            minimalPage += "</body></html>";
+            webServer->send(200, "text/html", minimalPage);
+            return;
+        }
+        
         auto buffer = std::make_unique<char[]>(bufferSize);
         if (!buffer) {
-            webServer->send(500, "text/plain", "Memory allocation failed");
+            webServer->send(500, "text/html", 
+                           "<html><body><h1>記憶體分配失敗</h1><p>無法分配 " + String(bufferSize) + " bytes</p></body></html>");
             return;
         }
 
@@ -751,50 +821,26 @@ void initializeMonitoring() {
             }
         };
         
-        // HTML生成 - 加入核心架構狀態顯示
-        append("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>DaiSpan 智能恆溫器</title>");
-        append("<meta http-equiv=\"refresh\" content=\"30\">");
-        append("<style>%s</style></head><body>", WebUI::getCompactCSS());
-        append("<div class=\"container\"><h1>DaiSpan 智能恆溫器</h1>");
+        // HTML生成 - 簡化版本以適應記憶體限制
+        append("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>DaiSpan</title>");
+        append("<style>body{font-family:Arial;margin:20px;}.container{max-width:600px;}</style>");
+        append("</head><body><div class=\"container\"><h1>🌡️ DaiSpan</h1>");
         
-        // 核心架構狀態卡片
-        if (modernArchitectureEnabled) {
-            append("<div class=\"card\"><h3>🚀 核心架構狀態</h3>");
-            append("<p><strong>架構版本:</strong> 事件驅動架構</p>");
-            if (g_eventBus) {
-                // auto stats = g_eventBus->getStatistics();
-                append("<p><strong>事件統計:</strong> 佇列:%zu 訂閱:%zu 已處理:%zu</p>", 
-                       g_eventBus->getQueueSize(), 
-                       g_eventBus->getSubscriptionCount(),
-                       g_eventBus->getProcessedEventCount());
-            }
-            if (modernArchitectureEnabled && g_eventBus) {
-                append("<p><strong>架構狀態:</strong> ✅ 現代化架構已啟用</p>");
-            }
-            append("</div>");
+        // 簡化系統狀態 - 避免記憶體溢出
+        append("<p><strong>記憶體:</strong> %u KB 可用</p>", freeHeap / 1024);
+        append("<p><strong>WiFi:</strong> %s (%d dBm)</p>", WiFi.SSID().c_str(), WiFi.RSSI());
+        append("<p><strong>IP:</strong> %s</p>", WiFi.localIP().toString().c_str());
+        if (modernArchitectureEnabled && g_eventBus) {
+            append("<p><strong>事件:</strong> %zu 處理</p>", g_eventBus->getProcessedEventCount());
         }
         
-        // 系統狀態資訊
-        String statusCard = WebUI::getSystemStatusCard();
-        append("%s", statusCard.c_str());
-        
-        // 按鈕區域
-        append("<div style=\"text-align:center;margin:20px 0;\">");
-        append("<a href=\"/wifi\" class=\"button\">WiFi配置</a>");
-        append("<a href=\"/homekit\" class=\"button\">HomeKit設定</a>");
-        
-        // 智能模擬控制按鈕
-        if (configManager.getSimulationMode()) {
-            if (mockController) {
-                append("<a href=\"/simulation\" class=\"button\">🔧 模擬控制</a>");
-            } else {
-                append("<a href=\"/simulation-toggle\" class=\"button\" style=\"background:#ffc107;\">⚠️ 模擬控制 (重新初始化)</a>");
-            }
-        } else {
-            append("<a href=\"/simulation-toggle\" class=\"button\" style=\"background:#28a745;\">🔧 啟用模擬模式</a>");
-        }
-        append("<a href=\"/debug\" class=\"button\">遠端調試</a>");
-        append("<a href=\"/ota\" class=\"button\">OTA更新</a></div></div></body></html>");
+        // 簡化導航連結
+        append("<p>");
+        append("<a href='/wifi'>WiFi設定</a> | ");
+        append("<a href='/homekit'>HomeKit設定</a> | ");
+        append("<a href='/api/health'>系統狀態</a> | ");
+        append("<a href='/ota'>OTA更新</a>");
+        append("</p></div></body></html>");
         
         if (overflow) {
             webServer->send(500, "text/html", "<div style='color:red;'>Error: HTML too large for buffer</div>");
@@ -952,6 +998,7 @@ void initializeMonitoring() {
         }
     });
     
+    #ifndef DISABLE_SIMULATION_MODE
     // 模擬控制頁面
     webServer->on("/simulation", [](){
         if (!configManager.getSimulationMode()) {
@@ -1081,6 +1128,7 @@ void initializeMonitoring() {
         String html = WebUI::getSuccessPage("模式切換中", message, 3, "/restart");
         webServer->send(200, "text/html", html);
     });
+    #endif // DISABLE_SIMULATION_MODE
     
     // 核心架構調試端點 - 手動觸發事件測試
     webServer->on("/core-test-event", [](){
@@ -1846,6 +1894,7 @@ void initializeHardware() {
         return;
     }
     
+#ifndef DISABLE_SIMULATION_MODE
     bool simulationMode = configManager.getSimulationMode();
     
     if (simulationMode) {
@@ -1861,7 +1910,9 @@ void initializeHardware() {
         deviceInitialized = true;
         DEBUG_INFO_PRINT("[Main] 模擬模式初始化完成\n");
         
-    } else {
+    } else 
+#endif
+    {
         DEBUG_INFO_PRINT("[Main] 啟用真實模式 - 初始化串口通訊...\n");
         
         Serial1.begin(2400, SERIAL_8E2, S21_RX_PIN, S21_TX_PIN);
@@ -2051,7 +2102,13 @@ void setup() {
     // 統一的SystemManager初始化
     systemManager = new SystemManager(
         configManager, wifiManager, webServer,
-        thermostatController, mockController, thermostatDevice,
+        thermostatController, 
+        #ifndef DISABLE_MOCK_CONTROLLER
+        mockController, 
+        #else
+        nullptr,
+        #endif
+        thermostatDevice,
         deviceInitialized, homeKitInitialized, monitoringEnabled, homeKitPairingActive
     );
     

@@ -18,7 +18,9 @@ namespace ConfigConstants {
     static constexpr const char* UPDATE_INTERVAL_KEY = "update_interval";
     static constexpr const char* HEARTBEAT_INTERVAL_KEY = "heartbeat_interval";
     static constexpr const char* SERIAL_BAUD_KEY = "serial_baud";
+    #ifndef DISABLE_SIMULATION_MODE
     static constexpr const char* SIMULATION_MODE_KEY = "simulation_mode";
+    #endif
     
     // 溫度配置
     static constexpr const char* MIN_TEMP_KEY = "min_temp";
@@ -35,7 +37,9 @@ namespace ConfigConstants {
     static constexpr unsigned long DEFAULT_UPDATE_INTERVAL = 5000;
     static constexpr unsigned long DEFAULT_HEARTBEAT_INTERVAL = 30000;
     static constexpr unsigned long DEFAULT_SERIAL_BAUD = 2400;
+    #ifndef DISABLE_SIMULATION_MODE
     static constexpr bool DEFAULT_SIMULATION_MODE = false;
+    #endif
     static constexpr float DEFAULT_MIN_TEMP = 16.0f;
     static constexpr float DEFAULT_MAX_TEMP = 30.0f;
     static constexpr float DEFAULT_TEMP_STEP = 0.5f;
@@ -64,7 +68,9 @@ private:
         unsigned long updateInterval;
         unsigned long heartbeatInterval;
         unsigned long serialBaud;
+        #ifndef DISABLE_SIMULATION_MODE
         bool simulationMode;
+        #endif
         bool systemConfigValid;
         
         // 溫度配置緩存
@@ -187,6 +193,7 @@ public:
     }
     
     // 模擬模式配置
+    #ifndef DISABLE_SIMULATION_MODE
     bool getSimulationMode() {
         return preferences.getBool(ConfigConstants::SIMULATION_MODE_KEY, ConfigConstants::DEFAULT_SIMULATION_MODE);
     }
@@ -198,6 +205,11 @@ public:
         }
         return success;
     }
+    #else
+    // 生產模式：直接返回false，不支援模擬模式
+    constexpr bool getSimulationMode() const { return false; }
+    constexpr bool setSimulationMode(bool enabled) const { return false; }
+    #endif
     
     // 溫度配置
     float getMinTemp() {
@@ -282,7 +294,9 @@ private:
             cache.updateInterval = preferences.getULong(ConfigConstants::UPDATE_INTERVAL_KEY, ConfigConstants::DEFAULT_UPDATE_INTERVAL);
             cache.heartbeatInterval = preferences.getULong(ConfigConstants::HEARTBEAT_INTERVAL_KEY, ConfigConstants::DEFAULT_HEARTBEAT_INTERVAL);
             cache.serialBaud = preferences.getULong(ConfigConstants::SERIAL_BAUD_KEY, ConfigConstants::DEFAULT_SERIAL_BAUD);
+            #ifndef DISABLE_SIMULATION_MODE
             cache.simulationMode = preferences.getBool(ConfigConstants::SIMULATION_MODE_KEY, ConfigConstants::DEFAULT_SIMULATION_MODE);
+            #endif
             cache.systemConfigValid = true;
         }
     }

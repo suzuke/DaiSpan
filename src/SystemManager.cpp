@@ -1,7 +1,9 @@
 #include "common/SystemManager.h"
 #include "common/Config.h"
 #include "controller/IThermostatControl.h"
+#ifndef DISABLE_MOCK_CONTROLLER
 #include "controller/MockThermostatController.h"
+#endif
 #include "device/ThermostatDevice.h"
 #include "common/Debug.h"
 #include "HomeSpan.h"
@@ -23,7 +25,12 @@ static constexpr uint32_t MEMORY_TIGHT_THRESHOLD = 40000;        // 記憶體緊
 static constexpr uint32_t MEMORY_MEDIUM_THRESHOLD = 70000;       // 記憶體中等閾值（調整平衡點）
 
 SystemManager::SystemManager(ConfigManager& config, WiFiManager*& wifi, WebServer*& web,
-                           IThermostatControl*& controller, MockThermostatController*& mock,
+                           IThermostatControl*& controller, 
+                           #ifndef DISABLE_MOCK_CONTROLLER
+                           MockThermostatController*& mock,
+                           #else
+                           MockThermostatController* mock,
+                           #endif
                            ThermostatDevice*& device, bool& devInit, bool& hkInit, 
                            bool& monitoring, bool& pairing)
     : configManager(config), wifiManager(wifi), webServer(web),

@@ -5,8 +5,10 @@ const std::map<ACProtocolType, const char*> ACProtocolFactory::PROTOCOL_TYPE_NAM
     {ACProtocolType::S21_DAIKIN, "S21 Daikin"},
     {ACProtocolType::MITSUBISHI_SERIAL, "Mitsubishi Serial"},
     {ACProtocolType::PANASONIC_SERIAL, "Panasonic Serial"},
-    {ACProtocolType::HITACHI_SERIAL, "Hitachi Serial"},
-    {ACProtocolType::MOCK_PROTOCOL, "Mock Protocol"}
+    {ACProtocolType::HITACHI_SERIAL, "Hitachi Serial"}
+#ifndef DISABLE_MOCK_CONTROLLER
+    , {ACProtocolType::MOCK_PROTOCOL, "Mock Protocol"}
+#endif
 };
 
 std::unique_ptr<IACProtocol> ACProtocolFactory::createProtocol(
@@ -35,9 +37,11 @@ std::unique_ptr<IACProtocol> ACProtocolFactory::createProtocol(
             DEBUG_ERROR_PRINT("[ACFactory] Hitachi協議尚未實現\n");
             return nullptr;
             
+#ifndef DISABLE_MOCK_CONTROLLER
         case ACProtocolType::MOCK_PROTOCOL:
             DEBUG_INFO_PRINT("[ACFactory] 創建模擬協議\n");
             return createMockProtocol();
+#endif
             
         default:
             DEBUG_ERROR_PRINT("[ACFactory] 不支持的協議類型: %d\n", static_cast<int>(type));
@@ -72,8 +76,10 @@ ACProtocolType ACProtocolFactory::detectProtocolType(HardwareSerial& serial) {
 
 std::vector<ACProtocolType> ACProtocolFactory::getSupportedProtocols() const {
     return {
-        ACProtocolType::S21_DAIKIN,
-        ACProtocolType::MOCK_PROTOCOL
+        ACProtocolType::S21_DAIKIN
+#ifndef DISABLE_MOCK_CONTROLLER
+        , ACProtocolType::MOCK_PROTOCOL
+#endif
         // 其他協議待實現時添加
         // ACProtocolType::MITSUBISHI_SERIAL,
         // ACProtocolType::PANASONIC_SERIAL,
@@ -97,8 +103,11 @@ std::unique_ptr<ACProtocolFactory> ACProtocolFactory::createFactory() {
 bool ACProtocolFactory::isProtocolTypeSupported(ACProtocolType type) {
     switch (type) {
         case ACProtocolType::S21_DAIKIN:
+            return true;
+#ifndef DISABLE_MOCK_CONTROLLER
         case ACProtocolType::MOCK_PROTOCOL:
             return true;
+#endif
         case ACProtocolType::MITSUBISHI_SERIAL:
         case ACProtocolType::PANASONIC_SERIAL:
         case ACProtocolType::HITACHI_SERIAL:
@@ -108,12 +117,14 @@ bool ACProtocolFactory::isProtocolTypeSupported(ACProtocolType type) {
     }
 }
 
+#ifndef DISABLE_MOCK_CONTROLLER
 std::unique_ptr<IACProtocol> ACProtocolFactory::createMockProtocol() {
     DEBUG_INFO_PRINT("[ACFactory] 創建模擬協議實例\n");
     // 這裡可以創建一個模擬協議實例用於測試
     // 暫時返回nullptr，後續可以實現MockACProtocol類
     return nullptr;
 }
+#endif
 
 // 私有協議檢測方法實現
 bool ACProtocolFactory::detectS21Protocol(HardwareSerial& serial) {
