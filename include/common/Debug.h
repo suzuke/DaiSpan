@@ -2,8 +2,13 @@
 
 #include "HomeSpan.h"
 
-// 前向聲明遠端調試功能
+// 條件編譯：遠端調試功能前向聲明
+#if defined(ENABLE_REMOTE_DEBUG) || defined(ENABLE_LIGHTWEIGHT_DEBUG)
 void remoteWebLog(const String& message);
+#else
+// 生產模式：空實現
+inline void remoteWebLog(const String& message) {}
+#endif
 
 #define DEBUG_MODE
 

@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <WebServer.h>
+#include <WiFi.h>
 #include <memory>
 #include <map>
 #include <functional>
@@ -305,9 +306,9 @@ public:
 
 private:
     static constexpr uint32_t MEMORY_CHECK_INTERVAL = 5000; // 5秒检查一次
-    static constexpr uint32_t LOW_MEMORY_THRESHOLD = 80000;  // 80KB
-    static constexpr uint32_t MEDIUM_MEMORY_THRESHOLD = 50000; // 50KB
-    static constexpr uint32_t HIGH_MEMORY_THRESHOLD = 30000;   // 30KB
+    static constexpr uint32_t LOW_MEMORY_THRESHOLD = 25000;  // 25KB (针对ESP32-C3优化)
+    static constexpr uint32_t MEDIUM_MEMORY_THRESHOLD = 18000; // 18KB 
+    static constexpr uint32_t HIGH_MEMORY_THRESHOLD = 15000;   // 15KB
 
     MemoryPressure current_pressure = MemoryPressure::PRESSURE_LOW;
     RenderStrategy current_strategy = RenderStrategy::FULL_FEATURED;

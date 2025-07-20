@@ -250,7 +250,8 @@ void generateOptimizedMainPage() {
         }
         stream.append("</div>");
         
-        // 事件系統統計（如果啟用）
+#ifndef PRODUCTION_BUILD
+        // 事件系統統計（開發模式）
         if (modernArchitectureEnabled && g_eventBus) {
             stream.append("<div class='status-item'>");
             stream.append("<span class='status-label'>事件統計:</span>");
@@ -260,6 +261,7 @@ void generateOptimizedMainPage() {
                           g_eventBus->getProcessedEventCount());
             stream.append("</div>");
         }
+#endif
         
         // 恆溫器狀態
         if (thermostatController) {
@@ -311,7 +313,9 @@ void generateOptimizedMainPage() {
         }
 #endif
         
+#ifndef PRODUCTION_BUILD
         stream.append("<a href='/api/memory/cleanup' class='button secondary'>記憶體清理</a>");
+#endif
         stream.append("</div>");
         
         // 結束容器和HTML
@@ -681,7 +685,15 @@ String getCoreStatusInfo() {
 
 // WebServer 初始化函數
 void initializeMonitoring() {
+    static bool memoryFailureFlag = false;  // 防止記憶體不足時的無限重試
+    static unsigned long lastFailureTime = 0;
+    
     if (monitoringEnabled || !homeKitInitialized) {
+        return;
+    }
+    
+    // 如果之前因記憶體不足失敗，等待30秒後才重試
+    if (memoryFailureFlag && (millis() - lastFailureTime) < 30000) {
         return;
     }
     
@@ -708,12 +720,14 @@ void initializeMonitoring() {
         DEBUG_INFO_PRINT("[Main] 記憶體釋放後: %d bytes\n", ESP.getFreeHeap());
     }
     
-    // 檢查記憶體是否足夠（降低門檻以適應開發環境）
+    // 檢查記憶體是否足夠（適應實際硬件環境）
     uint32_t currentMemory = ESP.getFreeHeap();
-    uint32_t minThreshold = 45000;  // 降低至45KB門檻
+    uint32_t minThreshold = 30000;  // 降低至30KB門檻以適應ESP32-C3實際情況
     
     if (currentMemory < minThreshold) {
         DEBUG_ERROR_PRINT("[Main] 記憶體不足(%d bytes < %d)，跳過WebServer啟動\n", currentMemory, minThreshold);
+        memoryFailureFlag = true;
+        lastFailureTime = millis();
         return;
     }
     
@@ -734,32 +748,33 @@ void initializeMonitoring() {
     
     // 基本路由處理 - 使用記憶體優化
     webServer->on("/", [](){
-        if (homeKitPairingActive) {
-            String simpleHtml = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
-            simpleHtml += "<title>DaiSpan - 配對中</title></head><body>";
-            simpleHtml += "<h1>HomeKit 配對進行中</h1>";
-            simpleHtml += "<p>設備正在進行HomeKit配對，請稍候...</p>";
-            simpleHtml += "<script>setTimeout(function(){location.reload();}, 5000);</script>";
-            simpleHtml += "</body></html>";
-            webServer->send(200, "text/html", simpleHtml);
-            return;
-        }
-        
-        // 使用記憶體優化的頁面生成器
-        if (pageGenerator && memoryManager) {
-            if (!memoryManager->shouldServePage("main")) {
-                webServer->send(503, "text/html", 
-                               "<html><body><h1>系統記憶體不足</h1><p>請稍後重試</p></body></html>");
+        try {
+            if (homeKitPairingActive) {
+                String simpleHtml = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
+                simpleHtml += "<title>DaiSpan - 配對中</title></head><body>";
+                simpleHtml += "<h1>HomeKit 配對進行中</h1>";
+                simpleHtml += "<p>設備正在進行HomeKit配對，請稍候...</p>";
+                simpleHtml += "<script>setTimeout(function(){location.reload();}, 5000);</script>";
+                simpleHtml += "</body></html>";
+                webServer->send(200, "text/html", simpleHtml);
                 return;
             }
             
-            webServer->sendHeader("Cache-Control", "no-cache, must-revalidate");
-            webServer->sendHeader("Pragma", "no-cache");
-            webServer->sendHeader("Connection", "close");
-            
-            generateOptimizedMainPage();
-            return;
-        }
+            // 使用記憶體優化的頁面生成器
+            if (pageGenerator && memoryManager) {
+                if (!memoryManager->shouldServePage("main")) {
+                    webServer->send(503, "text/html", 
+                                   "<html><body><h1>系統記憶體不足</h1><p>請稍後重試</p></body></html>");
+                    return;
+                }
+                
+                webServer->sendHeader("Cache-Control", "no-cache, must-revalidate");
+                webServer->sendHeader("Pragma", "no-cache");
+                webServer->sendHeader("Connection", "close");
+                
+                generateOptimizedMainPage();
+                return;
+            }
         
         // 降級處理：使用傳統方法但採用自適應緩衝區
         webServer->sendHeader("Cache-Control", "no-cache, must-revalidate");
@@ -847,8 +862,23 @@ void initializeMonitoring() {
             return;
         }
         
-        String html(buffer.get());
-        webServer->send(200, "text/html", html);
+            String html(buffer.get());
+            webServer->send(200, "text/html", html);
+            
+        } catch (...) {
+            // 最終降級處理：極簡頁面
+            uint32_t freeHeap = ESP.getFreeHeap();
+            String emergencyPage = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
+            emergencyPage += "<title>DaiSpan</title></head><body>";
+            emergencyPage += "<h1>🌡️ DaiSpan 智能恆溫器</h1>";
+            emergencyPage += "<p><strong>系統狀態:</strong> 運行中 (記憶體緊張)</p>";
+            emergencyPage += "<p><strong>可用記憶體:</strong> " + String(freeHeap) + " bytes</p>";
+            emergencyPage += "<p><strong>IP地址:</strong> " + WiFi.localIP().toString() + "</p>";
+            emergencyPage += "<p><a href='/wifi'>WiFi設定</a> | <a href='/homekit'>HomeKit設定</a> | <a href='/ota'>OTA更新</a></p>";
+            emergencyPage += "<p><em>系統頁面載入遇到問題，已切換到緊急模式</em></p>";
+            emergencyPage += "</body></html>";
+            webServer->send(200, "text/html", emergencyPage);
+        }
     });
     
     // JSON狀態API，包含核心架構資訊
@@ -876,74 +906,52 @@ void initializeMonitoring() {
     
     // WiFi配置頁面 - 統一使用MemoryOptimization版本
     webServer->on("/wifi", [](){
-        // 檢查記憶體壓力
-        if (memoryManager && !memoryManager->shouldServePage("wifi_config")) {
-            MemoryOptimization::StreamingResponseBuilder stream;
-            stream.begin(webServer);
-            stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
-            stream.append("<title>系統忙碌</title>");
-            stream.appendf("<style>%s</style></head><body>", WebUI::getCompactCSS());
-            stream.append("<div class='container'><h1>🚫 系統記憶體不足</h1>");
-            stream.append("<div class='error'>系統目前記憶體壓力過大，請稍後重試。</div>");
-            stream.append("<div style='text-align:center;margin:20px 0;'>");
-            stream.append("<a href='/' class='button'>返回主頁</a></div>");
-            stream.append("</div></body></html>");
-            stream.finish();
-            return;
-        }
-        
-        // 優先使用pageGenerator，否則使用StreamingResponseBuilder
-        if (pageGenerator) {
-            pageGenerator->generateWiFiConfigPage(webServer);
-        } else {
-            MemoryOptimization::StreamingResponseBuilder stream;
-            stream.begin(webServer);
-            stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
-            stream.append("<title>WiFi 配置</title>");
-            stream.appendf("<style>%s</style></head><body>", WebUI::getCompactCSS());
-            stream.append("<div class='container'><h1>📡 WiFi 配置</h1>");
-            stream.append("<form method='post' action='/wifi-save'>");
-            stream.append("<div class='form-group'><label>網路名稱:</label>");
-            stream.append("<input type='text' name='ssid' placeholder='WiFi 網路名稱' required></div>");
-            stream.append("<div class='form-group'><label>密碼:</label>");
-            stream.append("<input type='password' name='password' placeholder='WiFi 密碼'></div>");
-            stream.append("<div style='text-align: center; margin-top: 20px;'>");
-            stream.append("<button type='submit' class='button'>💾 保存設定</button>");
-            stream.append("<a href='/' class='button secondary'>⬅️ 返回主頁</a>");
-            stream.append("</div></form></div></body></html>");
-            stream.finish();
+        try {
+            // 檢查記憶體壓力（可選）
+            if (memoryManager && !memoryManager->shouldServePage("wifi_config")) {
+                webServer->send(503, "text/html", 
+                    "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>系統忙碌</title></head><body>"
+                    "<div style='text-align:center;margin:50px;'><h1>🚫 系統記憶體不足</h1>"
+                    "<p>系統目前記憶體壓力過大，請稍後重試。</p>"
+                    "<a href='/' style='color:blue;'>返回主頁</a></div></body></html>");
+                return;
+            }
+            
+            // 優先使用pageGenerator，否則使用降級處理
+            if (pageGenerator) {
+                pageGenerator->generateWiFiConfigPage(webServer);
+                return;
+            }
+            
+            // 降級處理：使用基本HTML
+            String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
+            html += "<title>WiFi 配置</title>";
+            html += "<style>body{font-family:Arial;margin:20px;background:#f5f5f5;} ";
+            html += ".container{max-width:500px;margin:0 auto;background:white;padding:20px;border-radius:8px;} ";
+            html += ".form-group{margin:15px 0;} label{display:block;font-weight:bold;margin-bottom:5px;} ";
+            html += "input{width:100%;padding:10px;border:1px solid #ddd;border-radius:4px;box-sizing:border-box;} ";
+            html += ".button{background:#007bff;color:white;padding:12px 24px;border:none;border-radius:4px;text-decoration:none;display:inline-block;margin:5px;} ";
+            html += ".secondary{background:#6c757d;}</style></head><body>";
+            html += "<div class='container'><h1>📡 WiFi 配置</h1>";
+            html += "<form method='post' action='/wifi-save'>";
+            html += "<div class='form-group'><label>網路名稱:</label>";
+            html += "<input type='text' name='ssid' placeholder='WiFi 網路名稱' required></div>";
+            html += "<div class='form-group'><label>密碼:</label>";
+            html += "<input type='password' name='password' placeholder='WiFi 密碼'></div>";
+            html += "<div style='text-align: center; margin-top: 20px;'>";
+            html += "<button type='submit' class='button'>💾 保存設定</button>";
+            html += "<a href='/' class='button secondary'>⬅️ 返回主頁</a>";
+            html += "</div></form></div></body></html>";
+            
+            webServer->send(200, "text/html", html);
+            
+        } catch (...) {
+            // 最終降級：純文本響應
+            webServer->send(500, "text/plain", "WiFi配置頁面載入失敗，請重試");
         }
     });
     
-    // WiFi掃描API
-    webServer->on("/wifi-scan", [](){
-        DEBUG_INFO_PRINT("[Main] 開始WiFi掃描...\n");
-        int networkCount = WiFi.scanNetworks();
-        
-        String json = "[";
-        int validNetworks = 0;
-        
-        if (networkCount > 0) {
-            for (int i = 0; i < networkCount && i < 15; i++) {
-                String ssid = WiFi.SSID(i);
-                if (ssid.length() == 0) continue;
-                
-                int rssi = WiFi.RSSI(i);
-                bool secure = (WiFi.encryptionType(i) != WIFI_AUTH_OPEN);
-                
-                if (validNetworks > 0) json += ",";
-                json += "{";
-                json += "\"ssid\":\"" + ssid + "\",";
-                json += "\"rssi\":" + String(rssi) + ",";
-                json += "\"secure\":" + String(secure ? "true" : "false");
-                json += "}";
-                validNetworks++;
-            }
-        }
-        
-        json += "]";
-        webServer->send(200, "application/json", json);
-    });
+    // WiFi掃描已整合到WiFi配置頁面中 (MemoryOptimization::WebPageGenerator)
     
     // WiFi配置保存處理
     webServer->on("/wifi-save", HTTP_POST, [](){
@@ -973,54 +981,57 @@ void initializeMonitoring() {
     
     // HomeKit配置頁面 - 使用MemoryOptimization版本
     webServer->on("/homekit", [](){
-        // 檢查記憶體壓力
-        if (memoryManager && !memoryManager->shouldServePage("homekit_config")) {
-            MemoryOptimization::StreamingResponseBuilder stream;
-            stream.begin(webServer);
-            stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
-            stream.append("<title>系統忙碌</title>");
-            stream.appendf("<style>%s</style></head><body>", WebUI::getCompactCSS());
-            stream.append("<div class='container'><h1>🚫 系統記憶體不足</h1>");
-            stream.append("<div class='error'>系統目前記憶體壓力過大，請稍後重試。</div>");
-            stream.append("<div style='text-align:center;margin:20px 0;'>");
-            stream.append("<a href='/' class='button'>返回主頁</a></div>");
-            stream.append("</div></body></html>");
-            stream.finish();
-            return;
+        try {
+            // 檢查記憶體壓力（可選）
+            if (memoryManager && !memoryManager->shouldServePage("homekit_config")) {
+                webServer->send(503, "text/html", 
+                    "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>系統忙碌</title></head><body>"
+                    "<div style='text-align:center;margin:50px;'><h1>🚫 系統記憶體不足</h1>"
+                    "<p>系統目前記憶體壓力過大，請稍後重試。</p>"
+                    "<a href='/' style='color:blue;'>返回主頁</a></div></body></html>");
+                return;
+            }
+            
+            String currentPairingCode = configManager.getHomeKitPairingCode();
+            String currentDeviceName = configManager.getHomeKitDeviceName();
+            String currentQRID = configManager.getHomeKitQRID();
+            
+            // 使用基本HTML建構（更可靠）
+            String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
+            html += "<title>HomeKit 配置</title>";
+            html += "<style>body{font-family:Arial;margin:20px;background:#f5f5f5;} ";
+            html += ".container{max-width:500px;margin:0 auto;background:white;padding:20px;border-radius:8px;} ";
+            html += ".form-group{margin:15px 0;} label{display:block;font-weight:bold;margin-bottom:5px;} ";
+            html += "input{width:100%;padding:10px;border:1px solid #ddd;border-radius:4px;box-sizing:border-box;} ";
+            html += ".status{background:#e7f3ff;padding:10px;border-radius:4px;margin:15px 0;text-align:center;} ";
+            html += ".button{background:#007bff;color:white;padding:12px 24px;border:none;border-radius:4px;text-decoration:none;display:inline-block;margin:5px;} ";
+            html += ".secondary{background:#6c757d;}</style></head><body>";
+            html += "<div class='container'><h1>🏠 HomeKit 配置</h1>";
+            html += "<form method='post' action='/homekit-save'>";
+            html += "<div class='form-group'><label>配對代碼:</label>";
+            html += "<input type='text' name='pairing_code' value='" + currentPairingCode + "' maxlength='8' required></div>";
+            html += "<div class='form-group'><label>設備名稱:</label>";
+            html += "<input type='text' name='device_name' value='" + currentDeviceName + "' maxlength='64' required></div>";
+            html += "<div class='form-group'><label>QR ID:</label>";
+            html += "<input type='text' name='qr_id' value='" + currentQRID + "' maxlength='4' required></div>";
+            html += "<div class='status'>";
+            if (homeKitInitialized) {
+                html += "🟢 HomeKit 服務已初始化";
+            } else {
+                html += "🔴 HomeKit 服務未初始化";
+            }
+            html += "</div>";
+            html += "<div style='text-align: center; margin-top: 20px;'>";
+            html += "<button type='submit' class='button'>💾 保存設定</button>";
+            html += "<a href='/' class='button secondary'>⬅️ 返回主頁</a>";
+            html += "</div></form></div></body></html>";
+            
+            webServer->send(200, "text/html", html);
+            
+        } catch (...) {
+            // 最終降級：純文本響應
+            webServer->send(500, "text/plain", "HomeKit配置頁面載入失敗，請重試");
         }
-        
-        String currentPairingCode = configManager.getHomeKitPairingCode();
-        String currentDeviceName = configManager.getHomeKitDeviceName();
-        String currentQRID = configManager.getHomeKitQRID();
-        
-        MemoryOptimization::StreamingResponseBuilder stream;
-        stream.begin(webServer);
-        stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
-        stream.append("<title>HomeKit 配置</title>");
-        stream.appendf("<style>%s</style></head><body>", WebUI::getCompactCSS());
-        stream.append("<div class='container'><h1>🏠 HomeKit 配置</h1>");
-        stream.append("<form method='post' action='/homekit-save'>");
-        stream.append("<div class='form-group'><label>配對代碼:</label>");
-        stream.appendf("<input type='text' name='pairing_code' value='%s' maxlength='8' required></div>", 
-                      currentPairingCode.c_str());
-        stream.append("<div class='form-group'><label>設備名稱:</label>");
-        stream.appendf("<input type='text' name='device_name' value='%s' maxlength='64' required></div>", 
-                      currentDeviceName.c_str());
-        stream.append("<div class='form-group'><label>QR ID:</label>");
-        stream.appendf("<input type='text' name='qr_id' value='%s' maxlength='4' required></div>", 
-                      currentQRID.c_str());
-        stream.append("<div class='status'>");
-        if (homeKitInitialized) {
-            stream.append("🟢 HomeKit 服務已初始化");
-        } else {
-            stream.append("🔴 HomeKit 服務未初始化");
-        }
-        stream.append("</div>");
-        stream.append("<div style='text-align: center; margin-top: 20px;'>");
-        stream.append("<button type='submit' class='button'>💾 保存設定</button>");
-        stream.append("<a href='/' class='button secondary'>⬅️ 返回主頁</a>");
-        stream.append("</div></form></div></body></html>");
-        stream.finish();
     });
     
     // HomeKit配置保存處理
@@ -1272,7 +1283,8 @@ void initializeMonitoring() {
         }
     });
     
-    // 核心架構統計 API
+#ifndef PRODUCTION_BUILD
+    // 核心架構統計 API (開發模式)
     webServer->on("/api/core/stats", [](){
         if (!modernArchitectureEnabled || !g_eventBus) {
             webServer->send(400, "application/json", "{\"error\":\"Core architecture not enabled\"}");
@@ -1292,7 +1304,7 @@ void initializeMonitoring() {
         webServer->send(200, "application/json", json);
     });
     
-    // 核心架構統計重置端點
+    // 核心架構統計重置端點 (開發模式)
     webServer->on("/api/core/reset-stats", [](){
         if (!modernArchitectureEnabled || !g_eventBus) {
             webServer->send(400, "application/json", "{\"error\":\"Core architecture not enabled\"}");
@@ -1303,6 +1315,7 @@ void initializeMonitoring() {
         String json = "{\"status\":\"success\",\"message\":\"Statistics reset successfully\",\"timestamp\":" + String(millis()) + "}";
         webServer->send(200, "application/json", json);
     });
+#endif
     
     // 系統健康檢查端點
     webServer->on("/api/health", [](){
@@ -1483,39 +1496,51 @@ void initializeMonitoring() {
     
     // OTA 頁面
     webServer->on("/ota", [](){
-        String deviceIP = WiFi.localIP().toString();
-        
-        // 使用優化版本生成OTA頁面
-        MemoryOptimization::StreamingResponseBuilder stream;
-        stream.begin(webServer);
-        stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
-        stream.append("<title>OTA 更新</title>");
-        stream.appendf("<style>%s</style></head><body>", WebUI::getCompactCSS());
-        stream.append("<div class='container'><h1>🔄 OTA 遠程更新</h1>");
-        stream.append("<div class='status'><h3>🔄 OTA 更新狀態</h3>");
-        stream.append("<p><span style='color: green;'>●</span> OTA 服務已啟用</p>");
-        stream.append("<p><strong>設備主機名:</strong> DaiSpan-Thermostat</p>");
-        stream.appendf("<p><strong>IP地址:</strong> %s</p></div>", deviceIP.c_str());
-        stream.append("<div class='warning'><h3>⚠️ 注意事項</h3>");
-        stream.append("<ul><li>OTA 更新過程中請勿斷電或斷網</li>");
-        stream.append("<li>更新失敗可能導致設備無法啟動</li>");
-        stream.append("<li>建議在更新前備份當前固件</li>");
-        stream.append("<li>更新完成後設備會自動重啟</li></ul></div>");
-        stream.append("<div><h3>📝 使用說明</h3>");
-        stream.append("<p>使用 PlatformIO 進行 OTA 更新：</p>");
-        stream.appendf("<div class='code-block'>pio run -t upload --upload-port %s</div>", deviceIP.c_str());
-        stream.append("<p>或使用 Arduino IDE：</p>");
-        stream.append("<ol><li>工具 → 端口 → 選擇網路端口</li>");
-        stream.append("<li>選擇設備主機名: DaiSpan-Thermostat</li>");
-        stream.append("<li>輸入 OTA 密碼</li><li>點擊上傳</li></ol></div>");
-        stream.append("<div style='text-align: center; margin-top: 30px;'>");
-        stream.append("<a href='/' class='button secondary'>⬅️ 返回主頁</a>");
-        stream.append("<a href='/restart' class='button danger'>🔄 重新啟動</a>");
-        stream.append("</div></div></body></html>");
-        stream.finish();
+        try {
+            String deviceIP = WiFi.localIP().toString();
+            
+            // 使用基本HTML建構（更可靠）
+            String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
+            html += "<title>OTA 更新</title>";
+            html += "<style>body{font-family:Arial;margin:20px;background:#f5f5f5;} ";
+            html += ".container{max-width:600px;margin:0 auto;background:white;padding:20px;border-radius:8px;} ";
+            html += ".status{background:#e7f3ff;padding:15px;border-radius:4px;margin:15px 0;} ";
+            html += ".warning{background:#fff3cd;border:1px solid #ffeaa7;color:#856404;padding:15px;border-radius:4px;margin:15px 0;} ";
+            html += ".code-block{background:#f8f9fa;border:1px solid #e9ecef;padding:10px;border-radius:4px;font-family:monospace;margin:10px 0;} ";
+            html += ".button{background:#007bff;color:white;padding:12px 24px;border:none;border-radius:4px;text-decoration:none;display:inline-block;margin:5px;} ";
+            html += ".secondary{background:#6c757d;} .danger{background:#dc3545;}</style></head><body>";
+            html += "<div class='container'><h1>🔄 OTA 遠程更新</h1>";
+            html += "<div class='status'><h3>🔄 OTA 更新狀態</h3>";
+            html += "<p><span style='color: green;'>●</span> OTA 服務已啟用</p>";
+            html += "<p><strong>設備主機名:</strong> DaiSpan-Thermostat</p>";
+            html += "<p><strong>IP地址:</strong> " + deviceIP + "</p></div>";
+            html += "<div class='warning'><h3>⚠️ 注意事項</h3>";
+            html += "<ul><li>OTA 更新過程中請勿斷電或斷網</li>";
+            html += "<li>更新失敗可能導致設備無法啟動</li>";
+            html += "<li>建議在更新前備份當前固件</li>";
+            html += "<li>更新完成後設備會自動重啟</li></ul></div>";
+            html += "<div><h3>📝 使用說明</h3>";
+            html += "<p>使用 PlatformIO 進行 OTA 更新：</p>";
+            html += "<div class='code-block'>pio run -t upload --upload-port " + deviceIP + "</div>";
+            html += "<p>或使用 Arduino IDE：</p>";
+            html += "<ol><li>工具 → 端口 → 選擇網路端口</li>";
+            html += "<li>選擇設備主機名: DaiSpan-Thermostat</li>";
+            html += "<li>輸入 OTA 密碼</li><li>點擊上傳</li></ol></div>";
+            html += "<div style='text-align: center; margin-top: 30px;'>";
+            html += "<a href='/' class='button secondary'>⬅️ 返回主頁</a>";
+            html += "<a href='/restart' class='button danger'>🔄 重新啟動</a>";
+            html += "</div></div></body></html>";
+            
+            webServer->send(200, "text/html", html);
+            
+        } catch (...) {
+            // 最終降級：純文本響應
+            webServer->send(500, "text/plain", "OTA更新頁面載入失敗，請重試");
+        }
     });
     
-    // 記憶體清理 API 端點
+#ifndef PRODUCTION_BUILD
+    // 記憶體清理 API 端點 (開發模式)
     webServer->on("/api/memory/cleanup", [](){
         uint32_t beforeCleanup = ESP.getFreeHeap();
         
@@ -1546,7 +1571,7 @@ void initializeMonitoring() {
         webServer->send(200, "application/json", buffer);
     });
     
-    // 記憶體優化狀態 API 端點
+    // 記憶體優化狀態 API 端點 (開發模式)
     webServer->on("/api/memory/stats", [](){
         if (!memoryManager || !pageGenerator) {
             webServer->send(503, "application/json", 
@@ -1585,8 +1610,10 @@ void initializeMonitoring() {
         
         DEBUG_VERBOSE_PRINT("[API] 記憶體優化狀態查詢完成\n");
     });
+#endif
     
-    // 詳細記憶體分析 API 端點
+#ifndef PRODUCTION_BUILD
+    // 詳細記憶體分析 API 端點 (開發模式)
     webServer->on("/api/memory/detailed", [](){
         if (!memoryManager || !pageGenerator) {
             webServer->send(503, "application/json", 
@@ -1659,7 +1686,7 @@ void initializeMonitoring() {
         stream.finish();
     });
     
-    // 緩衝區池統計 API 端點
+    // 緩衝區池統計 API 端點 (開發模式)
     webServer->on("/api/buffer/stats", [](){
         if (!pageGenerator) {
             webServer->send(503, "text/plain", "Buffer pool not initialized");
@@ -1670,8 +1697,10 @@ void initializeMonitoring() {
         pageGenerator->getSystemStats(stats);
         webServer->send(200, "text/plain", stats);
     });
+#endif
     
-    // 性能測試 API 端點
+#ifndef PRODUCTION_BUILD
+    // 性能測試 API 端點 (開發模式)
     webServer->on("/api/performance/test", [](){
         uint32_t startTime = millis();
         uint32_t startHeap = ESP.getFreeHeap();
@@ -1726,7 +1755,7 @@ void initializeMonitoring() {
                          totalTime, heapDiff);
     });
     
-    // 負載測試 API 端點
+    // 負載測試 API 端點 (開發模式)
     webServer->on("/api/performance/load", [](){
         String iterations = webServer->hasArg("iterations") ? 
                            webServer->arg("iterations") : "10";
@@ -1792,7 +1821,7 @@ void initializeMonitoring() {
                          iterCount, totalTime);
     });
     
-    // 基準測試比較 API 端點
+    // 基準測試比較 API 端點 (開發模式)
     webServer->on("/api/performance/benchmark", [](){
         MemoryOptimization::StreamingResponseBuilder stream;
         stream.begin(webServer, "application/json");
@@ -1850,7 +1879,7 @@ void initializeMonitoring() {
                          timeImprovement, memoryImprovement);
     });
     
-    // 即時監控儀表板 API 端點
+    // 即時監控儀表板 API 端點 (開發模式)
     webServer->on("/api/monitor/dashboard", [](){
         MemoryOptimization::StreamingResponseBuilder stream;
         stream.begin(webServer, "application/json");
@@ -1912,6 +1941,7 @@ void initializeMonitoring() {
         
         stream.finish();
     });
+#endif
     
     // 重啟端點 - 使用MemoryOptimization版本
     webServer->on("/restart", [](){
@@ -1951,25 +1981,40 @@ void initializeMonitoring() {
     webServer->begin();
     monitoringEnabled = true;
     
+    // 重置記憶體失敗標誌
+    memoryFailureFlag = false;
+    
     // 初始化記憶體優化組件
     initializeMemoryOptimization();
     
     DEBUG_INFO_PRINT("[Main] WebServer監控功能已啟動: http://%s:8080\n", 
                      WiFi.localIP().toString().c_str());
     
-    // 初始化遠端調試系統（生產環境中禁用以節省記憶體）
-#ifndef PRODUCTION_BUILD
+    // 初始化調試系統 - 根據編譯環境選擇不同的調試器
+#if defined(ENABLE_REMOTE_DEBUG)
+    // WebSocket調試器 (高功能版本)
     RemoteDebugger& debugger = RemoteDebugger::getInstance();
     if (debugger.begin(8081)) {
-        DEBUG_INFO_PRINT("[Main] 遠端調試系統已啟動: ws://%s:8081\n", 
+        DEBUG_INFO_PRINT("[Main] WebSocket調試系統已啟動: ws://%s:8081\n", 
                          WiFi.localIP().toString().c_str());
         DEBUG_INFO_PRINT("[Main] 調試界面: http://%s:8080/debug\n", 
                          WiFi.localIP().toString().c_str());
     } else {
-        DEBUG_ERROR_PRINT("[Main] 遠端調試系統啟動失敗\n");
+        DEBUG_ERROR_PRINT("[Main] WebSocket調試系統啟動失敗\n");
+    }
+#elif defined(ENABLE_LIGHTWEIGHT_DEBUG)
+    // HTTP輕量級調試器 (節省記憶體版本)
+    RemoteDebugger& debugger = RemoteDebugger::getInstance();
+    if (debugger.begin(8082)) {
+        DEBUG_INFO_PRINT("[Main] 輕量級調試系統已啟動: http://%s:8082\n", 
+                         WiFi.localIP().toString().c_str());
+        DEBUG_INFO_PRINT("[Main] 調試界面: http://%s:8082/\n", 
+                         WiFi.localIP().toString().c_str());
+    } else {
+        DEBUG_ERROR_PRINT("[Main] 輕量級調試系統啟動失敗\n");
     }
 #else
-    DEBUG_INFO_PRINT("[Main] 生產模式：遠端調試系統已禁用以節省記憶體\n");
+    DEBUG_INFO_PRINT("[Main] 生產模式：調試系統已禁用以節省記憶體\n");
 #endif
 }
 
