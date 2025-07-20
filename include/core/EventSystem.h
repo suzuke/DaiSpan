@@ -19,6 +19,9 @@ class DomainEvent {
 public:
     virtual ~DomainEvent() = default;
     
+    // 純虛函數：派生類必須提供其類型名稱
+    virtual const char* getEventTypeName() const = 0;
+    
     std::chrono::steady_clock::time_point timestamp = std::chrono::steady_clock::now();
     uint64_t eventId = generateEventId();
     
@@ -66,16 +69,17 @@ public:
     uint32_t subscribe(std::function<void(const EventT&)> handler) {
         static_assert(std::is_base_of_v<DomainEvent, EventT>, "Event must inherit from DomainEvent");
         
-        auto typeIndex = std::type_index(typeid(EventT));
+        // 使用編譯時字串作為類型識別符，避免RTTI
+        std::string typeId = EventT::EVENT_TYPE_NAME;
         auto wrappedHandler = [handler](const DomainEvent& event) {
             handler(static_cast<const EventT&>(event));
         };
         
         uint32_t subscriptionId = nextSubscriptionId++;
-        handlers[typeIndex].emplace_back(subscriptionId, wrappedHandler);
+        handlers[typeId].emplace_back(subscriptionId, wrappedHandler);
         
         // DEBUG_INFO_PRINT("[EventBus] 新訂閱: %s (ID: %u)\n", 
-        //                  typeid(EventT).name(), subscriptionId);
+        //                  typeId, subscriptionId);
         
         return subscriptionId;
     }
@@ -85,7 +89,7 @@ public:
      * @param subscriptionId 訂閱ID
      */
     void unsubscribe(uint32_t subscriptionId) {
-        for (auto& [typeIndex, handlerList] : handlers) {
+        for (auto& [typeId, handlerList] : handlers) {
             auto it = std::remove_if(handlerList.begin(), handlerList.end(),
                 [subscriptionId](const auto& pair) {
                     return pair.first == subscriptionId;
@@ -130,7 +134,7 @@ public:
     
     EventStatistics getStatistics() const {
         uint32_t totalSubs = 0;
-        for (const auto& [typeIndex, handlerList] : handlers) {
+        for (const auto& [typeId, handlerList] : handlers) {
             totalSubs += handlerList.size();
         }
         
@@ -149,13 +153,19 @@ public:
         eventQueue.swap(empty);
         // DEBUG_WARN_PRINT("[EventBus] 事件佇列已清空\n");
     }
+    
+    // 向後兼容方法
+    size_t getQueueSize() const { return eventQueue.size(); }
+    uint32_t getSubscriptionCount() const { return getStatistics().totalSubscriptions; }
+    uint64_t getProcessedEventCount() const { return eventsProcessed; }
+    void resetStatistics() { eventsProcessed = 0; }
 
 private:
     using HandlerFunction = std::function<void(const DomainEvent&)>;
     using HandlerEntry = std::pair<uint32_t, HandlerFunction>; // ID, Handler
     
     std::queue<std::unique_ptr<DomainEvent>> eventQueue;
-    std::unordered_map<std::type_index, std::vector<HandlerEntry>> handlers;
+    std::unordered_map<std::string, std::vector<HandlerEntry>> handlers;
     uint32_t nextSubscriptionId = 1;
     uint64_t eventsProcessed = 0;
     
@@ -163,8 +173,9 @@ private:
      * 分發事件給所有訂閱者
      */
     void dispatchEvent(const DomainEvent& event) {
-        auto typeIndex = std::type_index(typeid(event));
-        auto it = handlers.find(typeIndex);
+        // 需要派生類提供其類型名稱
+        std::string typeId = event.getEventTypeName();
+        auto it = handlers.find(typeId);
         
         if (it != handlers.end()) {
             for (const auto& [subscriptionId, handler] : it->second) {

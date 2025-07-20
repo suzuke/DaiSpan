@@ -86,12 +86,13 @@ pio run -e esp32-s3-supermini
 ### Architecture Structure
 The codebase follows a modern event-driven architecture:
 
-1. **Core Architecture** (`include/architecture_v3/core/`): Event-driven foundation
-   - `EventSystemSimple.h`: RTTI-free event system
-   - `ServiceContainerSimple.h`: Dependency injection container
+1. **Core Architecture** (`include/core/`): Event-driven foundation
+   - `EventSystem.h`: RTTI-free template-based event system
+   - `ServiceContainer.h`: String-based dependency injection container
    - `Result.h`: Functional error handling
+   - `TypeRegistry.h`: Type system utilities
 
-2. **Domain Layer** (`include/architecture_v3/domain/`): Business logic
+2. **Domain Layer** (`include/domain/`): Business logic
    - `ThermostatDomain.h`: Domain aggregates and value objects
    - `ConfigDomain.h`: Configuration domain logic
 

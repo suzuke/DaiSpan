@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../core/Result.h"
+#include "core/Result.h"
 #include <Preferences.h>
 #include <functional>
 #include <string>

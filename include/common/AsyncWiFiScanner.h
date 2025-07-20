@@ -6,8 +6,8 @@
 #include <queue>
 #include <memory>
 #include "Debug.h"
-#include "architecture_v3/core/EventSystemSimple.h"
-#include "architecture_v3/core/Result.h"
+#include "core/EventSystem.h"
+#include "core/Result.h"
 
 namespace DaiSpan::WiFi {
 

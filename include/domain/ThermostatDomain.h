@@ -1,7 +1,7 @@
 #pragma once
 
-#include "../core/EventSystemSimple.h"
-#include "../core/Result.h"
+#include "core/EventSystem.h"
+#include "core/Result.h"
 #include <chrono>
 #include <optional>
 
@@ -127,7 +127,7 @@ namespace Events {
      */
     struct StateChanged : public Core::DomainEvent {
         static constexpr const char* EVENT_TYPE_NAME = "StateChanged";
-        std::string getEventType() const override { return EVENT_TYPE_NAME; }
+        const char* getEventTypeName() const override { return EVENT_TYPE_NAME; }
         ThermostatState previousState;
         ThermostatState currentState;
         std::string changeReason; // "user_command", "protocol_update", "auto_adjustment"
@@ -141,7 +141,7 @@ namespace Events {
      */
     struct CommandReceived : public Core::DomainEvent {
         static constexpr const char* EVENT_TYPE_NAME = "CommandReceived";
-        std::string getEventType() const override { return EVENT_TYPE_NAME; }
+        const char* getEventTypeName() const override { return EVENT_TYPE_NAME; }
         enum class Type { Power, Temperature, Mode, FanSpeed };
         Type commandType;
         std::string source;
@@ -156,7 +156,7 @@ namespace Events {
      */
     struct TemperatureUpdated : public Core::DomainEvent {
         static constexpr const char* EVENT_TYPE_NAME = "TemperatureUpdated";
-        std::string getEventType() const override { return EVENT_TYPE_NAME; }
+        const char* getEventTypeName() const override { return EVENT_TYPE_NAME; }
         float previousTemperature;
         float currentTemperature;
         bool isSignificantChange;
@@ -170,7 +170,7 @@ namespace Events {
      */
     struct DeviceReady : public Core::DomainEvent {
         static constexpr const char* EVENT_TYPE_NAME = "DeviceReady";
-        std::string getEventType() const override { return EVENT_TYPE_NAME; }
+        const char* getEventTypeName() const override { return EVENT_TYPE_NAME; }
         ThermostatState initialState;
         
         explicit DeviceReady(const ThermostatState& state) : initialState(state) {}
@@ -181,7 +181,7 @@ namespace Events {
      */
     struct Error : public Core::DomainEvent {
         static constexpr const char* EVENT_TYPE_NAME = "Error";
-        std::string getEventType() const override { return EVENT_TYPE_NAME; }
+        const char* getEventTypeName() const override { return EVENT_TYPE_NAME; }
         enum class Type { 
             ProtocolError, 
             ConfigurationError, 
@@ -266,14 +266,14 @@ public:
             auto newState = result.getValue();
             if (newState.isValid()) {
                 currentState_ = newState;
-                eventBus_.publish(std::make_unique<Events::DeviceReady>(currentState_));
+                eventBus_.publish(Events::DeviceReady(currentState_));
                 return Core::Result<void>::success();
             }
         }
         
-        auto error = std::make_unique<Events::Error>(Events::Error::Type::ProtocolError, 
+        auto error = Events::Error(Events::Error::Type::ProtocolError, 
                                   "Failed to initialize device connection");
-        eventBus_.publish(std::move(error));
+        eventBus_.publish(error);
         return Core::Result<void>::failure("Initialization failed");
     }
     
@@ -282,7 +282,7 @@ public:
      */
     Core::Result<void> setPower(const Commands::SetPower& command) {
         // 發布命令接收事件
-        eventBus_.publish(std::make_unique<Events::CommandReceived>(
+        eventBus_.publish(Events::CommandReceived(
             Events::CommandReceived::Type::Power, 
             command.source, 
             command.power ? "ON" : "OFF"));
@@ -295,7 +295,7 @@ public:
         // 執行協議命令
         auto result = protocol_->setPower(command.power);
         if (result.isFailure()) {
-            eventBus_.publish(std::make_unique<Events::Error>(Events::Error::Type::ProtocolError, 
+            eventBus_.publish(Events::Error(Events::Error::Type::ProtocolError, 
                                           result.getError(), currentState_));
             return result;
         }
@@ -311,7 +311,7 @@ public:
      * 設定目標溫度
      */
     Core::Result<void> setTargetTemperature(const Commands::SetTargetTemperature& command) {
-        eventBus_.publish(std::make_unique<Events::CommandReceived>(
+        eventBus_.publish(Events::CommandReceived(
             Events::CommandReceived::Type::Temperature, 
             command.source, 
             std::to_string(command.temperature) + "°C"));
@@ -323,7 +323,7 @@ public:
         
         auto result = protocol_->setTargetTemperature(command.temperature);
         if (result.isFailure()) {
-            eventBus_.publish(std::make_unique<Events::Error>(Events::Error::Type::ProtocolError, 
+            eventBus_.publish(Events::Error(Events::Error::Type::ProtocolError, 
                                           result.getError(), currentState_));
             return result;
         }
@@ -380,13 +380,13 @@ private:
         auto previousState = currentState_;
         currentState_ = newState;
         
-        eventBus_.publish(std::make_unique<Events::StateChanged>(previousState, currentState_, reason));
+        eventBus_.publish(Events::StateChanged(previousState, currentState_, reason));
         
         // 如果溫度有顯著變化，額外發布溫度事件
         constexpr float V3_TEMP_THRESHOLD_SIGNIFICANT = 0.5f;
         if (std::abs(previousState.currentTemperature - newState.currentTemperature) >= V3_TEMP_THRESHOLD_SIGNIFICANT) {
             bool isSignificant = std::abs(previousState.currentTemperature - newState.currentTemperature) >= 1.0f;
-            eventBus_.publish(std::make_unique<Events::TemperatureUpdated>(
+            eventBus_.publish(Events::TemperatureUpdated(
                 previousState.currentTemperature, 
                 newState.currentTemperature, 
                 isSignificant));

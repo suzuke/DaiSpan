@@ -2,8 +2,8 @@
 #include "common/Debug.h"
 #include "common/RemoteDebugger.h"
 
-#include "architecture_v3/domain/ThermostatDomain.h"
-#include "architecture_v3/core/EventSystemSimple.h"
+#include "domain/ThermostatDomain.h"
+#include "core/EventSystem.h"
 extern DaiSpan::Core::EventPublisher* g_eventBus;
 
 // 靜態變量用於記錄上一次輸出的值
@@ -187,24 +187,24 @@ void ThermostatDevice::publishCoreEvents() {
     // 檢查是否有模式變更
     if (targetMode->updated()) {
         String modeDetails = String("模式變更: ") + getHomeKitModeText(targetMode->getNewVal());
-        auto event = std::make_unique<DaiSpan::Domain::Thermostat::Events::CommandReceived>(
+        auto event = DaiSpan::Domain::Thermostat::Events::CommandReceived(
             DaiSpan::Domain::Thermostat::Events::CommandReceived::Type::Mode,
             "homekit",
             modeDetails.c_str()
         );
-        g_eventBus->publish(std::move(event));
+        g_eventBus->publish(event);
         DEBUG_VERBOSE_PRINT("[Core] 發布 HomeKit 模式變更事件\n");
     }
     
     // 檢查是否有溫度變更
     if (targetTemp->updated()) {
         String tempDetails = String("溫度變更: ") + String(targetTemp->getNewVal<float>(), 1) + "°C";
-        auto event = std::make_unique<DaiSpan::Domain::Thermostat::Events::CommandReceived>(
+        auto event = DaiSpan::Domain::Thermostat::Events::CommandReceived(
             DaiSpan::Domain::Thermostat::Events::CommandReceived::Type::Temperature,
             "homekit",
             tempDetails.c_str()
         );
-        g_eventBus->publish(std::move(event));
+        g_eventBus->publish(event);
         DEBUG_VERBOSE_PRINT("[Core] 發布 HomeKit 溫度變更事件\n");
     }
 }

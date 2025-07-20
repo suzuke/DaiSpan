@@ -26,10 +26,10 @@
 #include "common/MemoryOptimization.h"
 
 // 核心架構組件
-#include "architecture_v3/core/EventSystemSimple.h"
-#include "architecture_v3/core/ServiceContainerSimple.h"
-#include "architecture_v3/domain/ThermostatDomain.h"
-#include "architecture_v3/domain/ConfigDomain.h"
+#include "core/EventSystem.h"
+#include "core/ServiceContainer.h"
+#include "domain/ThermostatDomain.h"
+#include "domain/ConfigDomain.h"
 #include <Preferences.h>
 
 // 硬體定義
@@ -551,26 +551,26 @@ void setupCoreEventListeners() {
     DEBUG_INFO_PRINT("[Core] 設置核心架構事件監聽...\n");
     
     // 設置事件監聽器（用於調試和監控）
-    g_eventBus->subscribe("StateChanged",
-        [](const DaiSpan::Core::DomainEvent& event) {
+    g_eventBus->subscribe<DaiSpan::Domain::Thermostat::Events::StateChanged>(
+        [](const DaiSpan::Domain::Thermostat::Events::StateChanged& event) {
             DEBUG_VERBOSE_PRINT("[Core] 狀態變化事件接收\n");
             REMOTE_WEBLOG("[Core-Event] 恆溫器狀態變化");
         });
     
-    g_eventBus->subscribe("CommandReceived",
-        [](const DaiSpan::Core::DomainEvent& event) {
+    g_eventBus->subscribe<DaiSpan::Domain::Thermostat::Events::CommandReceived>(
+        [](const DaiSpan::Domain::Thermostat::Events::CommandReceived& event) {
             DEBUG_VERBOSE_PRINT("[Core] 命令接收事件\n");
             REMOTE_WEBLOG("[Core-Event] 命令接收");
         });
     
-    g_eventBus->subscribe("TemperatureUpdated",
-        [](const DaiSpan::Core::DomainEvent& event) {
+    g_eventBus->subscribe<DaiSpan::Domain::Thermostat::Events::TemperatureUpdated>(
+        [](const DaiSpan::Domain::Thermostat::Events::TemperatureUpdated& event) {
             DEBUG_INFO_PRINT("[Core] 溫度更新事件\n");
             REMOTE_WEBLOG("[Core-Event] 溫度更新");
         });
     
-    g_eventBus->subscribe("Error",
-        [](const DaiSpan::Core::DomainEvent& event) {
+    g_eventBus->subscribe<DaiSpan::Domain::Thermostat::Events::Error>(
+        [](const DaiSpan::Domain::Thermostat::Events::Error& event) {
             DEBUG_ERROR_PRINT("[Core] 領域錯誤事件\n");
             REMOTE_WEBLOG("[Core-Error] 系統錯誤");
         });
@@ -1139,13 +1139,13 @@ void initializeMonitoring() {
         
         try {
             // 觸發一個測試事件
-            auto testEvent = std::make_unique<DaiSpan::Domain::Thermostat::Events::CommandReceived>(
+            auto testEvent = DaiSpan::Domain::Thermostat::Events::CommandReceived(
                 DaiSpan::Domain::Thermostat::Events::CommandReceived::Type::Temperature,
                 "debug-test",
                 "手動測試事件"
             );
             
-            g_eventBus->publish(std::move(testEvent));
+            g_eventBus->publish(testEvent);
             
             String response = "✅ V3 測試事件已發布!\n";
             response += "佇列大小: " + String(g_eventBus->getQueueSize()) + "\n";
