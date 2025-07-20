@@ -874,21 +874,44 @@ void initializeMonitoring() {
         webServer->send(200, "application/json", json);
     });
     
-    // WiFi配置頁面
+    // WiFi配置頁面 - 統一使用MemoryOptimization版本
     webServer->on("/wifi", [](){
-        // 使用記憶體優化的WiFi配置頁面
-        if (pageGenerator && memoryManager) {
-            if (!memoryManager->shouldServePage("wifi_config")) {
-                webServer->send(503, "text/html", 
-                               "<html><body><h1>系統記憶體不足</h1><p>請稍後重試</p></body></html>");
-                return;
-            }
-            
+        // 檢查記憶體壓力
+        if (memoryManager && !memoryManager->shouldServePage("wifi_config")) {
+            MemoryOptimization::StreamingResponseBuilder stream;
+            stream.begin(webServer);
+            stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
+            stream.append("<title>系統忙碌</title>");
+            stream.append("<style>%s</style></head><body>", WebUI::getCompactCSS());
+            stream.append("<div class='container'><h1>🚫 系統記憶體不足</h1>");
+            stream.append("<div class='error'>系統目前記憶體壓力過大，請稍後重試。</div>");
+            stream.append("<div style='text-align:center;margin:20px 0;'>");
+            stream.append("<a href='/' class='button'>返回主頁</a></div>");
+            stream.append("</div></body></html>");
+            stream.finish();
+            return;
+        }
+        
+        // 優先使用pageGenerator，否則使用StreamingResponseBuilder
+        if (pageGenerator) {
             pageGenerator->generateWiFiConfigPage(webServer);
         } else {
-            // 降級處理：使用原有方法
-            String html = WebUI::getSimpleWiFiConfigPage();
-            webServer->send(200, "text/html", html);
+            MemoryOptimization::StreamingResponseBuilder stream;
+            stream.begin(webServer);
+            stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
+            stream.append("<title>WiFi 配置</title>");
+            stream.append("<style>%s</style></head><body>", WebUI::getCompactCSS());
+            stream.append("<div class='container'><h1>📡 WiFi 配置</h1>");
+            stream.append("<form method='post' action='/wifi-save'>");
+            stream.append("<div class='form-group'><label>網路名稱:</label>");
+            stream.append("<input type='text' name='ssid' placeholder='WiFi 網路名稱' required></div>");
+            stream.append("<div class='form-group'><label>密碼:</label>");
+            stream.append("<input type='password' name='password' placeholder='WiFi 密碼'></div>");
+            stream.append("<div style='text-align: center; margin-top: 20px;'>");
+            stream.append("<button type='submit' class='button'>💾 保存設定</button>");
+            stream.append("<a href='/' class='button secondary'>⬅️ 返回主頁</a>");
+            stream.append("</div></form></div></body></html>");
+            stream.finish();
         }
     });
     
@@ -929,23 +952,75 @@ void initializeMonitoring() {
         
         if (ssid.length() > 0) {
             configManager.setWiFiCredentials(ssid, password);
-            String message = "新的WiFi配置已保存成功！設備將重啟並嘗試連接。";
-            String html = WebUI::getSuccessPage("WiFi配置已保存", message, 3, "/restart");
-            webServer->send(200, "text/html", html);
+            
+            // 使用優化版本生成成功頁面
+            MemoryOptimization::StreamingResponseBuilder stream;
+            stream.begin(webServer);
+            stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
+            stream.append("<title>WiFi配置已保存</title>");
+            stream.append("<meta http-equiv='refresh' content='3;url=/restart'>");
+            stream.append("<style>%s</style></head><body>", WebUI::getCompactCSS());
+            stream.append("<div class='container'><h1>✅ WiFi配置已保存</h1>");
+            stream.append("<div class='status'>新的WiFi配置已保存成功！設備將重啟並嘗試連接。</div>");
+            stream.append("<div style='text-align:center;margin:20px 0;'>");
+            stream.append("<a href='/restart' class='button'>🔄 立即重啟</a>");
+            stream.append("</div></div></body></html>");
+            stream.finish();
         } else {
             webServer->send(400, "text/plain", "SSID不能為空");
         }
     });
     
-    // HomeKit配置頁面
+    // HomeKit配置頁面 - 使用MemoryOptimization版本
     webServer->on("/homekit", [](){
+        // 檢查記憶體壓力
+        if (memoryManager && !memoryManager->shouldServePage("homekit_config")) {
+            MemoryOptimization::StreamingResponseBuilder stream;
+            stream.begin(webServer);
+            stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
+            stream.append("<title>系統忙碌</title>");
+            stream.append("<style>%s</style></head><body>", WebUI::getCompactCSS());
+            stream.append("<div class='container'><h1>🚫 系統記憶體不足</h1>");
+            stream.append("<div class='error'>系統目前記憶體壓力過大，請稍後重試。</div>");
+            stream.append("<div style='text-align:center;margin:20px 0;'>");
+            stream.append("<a href='/' class='button'>返回主頁</a></div>");
+            stream.append("</div></body></html>");
+            stream.finish();
+            return;
+        }
+        
         String currentPairingCode = configManager.getHomeKitPairingCode();
         String currentDeviceName = configManager.getHomeKitDeviceName();
         String currentQRID = configManager.getHomeKitQRID();
         
-        String html = WebUI::getHomeKitConfigPage("/homekit-save", currentPairingCode, 
-                                                 currentDeviceName, currentQRID, homeKitInitialized);
-        webServer->send(200, "text/html", html);
+        MemoryOptimization::StreamingResponseBuilder stream;
+        stream.begin(webServer);
+        stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
+        stream.append("<title>HomeKit 配置</title>");
+        stream.append("<style>%s</style></head><body>", WebUI::getCompactCSS());
+        stream.append("<div class='container'><h1>🏠 HomeKit 配置</h1>");
+        stream.append("<form method='post' action='/homekit-save'>");
+        stream.append("<div class='form-group'><label>配對代碼:</label>");
+        stream.appendf("<input type='text' name='pairing_code' value='%s' maxlength='8' required></div>", 
+                      currentPairingCode.c_str());
+        stream.append("<div class='form-group'><label>設備名稱:</label>");
+        stream.appendf("<input type='text' name='device_name' value='%s' maxlength='64' required></div>", 
+                      currentDeviceName.c_str());
+        stream.append("<div class='form-group'><label>QR ID:</label>");
+        stream.appendf("<input type='text' name='qr_id' value='%s' maxlength='4' required></div>", 
+                      currentQRID.c_str());
+        stream.append("<div class='status'>");
+        if (homeKitInitialized) {
+            stream.append("🟢 HomeKit 服務已初始化");
+        } else {
+            stream.append("🔴 HomeKit 服務未初始化");
+        }
+        stream.append("</div>");
+        stream.append("<div style='text-align: center; margin-top: 20px;'>");
+        stream.append("<button type='submit' class='button'>💾 保存設定</button>");
+        stream.append("<a href='/' class='button secondary'>⬅️ 返回主頁</a>");
+        stream.append("</div></form></div></body></html>");
+        stream.finish();
     });
     
     // HomeKit配置保存處理
@@ -988,13 +1063,33 @@ void initializeMonitoring() {
         
         if (configChanged) {
             configManager.setHomeKitConfig(currentPairingCode, currentDeviceName, currentQRID);
-            String message = "配置更新成功！設備將重啟並應用新配置。";
-            String html = WebUI::getSuccessPage("HomeKit配置已保存", message, 3, "/restart");
-            webServer->send(200, "text/html", html);
+            
+            MemoryOptimization::StreamingResponseBuilder stream;
+            stream.begin(webServer);
+            stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
+            stream.append("<title>HomeKit配置已保存</title>");
+            stream.append("<meta http-equiv='refresh' content='3;url=/restart'>");
+            stream.append("<style>%s</style></head><body>", WebUI::getCompactCSS());
+            stream.append("<div class='container'><h1>✅ HomeKit配置已保存</h1>");
+            stream.append("<div class='status'>配置更新成功！設備將重啟並應用新配置。</div>");
+            stream.append("<div style='text-align:center;margin:20px 0;'>");
+            stream.append("<a href='/restart' class='button'>立即重啟</a>");
+            stream.append("<a href='/' class='button secondary'>返回主頁</a></div>");
+            stream.append("</div></body></html>");
+            stream.finish();
         } else {
-            String message = "您沒有修改任何配置。";
-            String html = WebUI::getSuccessPage("無需更新", message, 0);
-            webServer->send(200, "text/html", html);
+            MemoryOptimization::StreamingResponseBuilder stream;
+            stream.begin(webServer);
+            stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
+            stream.append("<title>無需更新</title>");
+            stream.append("<style>%s</style></head><body>", WebUI::getCompactCSS());
+            stream.append("<div class='container'><h1>ℹ️ 無需更新</h1>");
+            stream.append("<div class='info'>您沒有修改任何配置。</div>");
+            stream.append("<div style='text-align:center;margin:20px 0;'>");
+            stream.append("<a href='/homekit' class='button'>返回配置</a>");
+            stream.append("<a href='/' class='button secondary'>返回主頁</a></div>");
+            stream.append("</div></body></html>");
+            stream.finish();
         }
     });
     
@@ -1023,20 +1118,8 @@ void initializeMonitoring() {
             return;
         }
         
-        // 降級處理：使用傳統方法但設置正確編碼
-        webServer->sendHeader("Content-Type", "text/html; charset=utf-8");
-        webServer->sendHeader("Cache-Control", "no-cache, must-revalidate");
-        
-        String html = WebUI::getSimulationControlPage("/simulation-control",
-                                                     mockController->getPower(),
-                                                     mockController->getTargetMode(),
-                                                     mockController->getTargetTemperature(),
-                                                     mockController->getCurrentTemperature(),
-                                                     mockController->getSimulatedRoomTemp(),
-                                                     mockController->isSimulationHeating(),
-                                                     mockController->isSimulationCooling(),
-                                                     mockController->getFanSpeed());
-        webServer->send(200, "text/html; charset=utf-8", html);
+        // 使用統一的MemoryOptimization版本作為降級處理
+        generateOptimizedSimulationPage();
     });
     
     // 模擬控制處理
@@ -1100,33 +1183,61 @@ void initializeMonitoring() {
             }
         }
         
-        String message = "模擬參數已成功更新！";
-        String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>設置已更新</title>";
-        html += "<style>" + String(WebUI::getCompactCSS()) + "</style></head><body>";
-        html += "<div class='container'><h1>✅ 設置已更新</h1>";
-        html += "<div class='status'>" + message + "</div>";
-        html += "<div style='text-align:center;margin:20px 0;'>";
-        html += "<a href='/simulation' class='button'>🔧 返回模擬控制</a>&nbsp;&nbsp;";
-        html += "<a href='/' class='button secondary'>🏠 返回主頁</a>";
-        html += "</div></div></body></html>";
-        webServer->send(200, "text/html", html);
+        MemoryOptimization::StreamingResponseBuilder stream;
+        stream.begin(webServer);
+        stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
+        stream.append("<title>設置已更新</title>");
+        stream.append("<style>%s</style></head><body>", WebUI::getCompactCSS());
+        stream.append("<div class='container'><h1>✅ 設置已更新</h1>");
+        stream.append("<div class='status'>模擬參數已成功更新！</div>");
+        stream.append("<div style='text-align:center;margin:20px 0;'>");
+        stream.append("<a href='/simulation' class='button'>🔧 返回模擬控制</a>&nbsp;&nbsp;");
+        stream.append("<a href='/' class='button secondary'>🏠 返回主頁</a>");
+        stream.append("</div></div></body></html>");
+        stream.finish();
     });
     
-    // 模式切換頁面
+    // 模式切換頁面 - 使用MemoryOptimization版本
     webServer->on("/simulation-toggle", [](){
         bool currentMode = configManager.getSimulationMode();
-        String html = WebUI::getSimulationTogglePage("/simulation-toggle-confirm", currentMode);
-        webServer->send(200, "text/html", html);
+        
+        MemoryOptimization::StreamingResponseBuilder stream;
+        stream.begin(webServer);
+        stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
+        stream.append("<title>模式切換</title>");
+        stream.append("<style>%s</style></head><body>", WebUI::getCompactCSS());
+        stream.append("<div class='container'><h1>🔄 運行模式切換</h1>");
+        stream.appendf("<div class='status'>當前模式: %s</div>", 
+                      currentMode ? "🔧 模擬模式" : "🏠 實際硬體模式");
+        stream.append("<div class='warning'>⚠️ 切換模式將會重啟設備</div>");
+        stream.append("<form method='post' action='/simulation-toggle-confirm'>");
+        stream.appendf("<p>確認要切換到 <strong>%s</strong> 嗎？</p>", 
+                      currentMode ? "實際硬體模式" : "模擬模式");
+        stream.append("<div style='text-align:center;margin:20px 0;'>");
+        stream.append("<button type='submit' class='button danger'>✅ 確認切換</button>");
+        stream.append("<a href='/' class='button secondary'>❌ 取消</a>");
+        stream.append("</div></form></div></body></html>");
+        stream.finish();
     });
     
-    // 模式切換確認
+    // 模式切換確認 - 使用MemoryOptimization版本
     webServer->on("/simulation-toggle-confirm", HTTP_POST, [](){
         bool currentMode = configManager.getSimulationMode();
         configManager.setSimulationMode(!currentMode);
         
-        String message = "運行模式已切換，設備將重啟。";
-        String html = WebUI::getSuccessPage("模式切換中", message, 3, "/restart");
-        webServer->send(200, "text/html", html);
+        MemoryOptimization::StreamingResponseBuilder stream;
+        stream.begin(webServer);
+        stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
+        stream.append("<title>模式切換中</title>");
+        stream.append("<meta http-equiv='refresh' content='3;url=/restart'>");
+        stream.append("<style>%s</style></head><body>", WebUI::getCompactCSS());
+        stream.append("<div class='container'><h1>🔄 模式切換中</h1>");
+        stream.append("<div class='status'>運行模式已切換，設備將重啟。</div>");
+        stream.append("<div style='text-align:center;margin:20px 0;'>");
+        stream.append("<a href='/restart' class='button'>立即重啟</a>");
+        stream.append("<a href='/' class='button secondary'>返回主頁</a>");
+        stream.append("</div></div></body></html>");
+        stream.finish();
     });
     #endif // DISABLE_SIMULATION_MODE
     
@@ -1373,8 +1484,35 @@ void initializeMonitoring() {
     // OTA 頁面
     webServer->on("/ota", [](){
         String deviceIP = WiFi.localIP().toString();
-        String html = WebUI::getOTAPage(deviceIP, "DaiSpan-Thermostat", "");
-        webServer->send(200, "text/html", html);
+        
+        // 使用優化版本生成OTA頁面
+        MemoryOptimization::StreamingResponseBuilder stream;
+        stream.begin(webServer);
+        stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
+        stream.append("<title>OTA 更新</title>");
+        stream.append("<style>%s</style></head><body>", WebUI::getCompactCSS());
+        stream.append("<div class='container'><h1>🔄 OTA 遠程更新</h1>");
+        stream.append("<div class='status'><h3>🔄 OTA 更新狀態</h3>");
+        stream.append("<p><span style='color: green;'>●</span> OTA 服務已啟用</p>");
+        stream.append("<p><strong>設備主機名:</strong> DaiSpan-Thermostat</p>");
+        stream.append("<p><strong>IP地址:</strong> %s</p></div>", deviceIP.c_str());
+        stream.append("<div class='warning'><h3>⚠️ 注意事項</h3>");
+        stream.append("<ul><li>OTA 更新過程中請勿斷電或斷網</li>");
+        stream.append("<li>更新失敗可能導致設備無法啟動</li>");
+        stream.append("<li>建議在更新前備份當前固件</li>");
+        stream.append("<li>更新完成後設備會自動重啟</li></ul></div>");
+        stream.append("<div><h3>📝 使用說明</h3>");
+        stream.append("<p>使用 PlatformIO 進行 OTA 更新：</p>");
+        stream.append("<div class='code-block'>pio run -t upload --upload-port %s</div>", deviceIP.c_str());
+        stream.append("<p>或使用 Arduino IDE：</p>");
+        stream.append("<ol><li>工具 → 端口 → 選擇網路端口</li>");
+        stream.append("<li>選擇設備主機名: DaiSpan-Thermostat</li>");
+        stream.append("<li>輸入 OTA 密碼</li><li>點擊上傳</li></ol></div>");
+        stream.append("<div style='text-align: center; margin-top: 30px;'>");
+        stream.append("<a href='/' class='button secondary'>⬅️ 返回主頁</a>");
+        stream.append("<a href='/restart' class='button danger'>🔄 重新啟動</a>");
+        stream.append("</div></div></body></html>");
+        stream.finish();
     });
     
     // 記憶體清理 API 端點
@@ -1775,10 +1913,25 @@ void initializeMonitoring() {
         stream.finish();
     });
     
-    // 重啟端點
+    // 重啟端點 - 使用MemoryOptimization版本
     webServer->on("/restart", [](){
-        String html = WebUI::getRestartPage(WiFi.localIP().toString() + ":8080");
-        webServer->send(200, "text/html", html);
+        String deviceIP = WiFi.localIP().toString();
+        
+        MemoryOptimization::StreamingResponseBuilder stream;
+        stream.begin(webServer);
+        stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
+        stream.append("<title>設備重啟中</title>");
+        stream.append("<meta http-equiv='refresh' content='10;url=http://");
+        stream.append(deviceIP.c_str());
+        stream.append(":8080'>");
+        stream.append("<style>%s</style></head><body>", WebUI::getCompactCSS());
+        stream.append("<div class='container'><h1>🔄 設備重啟中</h1>");
+        stream.append("<div class='status'>設備正在重啟，請稍候...</div>");
+        stream.append("<div class='info'>頁面將在10秒後自動重新導向到新位址。</div>");
+        stream.appendf("<div style='text-align:center;margin:20px 0;'>");
+        stream.appendf("<a href='http://%s:8080' class='button'>🔗 手動連接</a>", deviceIP.c_str());
+        stream.append("</div></div></body></html>");
+        stream.finish();
         delay(1000);
         safeRestart();
     });
