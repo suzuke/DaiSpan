@@ -882,7 +882,7 @@ void initializeMonitoring() {
             stream.begin(webServer);
             stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
             stream.append("<title>系統忙碌</title>");
-            stream.append("<style>%s</style></head><body>", WebUI::getCompactCSS());
+            stream.appendf("<style>%s</style></head><body>", WebUI::getCompactCSS());
             stream.append("<div class='container'><h1>🚫 系統記憶體不足</h1>");
             stream.append("<div class='error'>系統目前記憶體壓力過大，請稍後重試。</div>");
             stream.append("<div style='text-align:center;margin:20px 0;'>");
@@ -900,7 +900,7 @@ void initializeMonitoring() {
             stream.begin(webServer);
             stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
             stream.append("<title>WiFi 配置</title>");
-            stream.append("<style>%s</style></head><body>", WebUI::getCompactCSS());
+            stream.appendf("<style>%s</style></head><body>", WebUI::getCompactCSS());
             stream.append("<div class='container'><h1>📡 WiFi 配置</h1>");
             stream.append("<form method='post' action='/wifi-save'>");
             stream.append("<div class='form-group'><label>網路名稱:</label>");
@@ -959,7 +959,7 @@ void initializeMonitoring() {
             stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
             stream.append("<title>WiFi配置已保存</title>");
             stream.append("<meta http-equiv='refresh' content='3;url=/restart'>");
-            stream.append("<style>%s</style></head><body>", WebUI::getCompactCSS());
+            stream.appendf("<style>%s</style></head><body>", WebUI::getCompactCSS());
             stream.append("<div class='container'><h1>✅ WiFi配置已保存</h1>");
             stream.append("<div class='status'>新的WiFi配置已保存成功！設備將重啟並嘗試連接。</div>");
             stream.append("<div style='text-align:center;margin:20px 0;'>");
@@ -979,7 +979,7 @@ void initializeMonitoring() {
             stream.begin(webServer);
             stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
             stream.append("<title>系統忙碌</title>");
-            stream.append("<style>%s</style></head><body>", WebUI::getCompactCSS());
+            stream.appendf("<style>%s</style></head><body>", WebUI::getCompactCSS());
             stream.append("<div class='container'><h1>🚫 系統記憶體不足</h1>");
             stream.append("<div class='error'>系統目前記憶體壓力過大，請稍後重試。</div>");
             stream.append("<div style='text-align:center;margin:20px 0;'>");
@@ -997,7 +997,7 @@ void initializeMonitoring() {
         stream.begin(webServer);
         stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
         stream.append("<title>HomeKit 配置</title>");
-        stream.append("<style>%s</style></head><body>", WebUI::getCompactCSS());
+        stream.appendf("<style>%s</style></head><body>", WebUI::getCompactCSS());
         stream.append("<div class='container'><h1>🏠 HomeKit 配置</h1>");
         stream.append("<form method='post' action='/homekit-save'>");
         stream.append("<div class='form-group'><label>配對代碼:</label>");
@@ -1069,7 +1069,7 @@ void initializeMonitoring() {
             stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
             stream.append("<title>HomeKit配置已保存</title>");
             stream.append("<meta http-equiv='refresh' content='3;url=/restart'>");
-            stream.append("<style>%s</style></head><body>", WebUI::getCompactCSS());
+            stream.appendf("<style>%s</style></head><body>", WebUI::getCompactCSS());
             stream.append("<div class='container'><h1>✅ HomeKit配置已保存</h1>");
             stream.append("<div class='status'>配置更新成功！設備將重啟並應用新配置。</div>");
             stream.append("<div style='text-align:center;margin:20px 0;'>");
@@ -1082,7 +1082,7 @@ void initializeMonitoring() {
             stream.begin(webServer);
             stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
             stream.append("<title>無需更新</title>");
-            stream.append("<style>%s</style></head><body>", WebUI::getCompactCSS());
+            stream.appendf("<style>%s</style></head><body>", WebUI::getCompactCSS());
             stream.append("<div class='container'><h1>ℹ️ 無需更新</h1>");
             stream.append("<div class='info'>您沒有修改任何配置。</div>");
             stream.append("<div style='text-align:center;margin:20px 0;'>");
@@ -1187,7 +1187,7 @@ void initializeMonitoring() {
         stream.begin(webServer);
         stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
         stream.append("<title>設置已更新</title>");
-        stream.append("<style>%s</style></head><body>", WebUI::getCompactCSS());
+        stream.appendf("<style>%s</style></head><body>", WebUI::getCompactCSS());
         stream.append("<div class='container'><h1>✅ 設置已更新</h1>");
         stream.append("<div class='status'>模擬參數已成功更新！</div>");
         stream.append("<div style='text-align:center;margin:20px 0;'>");
@@ -1205,7 +1205,7 @@ void initializeMonitoring() {
         stream.begin(webServer);
         stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
         stream.append("<title>模式切換</title>");
-        stream.append("<style>%s</style></head><body>", WebUI::getCompactCSS());
+        stream.appendf("<style>%s</style></head><body>", WebUI::getCompactCSS());
         stream.append("<div class='container'><h1>🔄 運行模式切換</h1>");
         stream.appendf("<div class='status'>當前模式: %s</div>", 
                       currentMode ? "🔧 模擬模式" : "🏠 實際硬體模式");
@@ -1230,7 +1230,7 @@ void initializeMonitoring() {
         stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
         stream.append("<title>模式切換中</title>");
         stream.append("<meta http-equiv='refresh' content='3;url=/restart'>");
-        stream.append("<style>%s</style></head><body>", WebUI::getCompactCSS());
+        stream.appendf("<style>%s</style></head><body>", WebUI::getCompactCSS());
         stream.append("<div class='container'><h1>🔄 模式切換中</h1>");
         stream.append("<div class='status'>運行模式已切換，設備將重啟。</div>");
         stream.append("<div style='text-align:center;margin:20px 0;'>");
@@ -1490,12 +1490,12 @@ void initializeMonitoring() {
         stream.begin(webServer);
         stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
         stream.append("<title>OTA 更新</title>");
-        stream.append("<style>%s</style></head><body>", WebUI::getCompactCSS());
+        stream.appendf("<style>%s</style></head><body>", WebUI::getCompactCSS());
         stream.append("<div class='container'><h1>🔄 OTA 遠程更新</h1>");
         stream.append("<div class='status'><h3>🔄 OTA 更新狀態</h3>");
         stream.append("<p><span style='color: green;'>●</span> OTA 服務已啟用</p>");
         stream.append("<p><strong>設備主機名:</strong> DaiSpan-Thermostat</p>");
-        stream.append("<p><strong>IP地址:</strong> %s</p></div>", deviceIP.c_str());
+        stream.appendf("<p><strong>IP地址:</strong> %s</p></div>", deviceIP.c_str());
         stream.append("<div class='warning'><h3>⚠️ 注意事項</h3>");
         stream.append("<ul><li>OTA 更新過程中請勿斷電或斷網</li>");
         stream.append("<li>更新失敗可能導致設備無法啟動</li>");
@@ -1503,7 +1503,7 @@ void initializeMonitoring() {
         stream.append("<li>更新完成後設備會自動重啟</li></ul></div>");
         stream.append("<div><h3>📝 使用說明</h3>");
         stream.append("<p>使用 PlatformIO 進行 OTA 更新：</p>");
-        stream.append("<div class='code-block'>pio run -t upload --upload-port %s</div>", deviceIP.c_str());
+        stream.appendf("<div class='code-block'>pio run -t upload --upload-port %s</div>", deviceIP.c_str());
         stream.append("<p>或使用 Arduino IDE：</p>");
         stream.append("<ol><li>工具 → 端口 → 選擇網路端口</li>");
         stream.append("<li>選擇設備主機名: DaiSpan-Thermostat</li>");
@@ -1924,7 +1924,7 @@ void initializeMonitoring() {
         stream.append("<meta http-equiv='refresh' content='10;url=http://");
         stream.append(deviceIP.c_str());
         stream.append(":8080'>");
-        stream.append("<style>%s</style></head><body>", WebUI::getCompactCSS());
+        stream.appendf("<style>%s</style></head><body>", WebUI::getCompactCSS());
         stream.append("<div class='container'><h1>🔄 設備重啟中</h1>");
         stream.append("<div class='status'>設備正在重啟，請稍候...</div>");
         stream.append("<div class='info'>頁面將在10秒後自動重新導向到新位址。</div>");
