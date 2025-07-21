@@ -24,12 +24,13 @@
 - 📱 **Siri Integration** - Voice control support
 
 ### **Advanced Remote Debugging** 🛠️
-- 🌐 **WebSocket-based Remote Debugging** - Real-time monitoring without USB connection
+- 🌐 **Multi-Strategy Debugging System** - Three debugging environments with unified web interface
 - 📊 **Live Serial Log Streaming** - Equivalent to `pio device monitor` but accessible remotely
 - 🔍 **System Diagnostics** - Comprehensive health checks and status monitoring
-- 📈 **Performance Metrics** - Memory usage, WiFi signal, system uptime tracking
+- 📈 **Memory Health Monitoring** - Real-time memory usage tracking with health status indicators
 - 🎯 **HomeKit Operation Tracking** - Real-time logging of all HomeKit interactions
-- 💻 **Web-based Interface** - Professional debugging dashboard accessible from any device
+- 💻 **Unified Web Interface** - Consistent professional dashboard across all build environments
+- ⚡ **Environment-Specific Backends** - Optimized debugging for development vs production use
 
 ### **Protocol & Hardware Support**
 - 🔌 **Multiple ESP32 Variants** - ESP32-S3, ESP32-C3 SuperMini support
@@ -90,41 +91,52 @@ pio run -e esp32-c3-supermini-usb -t upload # ESP32-C3 via USB
 ### **3. Advanced Development**
 
 ```bash
-# Multiple build environments
-pio run -e esp32-s3-usb -t upload          # USB upload
-pio run -e esp32-s3-ota -t upload          # OTA upload (IP: configured in platformio.ini)
+# Multiple build environments with unified web interface
+pio run -e esp32-s3-usb -t upload                    # USB upload (Full debugging)
+pio run -e esp32-c3-supermini-lightweight -t upload  # Lightweight debugging
+pio run -e esp32-c3-supermini-production -t upload   # Production build
+pio run -e esp32-s3-ota -t upload                    # OTA upload
 
-# Monitoring and debugging
+# Monitoring and debugging - all environments provide web interface on port 8080
 pio device monitor                          # Local serial monitoring
-# Or use remote debugging at http://device-ip:8080/debug
+# Unified web interface: http://device-ip:8080 (consistent across all builds)
+# Remote debugging: http://device-ip:8081 (WebSocket) or :8082 (HTTP)
 
 # Testing and validation
 python3 scripts/quick_check.py [device_ip] # Quick health check
 python3 scripts/long_term_test.py 192.168.4.1 24 5  # 24-hour stability test
 ```
 
-## 🌐 **Remote Debugging System**
+## 🌐 **Unified Debugging System**
 
-One of DaiSpan's standout features is its comprehensive remote debugging capability:
+DaiSpan features a revolutionary **unified web interface** with three specialized debugging backends:
 
-### **Access the Remote Debugger**
+### **Debugging Environments**
+
+| Environment | Build Flag | Backend | Memory Usage | Features |
+|-------------|------------|---------|--------------|----------|
+| **Full Debug** | `ENABLE_REMOTE_DEBUG` | WebSocket (8081) | ~65KB | Real-time logs, diagnostics |
+| **Lightweight** | `ENABLE_LIGHTWEIGHT_DEBUG` | HTTP (8082) | ~10KB | Current state only |
+| **Production** | `PRODUCTION_BUILD` | None | 0KB | Zero debugging overhead |
+
+### **Unified Web Interface**
+All environments provide the **same web interface** on port **8080**:
 ```
-http://your-device-ip:8080/debug
+http://your-device-ip:8080
 ```
 
-### **Features**
-- 📡 **Real-time Serial Logs** - View all debug output remotely
-- 📊 **System Status Monitoring** - Memory, WiFi, HomeKit status
-- 🔍 **Live Diagnostics** - System health checks
-- 📈 **Performance Metrics** - Real-time system performance data
-- 🏠 **HomeKit Operation Tracking** - Monitor all HomeKit interactions
-- 🎯 **Multi-client Support** - Multiple browsers can connect simultaneously
+**Consistent Features Across All Builds:**
+- 🌐 **Unified Homepage** - Identical modern design and navigation
+- 🛜 **WiFi Configuration** - Network scanning and management  
+- 🏠 **HomeKit Settings** - Device configuration and pairing
+- 📊 **System Status** - Real-time monitoring with memory health indicators
+- 🔄 **OTA Updates** - Over-the-air firmware updates
+- 📝 **Log Viewing** - System logs with filtering capabilities
 
-### **WebSocket Integration**
-The debugging system uses WebSockets for real-time communication:
-- **WebSocket Server**: `ws://device-ip:8081`
-- **Protocol**: JSON-based command/response system
-- **Commands**: `get_status`, `diagnostics`, `get_history`
+### **Backend-Specific Features**
+- **WebSocket Debugging (8081)**: Real-time serial logs, multi-client support
+- **HTTP Debugging (8082)**: Lightweight current state API endpoints
+- **Production Mode**: Web interface only, no debugging overhead
 
 ## 🏗️ **Architecture**
 
@@ -154,7 +166,9 @@ DaiSpan follows a clean, modular architecture:
 ### **Memory Management**
 - ✅ **Optimized Partitions** - Custom partition table for OTA
 - ♻️ **Dynamic Memory** - Efficient memory allocation
-- 📈 **Monitoring** - Real-time memory usage tracking
+- 📈 **Unified Memory Monitoring** - Health status indicators across all build environments
+- 🚨 **Memory Health System** - EXCELLENT/GOOD/WARNING/CRITICAL/EMERGENCY status levels
+- 🔧 **Adaptive Memory Strategies** - Automatic optimization based on available resources
 
 ## 🧪 **Testing & Quality Assurance**
 
@@ -220,9 +234,10 @@ We welcome contributions! Please see our contribution guidelines:
 - **Memory issues**: Monitor usage via remote debugging interface
 
 ### **Debug Resources**
-- 🌐 **Remote Debug Interface**: `http://device-ip:8080/debug`
-- 📡 **WebSocket Logs**: `ws://device-ip:8081`
-- 📊 **System Diagnostics**: Built-in health check commands
+- 🌐 **Unified Web Interface**: `http://device-ip:8080` (consistent across all builds)
+- 📡 **WebSocket Logs**: `ws://device-ip:8081` (full debug builds only)
+- 📝 **HTTP API**: `http://device-ip:8082` (lightweight debug builds)
+- 📊 **System Diagnostics**: Built-in health check commands and memory monitoring
 
 ## 📄 **License**
 

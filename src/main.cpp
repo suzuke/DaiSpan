@@ -21,7 +21,7 @@
 #include "WebServer.h"
 #include "common/WebUI.h"
 #include "common/WebTemplates.h"
-#include "common/RemoteDebugger.h"
+#include "common/RemoteDebugger.h"  // 自動處理條件編譯：調試環境=實際功能，生產環境=空實現
 #include "common/DebugWebClient.h"
 #include "common/MemoryOptimization.h"
 
@@ -84,6 +84,7 @@ unsigned long systemStartTime = 0;
 void safeRestart();
 void initializeMemoryOptimization();
 void generateOptimizedMainPage();
+void generateUnifiedMainPage();
 #ifndef DISABLE_SIMULATION_MODE
 void generateOptimizedSimulationPage();
 #endif
@@ -332,6 +333,169 @@ void generateOptimizedMainPage() {
     } catch (...) {
         DEBUG_ERROR_PRINT("[Main] 頁面生成發生未知異常\n");
         webServer->send(500, "text/html", "<html><body><h1>未知錯誤</h1></body></html>");
+    }
+}
+
+/**
+ * 統一主頁面生成函數 - 所有版本使用相同的外觀和功能
+ * 提供一致的用戶體驗，適應不同記憶體環境
+ */
+void generateUnifiedMainPage() {
+    try {
+        // 設置HTTP頭部
+        webServer->sendHeader("Cache-Control", "no-cache, must-revalidate");
+        webServer->sendHeader("Pragma", "no-cache");
+        webServer->sendHeader("Connection", "close");
+        
+        // HomeKit配對狀態檢查
+        if (homeKitPairingActive) {
+            String pairingHtml = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
+            pairingHtml += "<title>DaiSpan - HomeKit配對中</title>";
+            pairingHtml += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+            pairingHtml += "<style>";
+            pairingHtml += "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:20px;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh;display:flex;align-items:center;justify-content:center;}";
+            pairingHtml += ".container{background:white;padding:40px;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.2);text-align:center;max-width:400px;}";
+            pairingHtml += "h1{color:#333;margin-bottom:20px;}";
+            pairingHtml += ".status{color:#007bff;font-size:18px;margin:20px 0;}";
+            pairingHtml += ".spinner{border:4px solid #f3f3f3;border-top:4px solid #007bff;border-radius:50%;width:40px;height:40px;animation:spin 1s linear infinite;margin:20px auto;}";
+            pairingHtml += "@keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}";
+            pairingHtml += "</style>";
+            pairingHtml += "<script>setTimeout(function(){location.reload();}, 5000);</script>";
+            pairingHtml += "</head><body>";
+            pairingHtml += "<div class='container'>";
+            pairingHtml += "<h1>🏠 HomeKit 配對進行中</h1>";
+            pairingHtml += "<div class='spinner'></div>";
+            pairingHtml += "<div class='status'>設備正在進行HomeKit配對，請稍候...</div>";
+            pairingHtml += "<p>頁面將在5秒後自動刷新</p>";
+            pairingHtml += "</div></body></html>";
+            webServer->send(200, "text/html", pairingHtml);
+            return;
+        }
+        
+        // 統一的現代化主頁面設計
+        String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
+        html += "<title>DaiSpan 智能恆溫器</title>";
+        html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+        html += "<style>";
+        
+        // 現代化CSS樣式
+        html += "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:20px;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh;}";
+        html += ".container{max-width:800px;margin:0 auto;}";
+        html += ".header{text-align:center;color:white;margin-bottom:30px;}";
+        html += ".header h1{font-size:2.5em;margin:0;text-shadow:0 2px 4px rgba(0,0,0,0.3);}";
+        html += ".header p{font-size:1.1em;opacity:0.9;margin:10px 0;}";
+        
+        // 卡片樣式
+        html += ".card{background:white;padding:25px;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.1);margin-bottom:20px;transition:transform 0.2s;}";
+        html += ".card:hover{transform:translateY(-2px);}";
+        html += ".card h3{margin:0 0 20px 0;color:#333;border-bottom:2px solid #007bff;padding-bottom:8px;}";
+        
+        // 狀態顯示
+        html += ".status-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:15px;margin-bottom:20px;}";
+        html += ".status-item{padding:15px;background:#f8f9fa;border-radius:8px;border-left:4px solid #007bff;}";
+        html += ".status-label{font-weight:bold;color:#495057;display:block;margin-bottom:5px;}";
+        html += ".status-value{font-size:1.2em;color:#28a745;}";
+        html += ".status-warning{color:#ffc107;}";
+        html += ".status-error{color:#dc3545;}";
+        
+        // 導航按鈕
+        html += ".nav-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:15px;}";
+        html += ".nav-btn{display:block;padding:20px;text-decoration:none;background:#007bff;color:white;border-radius:8px;text-align:center;transition:all 0.2s;font-weight:bold;}";
+        html += ".nav-btn:hover{background:#0056b3;transform:translateY(-1px);}";
+        html += ".nav-btn.secondary{background:#6c757d;}";
+        html += ".nav-btn.success{background:#28a745;}";
+        html += ".nav-btn.warning{background:#ffc107;color:#212529;}";
+        
+        // 響應式設計
+        html += "@media (max-width:768px){.status-grid,.nav-grid{grid-template-columns:1fr;}}";
+        html += "</style>";
+        html += "</head><body>";
+        
+        html += "<div class='container'>";
+        html += "<div class='header'>";
+        html += "<h1>🌡️ DaiSpan</h1>";
+        html += "<p>智能恆溫器控制中心</p>";
+        html += "</div>";
+        
+        // 系統狀態卡片
+        html += "<div class='card'>";
+        html += "<h3>📊 系統狀態</h3>";
+        html += "<div class='status-grid'>";
+        
+        // 記憶體狀態
+        uint32_t freeHeap = ESP.getFreeHeap();
+        String memoryClass = (freeHeap > 100000) ? "status-value" : (freeHeap > 50000) ? "status-warning" : "status-error";
+        html += "<div class='status-item'>";
+        html += "<span class='status-label'>可用記憶體:</span>";
+        html += "<span class='" + memoryClass + "'>" + String(freeHeap/1024) + " KB</span>";
+        html += "</div>";
+        
+        // WiFi狀態
+        html += "<div class='status-item'>";
+        html += "<span class='status-label'>WiFi連接:</span>";
+        if (WiFi.status() == WL_CONNECTED) {
+            html += "<span class='status-value'>" + WiFi.SSID() + " (" + String(WiFi.RSSI()) + " dBm)</span>";
+        } else {
+            html += "<span class='status-error'>未連接</span>";
+        }
+        html += "</div>";
+        
+        // IP地址
+        html += "<div class='status-item'>";
+        html += "<span class='status-label'>IP地址:</span>";
+        html += "<span class='status-value'>" + WiFi.localIP().toString() + "</span>";
+        html += "</div>";
+        
+        // 運行時間
+        unsigned long uptime = millis() / 1000;
+        unsigned long hours = uptime / 3600;
+        unsigned long minutes = (uptime % 3600) / 60;
+        unsigned long seconds = uptime % 60;
+        html += "<div class='status-item'>";
+        html += "<span class='status-label'>運行時間:</span>";
+        html += "<span class='status-value'>" + String(hours) + ":" + String(minutes) + ":" + String(seconds) + "</span>";
+        html += "</div>";
+        
+        html += "</div></div>";
+        
+        // 功能導航卡片
+        html += "<div class='card'>";
+        html += "<h3>🛠️ 功能選單</h3>";
+        html += "<div class='nav-grid'>";
+        html += "<a href='/wifi' class='nav-btn'>📶 WiFi設定</a>";
+        html += "<a href='/homekit' class='nav-btn'>🏠 HomeKit設定</a>";
+        html += "<a href='/api/health' class='nav-btn secondary'>📋 系統狀態</a>";
+        html += "<a href='/ota' class='nav-btn warning'>⬆️ OTA更新</a>";
+        html += "<a href='/logs' class='nav-btn success'>📄 系統日誌</a>";
+
+#ifndef DISABLE_SIMULATION_MODE
+        // 模擬控制按鈕（如果啟用）
+        if (configManager.getSimulationMode() && mockController) {
+            html += "<a href='/simulation' class='nav-btn secondary'>🔧 模擬控制</a>";
+        }
+#endif
+        
+        html += "</div></div>";
+        
+        // 版權資訊
+        html += "<div style='text-align:center;margin-top:30px;color:rgba(255,255,255,0.8);font-size:14px;'>";
+        html += "DaiSpan Smart Thermostat Controller | 統一WebServer界面";
+        html += "</div>";
+        
+        html += "</div></body></html>";
+        
+        webServer->send(200, "text/html", html);
+        
+    } catch (...) {
+        // 極簡緊急頁面
+        String emergencyHtml = "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>DaiSpan</title></head><body>";
+        emergencyHtml += "<h1>🌡️ DaiSpan 智能恆溫器</h1>";
+        emergencyHtml += "<p><strong>可用記憶體:</strong> " + String(ESP.getFreeHeap()) + " bytes</p>";
+        emergencyHtml += "<p><strong>IP地址:</strong> " + WiFi.localIP().toString() + "</p>";
+        emergencyHtml += "<p><a href='/wifi'>WiFi設定</a> | <a href='/homekit'>HomeKit設定</a> | <a href='/ota'>OTA更新</a> | <a href='/logs'>系統日誌</a></p>";
+        emergencyHtml += "<p><em>緊急模式 - 頁面載入異常</em></p>";
+        emergencyHtml += "</body></html>";
+        webServer->send(200, "text/html", emergencyHtml);
     }
 }
 
@@ -683,7 +847,8 @@ String getCoreStatusInfo() {
     return info;
 }
 
-// WebServer 初始化函數
+// 統一WebServer初始化函數 - 所有版本都使用相同的基礎功能（端口8080）
+// 只有RemoteDebugger部分根據編譯環境有所不同
 void initializeMonitoring() {
     static bool memoryFailureFlag = false;  // 防止記憶體不足時的無限重試
     static unsigned long lastFailureTime = 0;
@@ -697,7 +862,7 @@ void initializeMonitoring() {
         return;
     }
     
-    DEBUG_INFO_PRINT("[Main] 啟動WebServer監控功能...\n");
+    DEBUG_INFO_PRINT("[Main] 啟動統一WebServer功能（端口8080）...\n");
     DEBUG_INFO_PRINT("[Main] 可用記憶體: %d bytes\n", ESP.getFreeHeap());
     
     // 嘗試釋放一些記憶體
@@ -746,139 +911,9 @@ void initializeMonitoring() {
         }
     }
     
-    // 基本路由處理 - 使用記憶體優化
+    // 統一主頁面路由 - 所有版本使用相同的外觀和功能
     webServer->on("/", [](){
-        try {
-            if (homeKitPairingActive) {
-                String simpleHtml = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
-                simpleHtml += "<title>DaiSpan - 配對中</title></head><body>";
-                simpleHtml += "<h1>HomeKit 配對進行中</h1>";
-                simpleHtml += "<p>設備正在進行HomeKit配對，請稍候...</p>";
-                simpleHtml += "<script>setTimeout(function(){location.reload();}, 5000);</script>";
-                simpleHtml += "</body></html>";
-                webServer->send(200, "text/html", simpleHtml);
-                return;
-            }
-            
-            // 使用記憶體優化的頁面生成器
-            if (pageGenerator && memoryManager) {
-                if (!memoryManager->shouldServePage("main")) {
-                    webServer->send(503, "text/html", 
-                                   "<html><body><h1>系統記憶體不足</h1><p>請稍後重試</p></body></html>");
-                    return;
-                }
-                
-                webServer->sendHeader("Cache-Control", "no-cache, must-revalidate");
-                webServer->sendHeader("Pragma", "no-cache");
-                webServer->sendHeader("Connection", "close");
-                
-                generateOptimizedMainPage();
-                return;
-            }
-        
-        // 降級處理：使用傳統方法但採用自適應緩衝區
-        webServer->sendHeader("Cache-Control", "no-cache, must-revalidate");
-        webServer->sendHeader("Pragma", "no-cache");
-        webServer->sendHeader("Connection", "close");
-        
-        // 使用自適應緩衝區大小
-        const size_t requestedSize = 4096;  // 預期需要的大小
-        uint32_t freeHeap = ESP.getFreeHeap();
-        size_t bufferSize;
-        
-        if (freeHeap > 50000) {
-            bufferSize = requestedSize;
-        } else if (freeHeap > 30000) {
-            bufferSize = requestedSize * 0.75;
-        } else if (freeHeap > 20000) {
-            bufferSize = requestedSize * 0.5;
-        } else {
-            bufferSize = 1024;  // 最小緩衝區
-        }
-        
-        // 檢查記憶體是否足夠分配，如果不夠則使用最小化頁面
-        if (freeHeap < (bufferSize + 2048)) {
-            String minimalPage = "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>DaiSpan</title></head><body>";
-            minimalPage += "<h1>🌡️ DaiSpan Thermostat</h1>";
-            minimalPage += "<p><strong>記憶體:</strong> " + String(freeHeap) + " bytes 可用</p>";
-            minimalPage += "<p><strong>WiFi:</strong> " + WiFi.SSID() + " (" + String(WiFi.RSSI()) + " dBm)</p>";
-            minimalPage += "<p><strong>IP:</strong> " + WiFi.localIP().toString() + "</p>";
-            minimalPage += "<p><a href='/api/health'>系統狀態 (JSON)</a> | <a href='/wifi'>WiFi設定</a></p>";
-            minimalPage += "</body></html>";
-            webServer->send(200, "text/html", minimalPage);
-            return;
-        }
-        
-        auto buffer = std::make_unique<char[]>(bufferSize);
-        if (!buffer) {
-            webServer->send(500, "text/html", 
-                           "<html><body><h1>記憶體分配失敗</h1><p>無法分配 " + String(bufferSize) + " bytes</p></body></html>");
-            return;
-        }
-
-        char* p = buffer.get();
-        int remaining = bufferSize;
-        bool overflow = false;
-        auto append = [&](const char* format, ...) {
-            if (remaining <= 10 || overflow) {
-                overflow = true;
-                return;
-            }
-            va_list args;
-            va_start(args, format);
-            int written = vsnprintf(p, remaining, format, args);
-            va_end(args);
-            if (written > 0 && written < remaining) {
-                p += written;
-                remaining -= written;
-            } else {
-                overflow = true;
-            }
-        };
-        
-        // HTML生成 - 簡化版本以適應記憶體限制
-        append("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>DaiSpan</title>");
-        append("<style>body{font-family:Arial;margin:20px;}.container{max-width:600px;}</style>");
-        append("</head><body><div class=\"container\"><h1>🌡️ DaiSpan</h1>");
-        
-        // 簡化系統狀態 - 避免記憶體溢出
-        append("<p><strong>記憶體:</strong> %u KB 可用</p>", freeHeap / 1024);
-        append("<p><strong>WiFi:</strong> %s (%d dBm)</p>", WiFi.SSID().c_str(), WiFi.RSSI());
-        append("<p><strong>IP:</strong> %s</p>", WiFi.localIP().toString().c_str());
-        if (modernArchitectureEnabled && g_eventBus) {
-            append("<p><strong>事件:</strong> %zu 處理</p>", g_eventBus->getProcessedEventCount());
-        }
-        
-        // 簡化導航連結
-        append("<p>");
-        append("<a href='/wifi'>WiFi設定</a> | ");
-        append("<a href='/homekit'>HomeKit設定</a> | ");
-        append("<a href='/api/health'>系統狀態</a> | ");
-        append("<a href='/ota'>OTA更新</a>");
-        append("</p></div></body></html>");
-        
-        if (overflow) {
-            webServer->send(500, "text/html", "<div style='color:red;'>Error: HTML too large for buffer</div>");
-            return;
-        }
-        
-            String html(buffer.get());
-            webServer->send(200, "text/html", html);
-            
-        } catch (...) {
-            // 最終降級處理：極簡頁面
-            uint32_t freeHeap = ESP.getFreeHeap();
-            String emergencyPage = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
-            emergencyPage += "<title>DaiSpan</title></head><body>";
-            emergencyPage += "<h1>🌡️ DaiSpan 智能恆溫器</h1>";
-            emergencyPage += "<p><strong>系統狀態:</strong> 運行中 (記憶體緊張)</p>";
-            emergencyPage += "<p><strong>可用記憶體:</strong> " + String(freeHeap) + " bytes</p>";
-            emergencyPage += "<p><strong>IP地址:</strong> " + WiFi.localIP().toString() + "</p>";
-            emergencyPage += "<p><a href='/wifi'>WiFi設定</a> | <a href='/homekit'>HomeKit設定</a> | <a href='/ota'>OTA更新</a></p>";
-            emergencyPage += "<p><em>系統頁面載入遇到問題，已切換到緊急模式</em></p>";
-            emergencyPage += "</body></html>";
-            webServer->send(200, "text/html", emergencyPage);
-        }
+        generateUnifiedMainPage();
     });
     
     // JSON狀態API，包含核心架構資訊
@@ -907,41 +942,170 @@ void initializeMonitoring() {
     // WiFi配置頁面 - 統一使用MemoryOptimization版本
     webServer->on("/wifi", [](){
         try {
-            // 檢查記憶體壓力（可選）
-            if (memoryManager && !memoryManager->shouldServePage("wifi_config")) {
-                webServer->send(503, "text/html", 
-                    "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>系統忙碌</title></head><body>"
-                    "<div style='text-align:center;margin:50px;'><h1>🚫 系統記憶體不足</h1>"
-                    "<p>系統目前記憶體壓力過大，請稍後重試。</p>"
-                    "<a href='/' style='color:blue;'>返回主頁</a></div></body></html>");
-                return;
+            // WiFi配置是核心功能，只在極端記憶體不足時才限制
+            if (memoryManager) {
+                auto strategy = memoryManager->getRenderStrategy();
+                if (strategy == MemoryOptimization::MemoryManager::RenderStrategy::EMERGENCY) {
+                    // 極端緊急模式下提供簡化的WiFi配置
+                    String emergencyHtml = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
+                    emergencyHtml += "<title>WiFi配置 (緊急模式)</title></head><body style='margin:20px;'>";
+                    emergencyHtml += "<h1>WiFi配置</h1>";
+                    emergencyHtml += "<p style='color:orange;'>⚠️ 系統記憶體極低，使用簡化模式</p>";
+                    emergencyHtml += "<form method='POST' action='/wifi-save'>";
+                    emergencyHtml += "<p>網路名稱: <input type='text' name='ssid' required></p>";
+                    emergencyHtml += "<p>密碼: <input type='password' name='password'></p>";
+                    emergencyHtml += "<button type='submit'>連接</button> ";
+                    emergencyHtml += "<a href='/'>返回主頁</a></p>";
+                    emergencyHtml += "</form></body></html>";
+                    webServer->send(200, "text/html", emergencyHtml);
+                    return;
+                }
             }
             
-            // 優先使用pageGenerator，否則使用降級處理
-            if (pageGenerator) {
-                pageGenerator->generateWiFiConfigPage(webServer);
-                return;
-            }
+            // 統一使用自定義的WiFi配置頁面，確保所有版本一致
+            // 不再依賴pageGenerator以避免版本間的差異
+            DEBUG_INFO_PRINT("[WiFi] 使用統一WiFi配置頁面生成\n");
             
-            // 降級處理：使用基本HTML
+            // 增強版WiFi配置頁面
             String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
             html += "<title>WiFi 配置</title>";
-            html += "<style>body{font-family:Arial;margin:20px;background:#f5f5f5;} ";
-            html += ".container{max-width:500px;margin:0 auto;background:white;padding:20px;border-radius:8px;} ";
-            html += ".form-group{margin:15px 0;} label{display:block;font-weight:bold;margin-bottom:5px;} ";
-            html += "input{width:100%;padding:10px;border:1px solid #ddd;border-radius:4px;box-sizing:border-box;} ";
-            html += ".button{background:#007bff;color:white;padding:12px 24px;border:none;border-radius:4px;text-decoration:none;display:inline-block;margin:5px;} ";
-            html += ".secondary{background:#6c757d;}</style></head><body>";
-            html += "<div class='container'><h1>📡 WiFi 配置</h1>";
-            html += "<form method='post' action='/wifi-save'>";
-            html += "<div class='form-group'><label>網路名稱:</label>";
-            html += "<input type='text' name='ssid' placeholder='WiFi 網路名稱' required></div>";
-            html += "<div class='form-group'><label>密碼:</label>";
-            html += "<input type='password' name='password' placeholder='WiFi 密碼'></div>";
-            html += "<div style='text-align: center; margin-top: 20px;'>";
-            html += "<button type='submit' class='button'>💾 保存設定</button>";
+            html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+            html += "<style>";
+            html += "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:20px;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh;} ";
+            html += ".container{max-width:600px;margin:0 auto;background:white;padding:25px;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.1);} ";
+            html += ".current-status{background:#f8f9fa;padding:15px;border-radius:8px;margin-bottom:20px;border-left:4px solid #28a745;} ";
+            html += ".status-connected{border-left-color:#28a745;} .status-disconnected{border-left-color:#dc3545;} ";
+            html += ".scan-section{background:#e3f2fd;padding:15px;border-radius:8px;margin:20px 0;} ";
+            html += ".network-list{max-height:200px;overflow-y:auto;margin:10px 0;} ";
+            html += ".network-item{padding:10px;border:1px solid #ddd;border-radius:4px;margin:5px 0;cursor:pointer;display:flex;justify-content:space-between;align-items:center;} ";
+            html += ".network-item:hover{background:#f0f0f0;} .network-item.selected{background:#007bff;color:white;} ";
+            html += ".signal{font-size:12px;} .signal-strong{color:#28a745;} .signal-medium{color:#ffc107;} .signal-weak{color:#dc3545;} ";
+            html += ".form-group{margin:15px 0;} label{display:block;font-weight:bold;margin-bottom:5px;color:#333;} ";
+            html += "input{width:100%;padding:12px;border:1px solid #ddd;border-radius:6px;box-sizing:border-box;font-size:14px;} ";
+            html += "input:focus{outline:none;border-color:#007bff;box-shadow:0 0 5px rgba(0,123,255,0.3);} ";
+            html += ".button{background:#007bff;color:white;padding:12px 24px;border:none;border-radius:6px;text-decoration:none;display:inline-block;margin:5px;cursor:pointer;font-size:14px;transition:all 0.2s;} ";
+            html += ".button:hover{background:#0056b3;transform:translateY(-1px);} ";
+            html += ".secondary{background:#6c757d;} .scan-btn{background:#28a745;} .refresh-btn{background:#17a2b8;} ";
+            html += ".loading{display:none;text-align:center;padding:20px;} ";
+            html += "@media (max-width:768px){.container{margin:10px;padding:15px;}} ";
+            html += "</style></head><body>";
+            
+            html += "<div class='container'>";
+            html += "<h1>📡 WiFi 網路配置</h1>";
+            
+            // 當前連接狀態
+            html += "<div class='current-status ";
+            if (WiFi.status() == WL_CONNECTED) {
+                html += "status-connected'>";
+                html += "<h3>✅ 當前連接狀態</h3>";
+                html += "<p><strong>網路名稱:</strong> " + WiFi.SSID() + "</p>";
+                html += "<p><strong>信號強度:</strong> " + String(WiFi.RSSI()) + " dBm</p>";
+                html += "<p><strong>IP 地址:</strong> " + WiFi.localIP().toString() + "</p>";
+                html += "<p><strong>MAC 地址:</strong> " + WiFi.macAddress() + "</p>";
+            } else {
+                html += "status-disconnected'>";
+                html += "<h3>❌ 未連接到WiFi</h3>";
+                html += "<p>請選擇或輸入WiFi網路進行連接</p>";
+            }
+            html += "</div>";
+            
+            // WiFi掃描區域
+            html += "<div class='scan-section'>";
+            html += "<h3>🔍 可用網路</h3>";
+            html += "<button type='button' class='button scan-btn' onclick='scanNetworks()'>掃描網路</button>";
+            html += "<button type='button' class='button refresh-btn' onclick='location.reload()'>刷新頁面</button>";
+            html += "<div class='loading' id='loading'>正在掃描網路...</div>";
+            html += "<div class='network-list' id='networkList'></div>";
+            html += "</div>";
+            
+            // 配置表單
+            html += "<form method='post' action='/wifi-save' id='wifiForm'>";
+            html += "<div class='form-group'>";
+            html += "<label for='ssid'>網路名稱 (SSID):</label>";
+            html += "<input type='text' id='ssid' name='ssid' placeholder='輸入WiFi網路名稱' required>";
+            html += "</div>";
+            html += "<div class='form-group'>";
+            html += "<label for='password'>密碼:</label>";
+            html += "<input type='password' id='password' name='password' placeholder='輸入WiFi密碼'>";
+            html += "</div>";
+            html += "<div style='text-align: center; margin-top: 25px;'>";
+            html += "<button type='submit' class='button'>💾 保存並連接</button>";
             html += "<a href='/' class='button secondary'>⬅️ 返回主頁</a>";
-            html += "</div></form></div></body></html>";
+            html += "</div>";
+            html += "</form>";
+            
+            html += "</div>";
+            
+            // JavaScript功能
+            html += "<script>";
+            html += "function scanNetworks() {";
+            html += "  document.getElementById('loading').style.display = 'block';";
+            html += "  document.getElementById('networkList').innerHTML = '';";
+            html += "  fetch('/api/wifi/scan')";
+            html += "    .then(response => {";
+            html += "      if (!response.ok) {";
+            html += "        throw new Error(`HTTP ${response.status}: ${response.statusText}`);";
+            html += "      }";
+            html += "      return response.text();";
+            html += "    })";
+            html += "    .then(text => {";
+            html += "      try {";
+            html += "        const data = JSON.parse(text);";
+            html += "        document.getElementById('loading').style.display = 'none';";
+            html += "        if (data.error) {";
+            html += "          throw new Error(data.error + (data.debug ? ' (' + data.debug + ')' : ''));";
+            html += "        }";
+            html += "        displayNetworks(data.networks || []);";
+            html += "      } catch (jsonErr) {";
+            html += "        console.error('JSON解析錯誤:', jsonErr.message);";
+            html += "        console.error('原始響應:', text.substring(0, 200) + '...');";
+            html += "        document.getElementById('loading').style.display = 'none';";
+            html += "        document.getElementById('networkList').innerHTML = ";
+            html += "          '<div style=\"color:red;padding:10px;border:1px solid red;border-radius:4px;\">' +";
+            html += "          '<h4>JSON解析錯誤</h4>' +";
+            html += "          '<p><strong>錯誤:</strong> ' + jsonErr.message + '</p>' +";
+            html += "          '<p><strong>原始響應:</strong> ' + text.substring(0, 100) + '...</p>' +";
+            html += "          '<button onclick=\"scanNetworks()\" style=\"margin-top:10px;\">重新掃描</button>' +";
+            html += "          '</div>';";
+            html += "      }";
+            html += "    })";
+            html += "    .catch(err => {";
+            html += "      console.error('WiFi掃描錯誤:', err);";
+            html += "      document.getElementById('loading').style.display = 'none';";
+            html += "      document.getElementById('networkList').innerHTML = ";
+            html += "        '<div style=\"color:red;padding:10px;border:1px solid red;border-radius:4px;\">' +";
+            html += "        '<h4>掃描失敗</h4>' +";
+            html += "        '<p>' + err.message + '</p>' +";
+            html += "        '<button onclick=\"scanNetworks()\" style=\"margin-top:10px;\">重新掃描</button>' +";
+            html += "        '</div>';";
+            html += "    });";
+            html += "}";
+            html += "function displayNetworks(networks) {";
+            html += "  const list = document.getElementById('networkList');";
+            html += "  if (networks.length === 0) {";
+            html += "    list.innerHTML = '<p>未找到可用網路</p>';";
+            html += "    return;";
+            html += "  }";
+            html += "  let html = '';";
+            html += "  networks.forEach((net, i) => {";
+            html += "    const signalClass = net.rssi > -50 ? 'signal-strong' : net.rssi > -70 ? 'signal-medium' : 'signal-weak';";
+            html += "    const security = net.encryption > 0 ? '🔒' : '🔓';";
+            html += "    html += `<div class=\"network-item\" onclick=\"selectNetwork('${net.ssid}')\">`;";
+            html += "    html += `<span>${security} ${net.ssid}</span>`;";
+            html += "    html += `<span class=\"signal ${signalClass}\">${net.rssi} dBm</span>`;";
+            html += "    html += '</div>';";
+            html += "  });";
+            html += "  list.innerHTML = html;";
+            html += "}";
+            html += "function selectNetwork(ssid) {";
+            html += "  document.getElementById('ssid').value = ssid;";
+            html += "  const items = document.querySelectorAll('.network-item');";
+            html += "  items.forEach(item => item.classList.remove('selected'));";
+            html += "  event.target.closest('.network-item').classList.add('selected');";
+            html += "}";
+            html += "window.onload = () => scanNetworks();";
+            html += "</script>";
+            html += "</body></html>";
             
             webServer->send(200, "text/html", html);
             
@@ -982,49 +1146,161 @@ void initializeMonitoring() {
     // HomeKit配置頁面 - 使用MemoryOptimization版本
     webServer->on("/homekit", [](){
         try {
-            // 檢查記憶體壓力（可選）
-            if (memoryManager && !memoryManager->shouldServePage("homekit_config")) {
-                webServer->send(503, "text/html", 
-                    "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>系統忙碌</title></head><body>"
-                    "<div style='text-align:center;margin:50px;'><h1>🚫 系統記憶體不足</h1>"
-                    "<p>系統目前記憶體壓力過大，請稍後重試。</p>"
-                    "<a href='/' style='color:blue;'>返回主頁</a></div></body></html>");
-                return;
+            // HomeKit配置是核心功能，只在極端記憶體不足時才限制
+            if (memoryManager) {
+                auto strategy = memoryManager->getRenderStrategy();
+                if (strategy == MemoryOptimization::MemoryManager::RenderStrategy::EMERGENCY) {
+                    // 極端緊急模式下提供簡化的HomeKit配置
+                    String emergencyHtml = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
+                    emergencyHtml += "<title>HomeKit配置 (緊急模式)</title></head><body style='margin:20px;'>";
+                    emergencyHtml += "<h1>HomeKit配置</h1>";
+                    emergencyHtml += "<p style='color:orange;'>⚠️ 系統記憶體極低，使用簡化模式</p>";
+                    
+                    String currentPairingCode = configManager.getHomeKitPairingCode();
+                    String currentDeviceName = configManager.getHomeKitDeviceName();
+                    
+                    emergencyHtml += "<form method='POST' action='/homekit-save'>";
+                    emergencyHtml += "<p>配對碼: <input type='text' name='pairingCode' value='" + currentPairingCode + "' required></p>";
+                    emergencyHtml += "<p>設備名稱: <input type='text' name='deviceName' value='" + currentDeviceName + "' required></p>";
+                    emergencyHtml += "<button type='submit'>保存</button> ";
+                    emergencyHtml += "<a href='/'>返回主頁</a></p>";
+                    emergencyHtml += "</form></body></html>";
+                    webServer->send(200, "text/html", emergencyHtml);
+                    return;
+                }
             }
             
             String currentPairingCode = configManager.getHomeKitPairingCode();
             String currentDeviceName = configManager.getHomeKitDeviceName();
             String currentQRID = configManager.getHomeKitQRID();
             
-            // 使用基本HTML建構（更可靠）
+            // 增強版HomeKit配置和狀態頁面
             String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
-            html += "<title>HomeKit 配置</title>";
-            html += "<style>body{font-family:Arial;margin:20px;background:#f5f5f5;} ";
-            html += ".container{max-width:500px;margin:0 auto;background:white;padding:20px;border-radius:8px;} ";
-            html += ".form-group{margin:15px 0;} label{display:block;font-weight:bold;margin-bottom:5px;} ";
-            html += "input{width:100%;padding:10px;border:1px solid #ddd;border-radius:4px;box-sizing:border-box;} ";
-            html += ".status{background:#e7f3ff;padding:10px;border-radius:4px;margin:15px 0;text-align:center;} ";
-            html += ".button{background:#007bff;color:white;padding:12px 24px;border:none;border-radius:4px;text-decoration:none;display:inline-block;margin:5px;} ";
-            html += ".secondary{background:#6c757d;}</style></head><body>";
-            html += "<div class='container'><h1>🏠 HomeKit 配置</h1>";
-            html += "<form method='post' action='/homekit-save'>";
-            html += "<div class='form-group'><label>配對代碼:</label>";
-            html += "<input type='text' name='pairing_code' value='" + currentPairingCode + "' maxlength='8' required></div>";
-            html += "<div class='form-group'><label>設備名稱:</label>";
-            html += "<input type='text' name='device_name' value='" + currentDeviceName + "' maxlength='64' required></div>";
-            html += "<div class='form-group'><label>QR ID:</label>";
-            html += "<input type='text' name='qr_id' value='" + currentQRID + "' maxlength='4' required></div>";
-            html += "<div class='status'>";
+            html += "<title>HomeKit 配置與狀態</title>";
+            html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+            html += "<style>";
+            html += "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:20px;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh;} ";
+            html += ".container{max-width:700px;margin:0 auto;background:white;padding:25px;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.1);} ";
+            html += ".status-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:15px;margin:20px 0;} ";
+            html += ".status-card{background:#f8f9fa;padding:15px;border-radius:8px;border-left:4px solid #007bff;} ";
+            html += ".status-online{border-left-color:#28a745;} .status-offline{border-left-color:#dc3545;} .status-warning{border-left-color:#ffc107;} ";
+            html += ".status-title{font-weight:bold;margin-bottom:8px;color:#333;} ";
+            html += ".status-value{font-size:14px;color:#666;margin:4px 0;} ";
+            html += ".metric{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid #eee;} ";
+            html += ".metric:last-child{border-bottom:none;} ";
+            html += ".homekit-qr{text-align:center;background:#fff;padding:20px;border-radius:8px;margin:15px 0;border:2px dashed #007bff;} ";
+            html += ".form-section{background:#f8f9fa;padding:20px;border-radius:8px;margin:20px 0;} ";
+            html += ".form-group{margin:15px 0;} label{display:block;font-weight:bold;margin-bottom:5px;color:#333;} ";
+            html += "input{width:100%;padding:12px;border:1px solid #ddd;border-radius:6px;box-sizing:border-box;font-size:14px;} ";
+            html += "input:focus{outline:none;border-color:#007bff;box-shadow:0 0 5px rgba(0,123,255,0.3);} ";
+            html += ".button{background:#007bff;color:white;padding:12px 24px;border:none;border-radius:6px;text-decoration:none;display:inline-block;margin:5px;cursor:pointer;font-size:14px;transition:all 0.2s;} ";
+            html += ".button:hover{background:#0056b3;transform:translateY(-1px);} ";
+            html += ".secondary{background:#6c757d;} .success{background:#28a745;} .warning{background:#ffc107;color:#212529;} .danger{background:#dc3545;} ";
+            html += ".refresh-btn{background:#17a2b8;font-size:12px;padding:8px 16px;} ";
+            html += "@media (max-width:768px){.container{margin:10px;padding:15px;} .status-grid{grid-template-columns:1fr;}} ";
+            html += "</style>";
+            html += "<script>function refreshStatus(){location.reload();} setInterval(refreshStatus, 30000);</script>";
+            html += "</head><body>";
+            
+            html += "<div class='container'>";
+            html += "<h1>🏠 HomeKit 配置與系統狀態</h1>";
+            
+            // HomeKit服務狀態區域
+            html += "<div class='status-grid'>";
+            
+            // HomeKit初始化狀態
+            html += "<div class='status-card ";
             if (homeKitInitialized) {
-                html += "🟢 HomeKit 服務已初始化";
+                html += "status-online'>";
+                html += "<div class='status-title'>✅ HomeKit 服務</div>";
+                html += "<div class='status-value'>服務已初始化並運行中</div>";
+                html += "<div class='metric'><span>狀態:</span><span style='color:#28a745;'>運行中</span></div>";
             } else {
-                html += "🔴 HomeKit 服務未初始化";
+                html += "status-offline'>";
+                html += "<div class='status-title'>❌ HomeKit 服務</div>";
+                html += "<div class='status-value'>服務未初始化</div>";
+                html += "<div class='metric'><span>狀態:</span><span style='color:#dc3545;'>離線</span></div>";
             }
             html += "</div>";
-            html += "<div style='text-align: center; margin-top: 20px;'>";
-            html += "<button type='submit' class='button'>💾 保存設定</button>";
+            
+            // 設備狀態
+            html += "<div class='status-card ";
+            if (deviceInitialized) {
+                html += "status-online'>";
+                html += "<div class='status-title'>🌡️ 恆溫器設備</div>";
+                html += "<div class='status-value'>設備已初始化</div>";
+                html += "<div class='metric'><span>設備:</span><span style='color:#28a745;'>在線</span></div>";
+            } else {
+                html += "status-offline'>";
+                html += "<div class='status-title'>🌡️ 恆溫器設備</div>";
+                html += "<div class='status-value'>設備未初始化</div>";
+                html += "<div class='metric'><span>設備:</span><span style='color:#dc3545;'>離線</span></div>";
+            }
+            html += "</div>";
+            
+            // 記憶體和系統狀態
+            html += "<div class='status-card'>";
+            html += "<div class='status-title'>💾 系統資源</div>";
+            uint32_t freeHeap = ESP.getFreeHeap();
+            html += "<div class='metric'><span>可用記憶體:</span><span>" + String(freeHeap/1024) + " KB</span></div>";
+            html += "<div class='metric'><span>運行時間:</span><span>" + String(millis()/1000/60) + " 分鐘</span></div>";
+            html += "<div class='metric'><span>配對狀態:</span><span>" + String(homeKitPairingActive ? "配對中" : "待機") + "</span></div>";
+            html += "</div>";
+            
+            // WiFi連接狀態
+            html += "<div class='status-card ";
+            if (WiFi.status() == WL_CONNECTED) {
+                html += "status-online'>";
+                html += "<div class='status-title'>📶 網路連接</div>";
+                html += "<div class='metric'><span>SSID:</span><span>" + WiFi.SSID() + "</span></div>";
+                html += "<div class='metric'><span>信號:</span><span>" + String(WiFi.RSSI()) + " dBm</span></div>";
+                html += "<div class='metric'><span>IP:</span><span>" + WiFi.localIP().toString() + "</span></div>";
+            } else {
+                html += "status-offline'>";
+                html += "<div class='status-title'>📶 網路連接</div>";
+                html += "<div class='status-value'>未連接到WiFi</div>";
+            }
+            html += "</div>";
+            
+            html += "</div>"; // end status-grid
+            
+            // HomeKit QR碼信息（如果可用）
+            if (homeKitInitialized) {
+                html += "<div class='homekit-qr'>";
+                html += "<h3>📱 HomeKit 配對信息</h3>";
+                html += "<p><strong>配對代碼:</strong> " + currentPairingCode + "</p>";
+                html += "<p>在iPhone的「家庭」App中掃描QR碼或手動輸入配對代碼</p>";
+                html += "<button type='button' class='button refresh-btn' onclick='refreshStatus()'>🔄 刷新狀態</button>";
+                html += "</div>";
+            }
+            
+            // 配置表單區域
+            html += "<div class='form-section'>";
+            html += "<h3>⚙️ HomeKit 配置</h3>";
+            html += "<form method='post' action='/homekit-save'>";
+            html += "<div class='form-group'>";
+            html += "<label for='pairing_code'>配對代碼 (8位數字):</label>";
+            html += "<input type='text' id='pairing_code' name='pairing_code' value='" + currentPairingCode + "' maxlength='8' pattern='[0-9]{8}' required>";
+            html += "</div>";
+            html += "<div class='form-group'>";
+            html += "<label for='device_name'>設備名稱:</label>";
+            html += "<input type='text' id='device_name' name='device_name' value='" + currentDeviceName + "' maxlength='64' required>";
+            html += "</div>";
+            html += "<div class='form-group'>";
+            html += "<label for='qr_id'>QR ID (4位字母):</label>";
+            html += "<input type='text' id='qr_id' name='qr_id' value='" + currentQRID + "' maxlength='4' pattern='[A-Z]{4}' required>";
+            html += "</div>";
+            html += "<div style='text-align: center; margin-top: 25px;'>";
+            html += "<button type='submit' class='button success'>💾 保存設定並重啟</button>";
             html += "<a href='/' class='button secondary'>⬅️ 返回主頁</a>";
-            html += "</div></form></div></body></html>";
+            if (homeKitInitialized) {
+                html += "<a href='/restart' class='button warning'>🔄 重啟系統</a>";
+            }
+            html += "</div>";
+            html += "</form>";
+            html += "</div>";
+            
+            html += "</div></body></html>";
             
             webServer->send(200, "text/html", html);
             
@@ -1342,6 +1618,95 @@ void initializeMonitoring() {
         webServer->send(200, "application/json", json);
     });
     
+    // WiFi掃描API端點
+    webServer->on("/api/wifi/scan", [](){
+        webServer->sendHeader("Access-Control-Allow-Origin", "*");
+        
+        // 檢查是否正在掃描或最近剛掃描過
+        static unsigned long lastScan = 0;
+        unsigned long now = millis();
+        
+        if (now - lastScan < 10000) { // 10秒內不重複掃描
+            webServer->send(429, "application/json", 
+                           "{\"error\":\"掃描太頻繁，請10秒後重試\",\"retryAfter\":10}");
+            return;
+        }
+        
+        lastScan = now;
+        
+        // 開始WiFi掃描
+        DEBUG_INFO_PRINT("[WiFi] 開始掃描網路...\n");
+        int networkCount = WiFi.scanNetworks(false, true); // async=false, show_hidden=true
+        DEBUG_INFO_PRINT("[WiFi] 掃描完成，發現 %d 個網路\n", networkCount);
+        
+        String json = "{\"networks\":[";
+        
+        if (networkCount > 0) {
+            bool firstValidNetwork = true;
+            for (int i = 0; i < networkCount && i < 20; i++) { // 限制最多20個網路
+                String ssid = WiFi.SSID(i);
+                int32_t rssi = WiFi.RSSI(i);
+                wifi_auth_mode_t encryption = WiFi.encryptionType(i);
+                
+                // 過濾空SSID或無效網路
+                if (ssid.length() == 0 || ssid == " ") {
+                    DEBUG_VERBOSE_PRINT("[WiFi] 跳過空SSID網路: index %d\n", i);
+                    continue;
+                }
+                
+                // 只在有效網路之間添加逗號
+                if (!firstValidNetwork) {
+                    json += ",";
+                }
+                firstValidNetwork = false;
+                
+                // 安全地轉義SSID中的特殊字符
+                String escapedSSID = ssid;
+                escapedSSID.replace("\"", "\\\"");
+                escapedSSID.replace("\\", "\\\\");
+                
+                json += "{";
+                json += "\"ssid\":\"" + escapedSSID + "\",";
+                json += "\"rssi\":" + String(rssi) + ",";
+                json += "\"encryption\":" + String((int)encryption) + ",";
+                json += "\"channel\":" + String(WiFi.channel(i));
+                json += "}";
+            }
+        }
+        
+        json += "],";
+        json += "\"count\":" + String(networkCount) + ",";
+        json += "\"timestamp\":" + String(millis()) + ",";
+        
+        // 安全地處理當前WiFi SSID
+        String currentSSID = WiFi.SSID();
+        currentSSID.replace("\"", "\\\"");
+        currentSSID.replace("\\", "\\\\");
+        
+        json += "\"currentSSID\":\"" + currentSSID + "\",";
+        json += "\"currentRSSI\":" + String(WiFi.RSSI());
+        json += "}";
+        
+        // 基本JSON驗證
+        if (json.indexOf(",,") != -1) {
+            DEBUG_ERROR_PRINT("[WiFi] JSON格式錯誤：發現雙逗號\n");
+            webServer->send(500, "application/json", 
+                           "{\"error\":\"JSON生成錯誤\",\"debug\":\"雙逗號問題\"}");
+            return;
+        }
+        
+        // 檢查JSON基本結構
+        if (!json.startsWith("{") || !json.endsWith("}")) {
+            DEBUG_ERROR_PRINT("[WiFi] JSON格式錯誤：結構不完整\n");
+            webServer->send(500, "application/json", 
+                           "{\"error\":\"JSON結構錯誤\",\"debug\":\"缺少大括號\"}");
+            return;
+        }
+        
+        DEBUG_VERBOSE_PRINT("[WiFi] JSON生成成功，長度: %d\n", json.length());
+        webServer->send(200, "application/json", json);
+    });
+    
     // 系統指標端點（記憶體優化版）
     webServer->on("/api/metrics", [](){
         // 使用預分配的緩衝區減少記憶體分配
@@ -1536,6 +1901,206 @@ void initializeMonitoring() {
         } catch (...) {
             // 最終降級：純文本響應
             webServer->send(500, "text/plain", "OTA更新頁面載入失敗，請重試");
+        }
+    });
+    
+    // 日誌查看頁面
+    webServer->on("/logs", [](){
+        try {
+            String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
+            html += "<title>系統日誌查看器</title>";
+            html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+            html += "<style>";
+            html += "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:20px;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh;} ";
+            html += ".container{max-width:900px;margin:0 auto;background:white;padding:25px;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.1);} ";
+            html += ".controls{background:#f8f9fa;padding:15px;border-radius:8px;margin:20px 0;display:flex;gap:10px;flex-wrap:wrap;align-items:center;} ";
+            html += ".log-container{background:#1e1e1e;color:#f8f8f2;padding:20px;border-radius:8px;height:400px;overflow-y:auto;font-family:'Monaco','Consolas',monospace;font-size:13px;line-height:1.4;} ";
+            html += ".log-entry{margin:2px 0;padding:2px 0;} ";
+            html += ".log-info{color:#50fa7b;} .log-warn{color:#f1fa8c;} .log-error{color:#ff5555;} .log-debug{color:#8be9fd;} ";
+            html += ".log-timestamp{color:#6272a4;margin-right:8px;} ";
+            html += ".log-component{color:#bd93f9;margin-right:8px;font-weight:bold;} ";
+            html += ".filter-section{display:flex;gap:10px;align-items:center;flex-wrap:wrap;} ";
+            html += ".button{background:#007bff;color:white;padding:8px 16px;border:none;border-radius:4px;cursor:pointer;font-size:12px;text-decoration:none;} ";
+            html += ".button:hover{background:#0056b3;} .button.active{background:#28a745;} ";
+            html += ".secondary{background:#6c757d;} .success{background:#28a745;} .danger{background:#dc3545;} .warning{background:#ffc107;color:#212529;} ";
+            html += "select{padding:6px;border-radius:4px;border:1px solid #ddd;} ";
+            html += ".status-bar{background:#e9ecef;padding:10px;border-radius:4px;margin:10px 0;font-size:12px;} ";
+            html += ".auto-scroll{display:flex;align-items:center;gap:5px;} ";
+            html += "@media (max-width:768px){.container{margin:10px;padding:15px;} .controls{flex-direction:column;align-items:stretch;}} ";
+            html += "</style></head><body>";
+            
+            html += "<div class='container'>";
+            html += "<h1>📜 系統日誌查看器</h1>";
+            
+            // 控制區域
+            html += "<div class='controls'>";
+            html += "<div class='filter-section'>";
+            html += "<span>過濾級別:</span>";
+            html += "<button class='button active' onclick='filterLevel(\"all\")'>全部</button>";
+            html += "<button class='button' onclick='filterLevel(\"info\")'>信息</button>";
+            html += "<button class='button warning' onclick='filterLevel(\"warn\")'>警告</button>";
+            html += "<button class='button danger' onclick='filterLevel(\"error\")'>錯誤</button>";
+            html += "</div>";
+            html += "<div class='filter-section'>";
+            html += "<span>組件:</span>";
+            html += "<select id='componentFilter' onchange='filterComponent(this.value)'>";
+            html += "<option value='all'>全部組件</option>";
+            html += "<option value='system'>系統</option>";
+            html += "<option value='core'>核心</option>";
+            html += "<option value='memory'>記憶體</option>";
+            html += "<option value='homekit'>HomeKit</option>";
+            html += "<option value='wifi'>WiFi</option>";
+            html += "<option value='events'>事件</option>";
+            html += "</select>";
+            html += "</div>";
+            html += "<div class='filter-section'>";
+            html += "<button class='button success' onclick='refreshLogs()'>🔄 刷新</button>";
+            html += "<button class='button' onclick='clearLogs()'>🗑️ 清空</button>";
+            html += "<button class='button secondary' onclick='exportLogs()'>💾 導出</button>";
+            html += "</div>";
+            html += "<div class='auto-scroll'>";
+            html += "<input type='checkbox' id='autoScroll' checked> <label for='autoScroll'>自動滾動</label>";
+            html += "</div>";
+            html += "</div>";
+            
+            // 狀態欄
+            html += "<div class='status-bar' id='statusBar'>準備就緒 - 點擊「刷新」載入日誌</div>";
+            
+            // 日誌容器
+            html += "<div class='log-container' id='logContainer'>";
+            html += "<div class='log-entry log-info'>";
+            html += "<span class='log-timestamp'>[" + String(millis()/1000) + "]</span>";
+            html += "<span class='log-component'>[LOGGER]</span>";
+            html += "日誌查看器已載入，點擊「刷新」開始查看實時日誌";
+            html += "</div>";
+            html += "</div>";
+            
+            // 操作按鈕
+            html += "<div style='text-align: center; margin-top: 20px;'>";
+            html += "<a href='/' class='button secondary'>⬅️ 返回主頁</a>";
+            html += "<a href='/api/logs' class='button' target='_blank'>📋 JSON 格式</a>";
+            html += "</div>";
+            
+            html += "</div>";
+            
+            // JavaScript功能
+            html += "<script>";
+            html += "let currentLevel = 'all';";
+            html += "let currentComponent = 'all';";
+            html += "let autoRefresh = false;";
+            html += "let refreshInterval;";
+            
+            html += "function updateStatus(msg) {";
+            html += "  document.getElementById('statusBar').textContent = msg;";
+            html += "}";
+            
+            html += "function formatLogEntry(entry) {";
+            html += "  const time = new Date().toLocaleTimeString();";
+            html += "  const levelClass = 'log-' + (entry.level || 'info');";
+            html += "  return `<div class='log-entry ${levelClass}' data-level='${entry.level}' data-component='${entry.component}'>`;";
+            html += "  return result + `<span class='log-timestamp'>[${time}]</span>`;";
+            html += "  return result + `<span class='log-component'>[${entry.component.toUpperCase()}]</span>`;";
+            html += "  return result + `${entry.message}</div>`;";
+            html += "}";
+            
+            html += "function refreshLogs() {";
+            html += "  updateStatus('正在載入日誌...');";
+            html += "  fetch('/api/logs')";
+            html += "    .then(response => response.json())";
+            html += "    .then(data => {";
+            html += "      const container = document.getElementById('logContainer');";
+            html += "      container.innerHTML = '';";
+            html += "      if (data.logs && data.logs.length > 0) {";
+            html += "        data.logs.forEach(log => {";
+            html += "          container.innerHTML += formatLogEntry(log);";
+            html += "        });";
+            html += "        updateStatus(`已載入 ${data.logs.length} 條日誌記錄`);";
+            html += "      } else {";
+            html += "        container.innerHTML = '<div class=\"log-entry log-info\">沒有可用的日誌記錄</div>';";
+            html += "        updateStatus('沒有日誌記錄');";
+            html += "      }";
+            html += "      applyFilters();";
+            html += "      if (document.getElementById('autoScroll').checked) {";
+            html += "        container.scrollTop = container.scrollHeight;";
+            html += "      }";
+            html += "    })";
+            html += "    .catch(err => {";
+            html += "      updateStatus('載入失敗: ' + err.message);";
+            html += "      console.error('日誌載入失敗:', err);";
+            html += "    });";
+            html += "}";
+            
+            html += "function filterLevel(level) {";
+            html += "  currentLevel = level;";
+            html += "  document.querySelectorAll('.controls .button').forEach(btn => btn.classList.remove('active'));";
+            html += "  event.target.classList.add('active');";
+            html += "  applyFilters();";
+            html += "}";
+            
+            html += "function filterComponent(component) {";
+            html += "  currentComponent = component;";
+            html += "  applyFilters();";
+            html += "}";
+            
+            html += "function applyFilters() {";
+            html += "  const entries = document.querySelectorAll('.log-entry');";
+            html += "  let visibleCount = 0;";
+            html += "  entries.forEach(entry => {";
+            html += "    const level = entry.dataset.level;";
+            html += "    const component = entry.dataset.component;";
+            html += "    const levelMatch = currentLevel === 'all' || level === currentLevel;";
+            html += "    const componentMatch = currentComponent === 'all' || component === currentComponent;";
+            html += "    if (levelMatch && componentMatch) {";
+            html += "      entry.style.display = 'block';";
+            html += "      visibleCount++;";
+            html += "    } else {";
+            html += "      entry.style.display = 'none';";
+            html += "    }";
+            html += "  });";
+            html += "  updateStatus(`顯示 ${visibleCount} 條日誌 (級別: ${currentLevel}, 組件: ${currentComponent})`);";
+            html += "}";
+            
+            html += "function clearLogs() {";
+            html += "  if (confirm('確定要清空日誌顯示嗎？')) {";
+            html += "    document.getElementById('logContainer').innerHTML = '';";
+            html += "    updateStatus('日誌已清空');";
+            html += "  }";
+            html += "}";
+            
+            html += "function exportLogs() {";
+            html += "  const logs = document.getElementById('logContainer').innerText;";
+            html += "  const blob = new Blob([logs], {type: 'text/plain'});";
+            html += "  const url = URL.createObjectURL(blob);";
+            html += "  const a = document.createElement('a');";
+            html += "  a.href = url;";
+            html += "  a.download = 'daispan-logs-' + new Date().toISOString().slice(0,19).replace(/:/g,'-') + '.txt';";
+            html += "  a.click();";
+            html += "  URL.revokeObjectURL(url);";
+            html += "}";
+            
+            html += "// 自動刷新功能";
+            html += "function toggleAutoRefresh() {";
+            html += "  autoRefresh = !autoRefresh;";
+            html += "  if (autoRefresh) {";
+            html += "    refreshInterval = setInterval(refreshLogs, 5000);";
+            html += "    updateStatus('自動刷新已啟用 (每5秒)');";
+            html += "  } else {";
+            html += "    clearInterval(refreshInterval);";
+            html += "    updateStatus('自動刷新已停用');";
+            html += "  }";
+            html += "}";
+            
+            html += "// 初始化";
+            html += "document.addEventListener('DOMContentLoaded', function() {";
+            html += "  refreshLogs();";
+            html += "});";
+            html += "</script>";
+            html += "</body></html>";
+            
+            webServer->send(200, "text/html", html);
+            
+        } catch (...) {
+            webServer->send(500, "text/plain", "日誌查看頁面載入失敗，請重試");
         }
     });
     
@@ -1987,34 +2552,37 @@ void initializeMonitoring() {
     // 初始化記憶體優化組件
     initializeMemoryOptimization();
     
-    DEBUG_INFO_PRINT("[Main] WebServer監控功能已啟動: http://%s:8080\n", 
+    DEBUG_INFO_PRINT("[Main] 統一WebServer功能已啟動: http://%s:8080\n", 
                      WiFi.localIP().toString().c_str());
+    DEBUG_INFO_PRINT("[Main] 所有版本均提供: WiFi設定 | HomeKit設定 | 系統狀態 | OTA更新 | 日誌查看\n");
     
-    // 初始化調試系統 - 根據編譯環境選擇不同的調試器
-#if defined(ENABLE_REMOTE_DEBUG)
-    // WebSocket調試器 (高功能版本)
+    // 初始化RemoteDebugger調試系統 - 根據編譯環境自動選擇實現
     RemoteDebugger& debugger = RemoteDebugger::getInstance();
+    
+#if defined(ENABLE_REMOTE_DEBUG)
+    // WebSocket調試器 (高功能版本) - 端口8081
     if (debugger.begin(8081)) {
-        DEBUG_INFO_PRINT("[Main] WebSocket調試系統已啟動: ws://%s:8081\n", 
+        DEBUG_INFO_PRINT("[Main] 額外調試功能: WebSocket調試系統已啟動 ws://%s:8081\n", 
                          WiFi.localIP().toString().c_str());
-        DEBUG_INFO_PRINT("[Main] 調試界面: http://%s:8080/debug\n", 
+        DEBUG_INFO_PRINT("[Main] 高級調試界面: http://%s:8080/debug\n", 
                          WiFi.localIP().toString().c_str());
     } else {
         DEBUG_ERROR_PRINT("[Main] WebSocket調試系統啟動失敗\n");
     }
 #elif defined(ENABLE_LIGHTWEIGHT_DEBUG)
-    // HTTP輕量級調試器 (節省記憶體版本)
-    RemoteDebugger& debugger = RemoteDebugger::getInstance();
+    // HTTP輕量級調試器 (節省記憶體版本) - 端口8082
     if (debugger.begin(8082)) {
-        DEBUG_INFO_PRINT("[Main] 輕量級調試系統已啟動: http://%s:8082\n", 
+        DEBUG_INFO_PRINT("[Main] 額外調試功能: 輕量級調試系統已啟動 http://%s:8082\n", 
                          WiFi.localIP().toString().c_str());
-        DEBUG_INFO_PRINT("[Main] 調試界面: http://%s:8082/\n", 
+        DEBUG_INFO_PRINT("[Main] 輕量級調試界面: http://%s:8082/\n", 
                          WiFi.localIP().toString().c_str());
     } else {
         DEBUG_ERROR_PRINT("[Main] 輕量級調試系統啟動失敗\n");
     }
 #else
-    DEBUG_INFO_PRINT("[Main] 生產模式：調試系統已禁用以節省記憶體\n");
+    // 生產環境 - 調用空實現（編譯器會優化掉）
+    debugger.begin(); // 空實現始終返回true
+    DEBUG_INFO_PRINT("[Main] 基礎功能模式：RemoteDebugger調試系統已禁用以節省記憶體\n");
 #endif
 }
 
@@ -2330,7 +2898,7 @@ void setup() {
 }
 
 void loop() {
-    // 處理遠端調試器
+    // 處理RemoteDebugger調試器 - 生產環境為空實現，調試環境為實際功能
     RemoteDebugger::getInstance().loop();
     
     // 核心事件處理（優先處理）
