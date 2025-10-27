@@ -1,5 +1,6 @@
 #include "controller/ThermostatController.h"
 #include "common/Debug.h"
+#include <cmath>
 
 ThermostatController::ThermostatController(std::unique_ptr<IACProtocol> p) 
     : protocol(std::move(p)),
@@ -86,10 +87,22 @@ bool ThermostatController::setPower(bool on) {
     bool success = protocol->setPowerAndMode(on, mode, targetTemperature, fanSpeed);
     
     if (success) {
+        bool previousPower = power;
         power = on;
+        bool confirmed = waitForConfirmation(
+            [on](const ACStatus& status) {
+                return status.isValid && status.power == on;
+            },
+            2000
+        );
+        if (!confirmed) {
+            power = previousPower;
+            handleProtocolError("confirmPower");
+            return false;
+        }
         resetErrorCount();
-        lastSuccessfulUpdate = millis(); // 記錄成功操作時間
-        DEBUG_INFO_PRINT("[Controller] 電源狀態設置成功\n");
+        lastSuccessfulUpdate = millis();
+        DEBUG_INFO_PRINT("[Controller] 電源狀態設置成功並確認完成\n");
     } else {
         handleProtocolError("setPower");
     }
@@ -134,20 +147,32 @@ bool ThermostatController::setTargetMode(uint8_t newMode) {
     
     // 使用抽象協議介面設置模式
     bool success = protocol->setPowerAndMode(power, acMode, targetTemperature, fanSpeed);
-    
-    if (success) {
-        mode = acMode;
-        // 記錄用戶設定的模式，防止被queryStatus覆蓋
-        lastModeSetTime = millis();
-        lastUserMode = acMode;
-        resetErrorCount();
-        lastSuccessfulUpdate = millis(); // 記錄成功操作時間
-        DEBUG_INFO_PRINT("[Controller] 模式設置成功：%d，啟用10秒保護期\n", newMode);
-    } else {
+
+    if (!success) {
         handleProtocolError("setTargetMode");
+        return false;
     }
-    
-    return success;
+
+    bool confirmed = waitForConfirmation(
+        [acMode](const ACStatus& status) {
+            return status.isValid && status.mode == acMode;
+        },
+        2000
+    );
+
+    if (!confirmed) {
+        handleProtocolError("confirmMode");
+        return false;
+    }
+
+    mode = acMode;
+    lastModeSetTime = millis();
+    lastUserMode = acMode;
+    resetErrorCount();
+    lastSuccessfulUpdate = millis();
+    DEBUG_INFO_PRINT("[Controller] 模式設置成功並確認完成：%d\n", newMode);
+
+    return true;
 }
 
 bool ThermostatController::setTargetTemperature(float temperature) {
@@ -174,17 +199,30 @@ bool ThermostatController::setTargetTemperature(float temperature) {
     
     // 使用抽象協議介面設置溫度
     bool success = protocol->setTemperature(temperature);
-    
-    if (success) {
-        targetTemperature = temperature;
-        resetErrorCount();
-        lastSuccessfulUpdate = millis(); // 記錄成功操作時間
-        DEBUG_INFO_PRINT("[Controller] 目標溫度設置成功\n");
-    } else {
+
+    if (!success) {
         handleProtocolError("setTargetTemperature");
+        return false;
     }
-    
-    return success;
+
+    bool confirmed = waitForConfirmation(
+        [temperature](const ACStatus& status) {
+            return status.isValid && fabs(status.targetTemperature - temperature) <= 0.6f;
+        },
+        2000
+    );
+
+    if (!confirmed) {
+        handleProtocolError("confirmTargetTemperature");
+        return false;
+    }
+
+    targetTemperature = temperature;
+    resetErrorCount();
+    lastSuccessfulUpdate = millis();
+    DEBUG_INFO_PRINT("[Controller] 目標溫度設置成功並確認完成\n");
+
+    return true;
 }
 
 bool ThermostatController::setFanSpeed(uint8_t speed) {
@@ -209,21 +247,33 @@ bool ThermostatController::setFanSpeed(uint8_t speed) {
     
     // 使用抽象協議介面設置風速
     bool success = protocol->setPowerAndMode(power, mode, targetTemperature, speed);
-    
-    if (success) {
-        fanSpeed = speed;
-        // 記錄用戶風速設置時間和值，防止被queryStatus覆蓋
-        lastFanSpeedSetTime = millis();
-        lastUserFanSpeed = speed;
-        resetErrorCount();
-        lastSuccessfulUpdate = millis(); // 記錄成功操作時間
-        DEBUG_INFO_PRINT("[Controller] 風速設置成功：%s (記錄用戶設置時間: %lu)\n", 
-                        getFanSpeedText(speed), lastFanSpeedSetTime);
-    } else {
+
+    if (!success) {
         handleProtocolError("setFanSpeed");
+        return false;
     }
-    
-    return success;
+
+    bool confirmed = waitForConfirmation(
+        [speed](const ACStatus& status) {
+            return status.isValid && status.fanSpeed == speed;
+        },
+        2000
+    );
+
+    if (!confirmed) {
+        handleProtocolError("confirmFanSpeed");
+        return false;
+    }
+
+    fanSpeed = speed;
+    lastFanSpeedSetTime = millis();
+    lastUserFanSpeed = speed;
+    resetErrorCount();
+    lastSuccessfulUpdate = millis();
+    DEBUG_INFO_PRINT("[Controller] 風速設置成功並確認完成：%s (記錄用戶設置時間: %lu)\n",
+                     getFanSpeedText(speed), lastFanSpeedSetTime);
+
+    return true;
 }
 
 void ThermostatController::update() {
@@ -386,4 +436,24 @@ void ThermostatController::resetErrorCount() {
         DEBUG_INFO_PRINT("[Controller] 重置錯誤計數（之前: %lu）\n", consecutiveErrors);
         consecutiveErrors = 0;
     }
+}
+
+bool ThermostatController::waitForConfirmation(std::function<bool(const ACStatus&)> validator,
+                             unsigned long timeoutMs,
+                             unsigned long pollIntervalMs) {
+    if (!protocol) {
+        return false;
+    }
+
+    unsigned long start = millis();
+    ACStatus status;
+    while (millis() - start <= timeoutMs) {
+        if (protocol->queryStatus(status) && status.isValid) {
+            if (validator(status)) {
+                return true;
+            }
+        }
+        delay(pollIntervalMs);
+    }
+    return false;
 }

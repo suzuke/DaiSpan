@@ -11,8 +11,12 @@ import statistics
 import argparse
 from datetime import datetime
 from typing import Dict, List, Optional
-import matplotlib.pyplot as plt
-import pandas as pd
+try:
+    import matplotlib.pyplot as plt  # type: ignore
+    import pandas as pd  # type: ignore
+    HAS_CHARTS = True
+except Exception:
+    HAS_CHARTS = False
 
 class DaiSpanPerformanceTester:
     def __init__(self, device_ip: str, port: int = 8080):
@@ -20,54 +24,93 @@ class DaiSpanPerformanceTester:
         self.session = requests.Session()
         self.session.timeout = 30
         self.results = {}
+        self.minimal_build = False
+    
+    def _get(self, path: str, **kwargs) -> Optional[requests.Response]:
+        """包裝 GET 請求，統一錯誤處理與回退"""
+        url = f"{self.base_url}{path}"
+        timeout = kwargs.pop("timeout", 30)
+        try:
+            response = self.session.get(url, timeout=timeout, **kwargs)
+            if response.status_code == 404:
+                print(f"API {path} 未啟用 (404)")
+            return response
+        except requests.RequestException as exc:
+            print(f"請求 {path} 失敗: {exc}")
+            return None
         
     def test_connection(self) -> bool:
         """測試設備連接"""
-        try:
-            response = self.session.get(f"{self.base_url}/api/monitor/dashboard")
-            return response.status_code == 200
-        except requests.RequestException:
-            return False
+        response = self._get("/api/health")
+        if response and response.status_code == 200:
+            dash_resp = self._get("/api/monitor/dashboard")
+            if not dash_resp or dash_resp.status_code == 404:
+                self.minimal_build = True
+            else:
+                self.minimal_build = False
+            return True
+        
+        legacy = self._get("/api/monitor/dashboard")
+        if legacy and legacy.status_code == 200:
+            self.minimal_build = False
+            return True
+        return False
     
     def get_memory_stats(self) -> Optional[Dict]:
         """獲取記憶體統計信息"""
-        try:
-            response = self.session.get(f"{self.base_url}/api/memory/detailed")
-            if response.status_code == 200:
-                return response.json()
-        except Exception as e:
-            print(f"獲取記憶體統計失敗: {e}")
+        response = self._get("/api/memory/detailed")
+        if response is None:
+            return None
+        if response.status_code == 404:
+            print("記憶體詳細 API 未啟用，改用 /api/memory/stats")
+            fallback = self._get("/api/memory/stats")
+            if fallback and fallback.status_code == 200:
+                data = fallback.json()
+                return {
+                    "heap": data.get("heap", {}),
+                    "memoryPressure": data.get("memoryPressure", {}),
+                    "source": "stats"
+                }
+            return None
+        if response.status_code == 200:
+            return response.json()
         return None
     
     def run_performance_test(self) -> Optional[Dict]:
         """運行基本性能測試"""
-        try:
-            response = self.session.get(f"{self.base_url}/api/performance/test")
-            if response.status_code == 200:
-                return response.json()
-        except Exception as e:
-            print(f"性能測試失敗: {e}")
+        response = self._get("/api/performance/test")
+        if response is None:
+            return None
+        if response.status_code == 404:
+            print("性能測試 API 未啟用，跳過此測試")
+            return {"skipped": True}
+        if response.status_code == 200:
+            return response.json()
         return None
     
     def run_load_test(self, iterations: int = 20, delay: int = 100) -> Optional[Dict]:
         """運行負載測試"""
-        try:
-            params = {'iterations': iterations, 'delay': delay}
-            response = self.session.get(f"{self.base_url}/api/performance/load", params=params)
-            if response.status_code == 200:
-                return response.json()
-        except Exception as e:
-            print(f"負載測試失敗: {e}")
+        params = {'iterations': iterations, 'delay': delay}
+        response = self._get("/api/performance/load", params=params)
+        if response is None:
+            return None
+        if response.status_code == 404:
+            print("負載測試 API 未啟用，跳過此測試")
+            return {"skipped": True}
+        if response.status_code == 200:
+            return response.json()
         return None
     
     def run_benchmark_test(self) -> Optional[Dict]:
         """運行基準測試"""
-        try:
-            response = self.session.get(f"{self.base_url}/api/performance/benchmark")
-            if response.status_code == 200:
-                return response.json()
-        except Exception as e:
-            print(f"基準測試失敗: {e}")
+        response = self._get("/api/performance/benchmark")
+        if response is None:
+            return None
+        if response.status_code == 404:
+            print("基準測試 API 未啟用，跳過此測試")
+            return {"skipped": True}
+        if response.status_code == 200:
+            return response.json()
         return None
     
     def monitor_dashboard(self, duration: int = 60) -> List[Dict]:
@@ -78,18 +121,20 @@ class DaiSpanPerformanceTester:
         print(f"開始監控 {duration} 秒...")
         
         while time.time() - start_time < duration:
-            try:
-                response = self.session.get(f"{self.base_url}/api/monitor/dashboard")
-                if response.status_code == 200:
-                    data = response.json()
-                    data['collection_time'] = time.time()
-                    results.append(data)
-                    print(f"記憶體: {data['system']['freeHeap']:,} bytes, "
-                          f"運行時間: {data['system']['uptime']} 秒")
-                else:
-                    print(f"監控請求失敗: {response.status_code}")
-            except Exception as e:
-                print(f"監控錯誤: {e}")
+            response = self._get("/api/monitor/dashboard")
+            if response is None:
+                break
+            if response.status_code == 404:
+                print("儀表板 API 未啟用，結束監控")
+                break
+            if response.status_code == 200:
+                data = response.json()
+                data['collection_time'] = time.time()
+                results.append(data)
+                print(f"記憶體: {data['system']['freeHeap']:,} bytes, "
+                      f"運行時間: {data['system']['uptime']} 秒")
+            else:
+                print(f"監控請求失敗: {response.status_code}")
             
             time.sleep(5)  # 每5秒採樣一次
         
@@ -106,22 +151,30 @@ class DaiSpanPerformanceTester:
         def worker():
             local_results = []
             while time.time() - start_time < duration:
-                try:
-                    request_start = time.time()
-                    response = self.session.get(f"{self.base_url}/api/memory/stats")
-                    request_time = time.time() - request_start
-                    
-                    local_results.append({
-                        'success': response.status_code == 200,
-                        'response_time': request_time,
-                        'timestamp': time.time()
-                    })
-                except Exception as e:
+                request_start = time.time()
+                response = self._get("/api/memory/stats")
+                if response is None:
                     local_results.append({
                         'success': False,
-                        'error': str(e),
+                        'error': 'request failed',
                         'timestamp': time.time()
                     })
+                    break
+                if response.status_code == 404:
+                    local_results.append({
+                        'success': False,
+                        'error': 'api disabled',
+                        'timestamp': time.time()
+                    })
+                    self.minimal_build = True
+                    break
+                
+                request_time = time.time() - request_start
+                local_results.append({
+                    'success': response.status_code == 200,
+                    'response_time': request_time,
+                    'timestamp': time.time()
+                })
                 
                 time.sleep(0.1)  # 100ms間隔
             
@@ -162,12 +215,15 @@ class DaiSpanPerformanceTester:
                 'requests_per_second': len(successful_requests) / duration
             }
         else:
+            error = '所有請求都失敗了'
+            if any(r.get('error') == 'api disabled' for r in all_results):
+                error = 'api disabled'
             return {
                 'total_requests': len(all_results),
                 'successful_requests': 0,
                 'failed_requests': len(failed_requests),
                 'success_rate': 0,
-                'error': '所有請求都失敗了'
+                'error': error
             }
     
     def comprehensive_test(self) -> Dict:
@@ -178,7 +234,8 @@ class DaiSpanPerformanceTester:
         
         results = {
             'timestamp': datetime.now().isoformat(),
-            'device_url': self.base_url
+            'device_url': self.base_url,
+            'minimal_build': self.minimal_build
         }
         
         # 1. 連接測試
@@ -188,26 +245,39 @@ class DaiSpanPerformanceTester:
             results['connection'] = False
             return results
         print("✅ 設備連接成功")
+        if self.minimal_build:
+            print("ℹ️ 偵測到極簡生產版，部分性能 API 可能未啟用")
         results['connection'] = True
         
         # 2. 記憶體統計
         print("\n2. 獲取記憶體統計...")
         memory_stats = self.get_memory_stats()
         if memory_stats:
-            print(f"✅ 可用記憶體: {memory_stats['heap']['free']:,} bytes")
-            print(f"✅ 記憶體碎片化: {memory_stats['heap']['fragmentation']}%")
-            print(f"✅ 記憶體壓力: {memory_stats['memoryPressure']['name']}")
+            heap = memory_stats.get('heap', {})
+            pressure = memory_stats.get('memoryPressure', {})
+            free_heap = heap.get('free')
+            fragmentation = heap.get('fragmentation')
+            if free_heap is not None:
+                print(f"✅ 可用記憶體: {free_heap:,} bytes")
+            if fragmentation is not None:
+                print(f"✅ 記憶體碎片化: {fragmentation}%")
+            if isinstance(pressure, dict):
+                print(f"✅ 記憶體壓力: {pressure.get('name', '未知')}")
             results['memory_stats'] = memory_stats
         else:
-            print("❌ 記憶體統計獲取失敗")
+            print("⚠️ 無法取得詳細記憶體統計 (API 未啟用或離線)")
+            results['memory_stats'] = None
         
         # 3. 基本性能測試
         print("\n3. 執行基本性能測試...")
         perf_test = self.run_performance_test()
-        if perf_test:
+        if perf_test and not perf_test.get('skipped'):
             print(f"✅ 記憶體分配測試: {perf_test['allocationTest']['duration']} ms")
             print(f"✅ 流式響應測試: {perf_test['streamingTest']['duration']} ms")
             print(f"✅ JSON生成測試: {perf_test['jsonTest']['duration']} ms")
+            results['performance_test'] = perf_test
+        elif perf_test and perf_test.get('skipped'):
+            print("ℹ️ 性能測試 API 未啟用，已跳過")
             results['performance_test'] = perf_test
         else:
             print("❌ 性能測試失敗")
@@ -215,11 +285,14 @@ class DaiSpanPerformanceTester:
         # 4. 負載測試
         print("\n4. 執行負載測試...")
         load_test = self.run_load_test(iterations=10, delay=50)
-        if load_test:
+        if load_test and not load_test.get('skipped'):
             summary = load_test['summary']
             print(f"✅ 總時間: {summary['totalTime']} ms")
             print(f"✅ 平均時間: {summary['avgTime']} ms")
             print(f"✅ 記憶體變化: {summary['heapVariation']:,} bytes")
+            results['load_test'] = load_test
+        elif load_test and load_test.get('skipped'):
+            print("ℹ️ 負載測試 API 未啟用，已跳過")
             results['load_test'] = load_test
         else:
             print("❌ 負載測試失敗")
@@ -227,10 +300,13 @@ class DaiSpanPerformanceTester:
         # 5. 基準測試
         print("\n5. 執行基準測試...")
         benchmark = self.run_benchmark_test()
-        if benchmark:
+        if benchmark and not benchmark.get('skipped'):
             improvement = benchmark['improvement']
             print(f"✅ 時間改善: {improvement['timePercent']:.2f}%")
             print(f"✅ 記憶體改善: {improvement['memoryPercent']:.2f}%")
+            results['benchmark'] = benchmark
+        elif benchmark and benchmark.get('skipped'):
+            print("ℹ️ 基準測試 API 未啟用，已跳過")
             results['benchmark'] = benchmark
         else:
             print("❌ 基準測試失敗")
@@ -249,6 +325,9 @@ class DaiSpanPerformanceTester:
                 'avg_heap': sum(heap_values) // len(heap_values),
                 'heap_stability': max(heap_values) - min(heap_values)
             }
+        elif self.minimal_build:
+            print("ℹ️ 儀表板 API 未啟用，監控測試略過")
+            results['monitoring'] = {'skipped': True}
         else:
             print("❌ 監控測試失敗")
         
@@ -260,6 +339,9 @@ class DaiSpanPerformanceTester:
             print(f"✅ 平均響應時間: {stress_results['avg_response_time']:.3f} 秒")
             print(f"✅ 每秒請求數: {stress_results['requests_per_second']:.2f}")
             results['stress_test'] = stress_results
+        elif stress_results.get('error') == 'api disabled':
+            print("ℹ️ 壓力測試 API 未啟用，已跳過")
+            results['stress_test'] = {'skipped': True}
         else:
             print("❌ 壓力測試失敗")
             results['stress_test'] = stress_results
@@ -278,77 +360,107 @@ class DaiSpanPerformanceTester:
         # 連接狀態
         report.append("連接狀態:")
         report.append(f"  設備連線: {'✅ 成功' if results.get('connection') else '❌ 失敗'}")
+        if results.get('minimal_build'):
+            report.append("  備註: 偵測到極簡生產版 (性能 API 未啟用)")
         report.append("")
         
         # 記憶體狀態
-        if 'memory_stats' in results:
-            memory = results['memory_stats']
+        memory = results.get('memory_stats')
+        if memory:
+            heap = memory.get('heap', {})
+            pressure = memory.get('memoryPressure', {})
             report.append("記憶體狀態:")
-            report.append(f"  可用記憶體: {memory['heap']['free']:,} bytes")
-            report.append(f"  最大分配: {memory['heap']['maxAlloc']:,} bytes")
-            report.append(f"  碎片化率: {memory['heap']['fragmentation']}%")
-            report.append(f"  記憶體壓力: {memory['memoryPressure']['name']}")
+            if 'free' in heap:
+                report.append(f"  可用記憶體: {heap['free']:,} bytes")
+            if 'maxAlloc' in heap:
+                report.append(f"  最大分配: {heap['maxAlloc']:,} bytes")
+            if 'fragmentation' in heap:
+                report.append(f"  碎片化率: {heap['fragmentation']}%")
+            if isinstance(pressure, dict):
+                report.append(f"  記憶體壓力: {pressure.get('name', '未知')}")
+            if memory.get('source') == 'stats':
+                report.append("  (詳細記憶體 API 未啟用，使用 /api/memory/stats)")
+            report.append("")
+        else:
+            report.append("記憶體狀態: ⚠️ 無法取得 (API 未啟用)")
             report.append("")
         
         # 性能測試結果
-        if 'performance_test' in results:
-            perf = results['performance_test']
+        perf = results.get('performance_test')
+        if perf and not perf.get('skipped'):
             report.append("基本性能測試:")
             report.append(f"  記憶體分配: {perf['allocationTest']['duration']} ms")
             report.append(f"  流式響應: {perf['streamingTest']['duration']} ms")
             report.append(f"  JSON生成: {perf['jsonTest']['duration']} ms")
             report.append(f"  總體耗時: {perf['overall']['totalDuration']} ms")
             report.append("")
+        elif perf and perf.get('skipped'):
+            report.append("基本性能測試: ℹ️ API 未啟用 (跳過)")
+            report.append("")
         
         # 基準測試結果
-        if 'benchmark' in results:
-            benchmark = results['benchmark']
+        benchmark = results.get('benchmark')
+        if benchmark and not benchmark.get('skipped'):
             report.append("基準測試對比:")
             report.append(f"  傳統方法耗時: {benchmark['traditional']['duration']} ms")
             report.append(f"  優化方法耗時: {benchmark['optimized']['duration']} ms")
             report.append(f"  時間改善: {benchmark['improvement']['timePercent']:.2f}%")
             report.append(f"  記憶體改善: {benchmark['improvement']['memoryPercent']:.2f}%")
             report.append("")
+        elif benchmark and benchmark.get('skipped'):
+            report.append("基準測試對比: ℹ️ API 未啟用 (跳過)")
+            report.append("")
         
         # 負載測試結果
-        if 'load_test' in results:
-            load = results['load_test']['summary']
+        load_test = results.get('load_test')
+        if load_test and not load_test.get('skipped'):
+            summary = load_test['summary']
             report.append("負載測試結果:")
-            report.append(f"  迭代次數: {results['load_test']['iterations']}")
-            report.append(f"  總耗時: {load['totalTime']} ms")
-            report.append(f"  平均耗時: {load['avgTime']} ms")
-            report.append(f"  記憶體變化: {load['heapVariation']:,} bytes")
+            report.append(f"  迭代次數: {load_test['iterations']}")
+            report.append(f"  總耗時: {summary['totalTime']} ms")
+            report.append(f"  平均耗時: {summary['avgTime']} ms")
+            report.append(f"  記憶體變化: {summary['heapVariation']:,} bytes")
+            report.append("")
+        elif load_test and load_test.get('skipped'):
+            report.append("負載測試結果: ℹ️ API 未啟用 (跳過)")
             report.append("")
         
         # 壓力測試結果
-        if 'stress_test' in results:
-            stress = results['stress_test']
+        stress = results.get('stress_test')
+        if stress and not stress.get('skipped'):
             report.append("壓力測試結果:")
             report.append(f"  總請求數: {stress['total_requests']}")
-            report.append(f"  成功率: {stress['success_rate']:.2f}%")
+            report.append(f"  成功率: {stress.get('success_rate', 0):.2f}%")
             if 'avg_response_time' in stress:
                 report.append(f"  平均響應時間: {stress['avg_response_time']:.3f} 秒")
                 report.append(f"  最小響應時間: {stress['min_response_time']:.3f} 秒")
                 report.append(f"  最大響應時間: {stress['max_response_time']:.3f} 秒")
-                report.append(f"  每秒請求數: {stress['requests_per_second']:.2f}")
+                report.append(f"  每秒請求數: {stress.get('requests_per_second', 0):.2f}")
+            report.append("")
+        elif stress and stress.get('skipped'):
+            report.append("壓力測試結果: ℹ️ API 未啟用 (跳過)")
             report.append("")
         
         # 監控結果
-        if 'monitoring' in results:
-            monitor = results['monitoring']
+        monitor = results.get('monitoring')
+        if monitor and not monitor.get('skipped'):
             report.append("記憶體監控結果:")
             report.append(f"  採樣次數: {monitor['samples']}")
             report.append(f"  記憶體範圍: {monitor['min_heap']:,} - {monitor['max_heap']:,} bytes")
             report.append(f"  平均記憶體: {monitor['avg_heap']:,} bytes")
             report.append(f"  記憶體穩定性: {monitor['heap_stability']:,} bytes 變化")
             report.append("")
+        elif monitor and monitor.get('skipped'):
+            report.append("記憶體監控結果: ℹ️ 儀表板 API 未啟用 (跳過)")
+            report.append("")
         
         # 評估結論
         report.append("評估結論:")
         
         # 記憶體效率評估
-        if 'memory_stats' in results:
-            fragmentation = results['memory_stats']['heap']['fragmentation']
+        if results.get('memory_stats'):
+            heap = results['memory_stats'].get('heap', {})
+            fragmentation = heap.get('fragmentation', 0)
             if fragmentation < 10:
                 report.append("  ✅ 記憶體碎片化良好 (< 10%)")
             elif fragmentation < 20:
@@ -357,8 +469,9 @@ class DaiSpanPerformanceTester:
                 report.append("  ❌ 記憶體碎片化嚴重 (> 20%)")
         
         # 性能改善評估
-        if 'benchmark' in results:
-            time_improvement = results['benchmark']['improvement']['timePercent']
+        benchmark = results.get('benchmark')
+        if benchmark and not benchmark.get('skipped'):
+            time_improvement = benchmark['improvement']['timePercent']
             if time_improvement > 50:
                 report.append("  ✅ 時間性能顯著改善 (> 50%)")
             elif time_improvement > 20:
@@ -367,8 +480,9 @@ class DaiSpanPerformanceTester:
                 report.append("  ⚠️ 時間性能改善有限 (< 20%)")
         
         # 系統穩定性評估
-        if 'stress_test' in results:
-            success_rate = results['stress_test']['success_rate']
+        stress = results.get('stress_test')
+        if stress and not stress.get('skipped'):
+            success_rate = stress.get('success_rate', 0)
             if success_rate > 95:
                 report.append("  ✅ 系統穩定性優秀 (> 95%)")
             elif success_rate > 90:

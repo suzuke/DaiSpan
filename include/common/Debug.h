@@ -2,13 +2,8 @@
 
 #include "HomeSpan.h"
 
-// 條件編譯：遠端調試功能前向聲明
-#if defined(ENABLE_REMOTE_DEBUG) || defined(ENABLE_LIGHTWEIGHT_DEBUG)
-void remoteWebLog(const String& message);
-#else
-// 生產模式：空實現
-inline void remoteWebLog(const String& message) {}
-#endif
+// 遠端調試已移除，保留空實現供日誌宏調用
+inline void remoteWebLog(const String& message) { (void)message; }
 
 #define DEBUG_MODE
 
@@ -35,7 +30,7 @@ inline void remoteWebLog(const String& message) {}
 
 // 優化的緩衝區大小和內存管理
 #define DEBUG_BUFFER_SIZE 256
-#define DEBUG_MAX_REMOTE_LOGS 10  // 遠端日誌最大緩存數量
+#define DEBUG_MAX_REMOTE_LOGS 10  // 遠端日誌最大緩存數量（保留常數以維持兼容）
 
 // 優化的日誌宏 - 避免重複的內存分配
 #if DEBUG_LEVEL >= DEBUG_ERROR
@@ -81,3 +76,11 @@ inline void remoteWebLog(const String& message) {}
 #else
 #define DEBUG_VERBOSE_PRINT(...) do {} while(0)
 #endif
+
+// 遠端日誌相關巨集改為空實現
+#define REMOTE_LOG_INFO(component, message) do { (void)(component); (void)(message); } while(0)
+#define REMOTE_LOG_WARN(component, message) do { (void)(component); (void)(message); } while(0)
+#define REMOTE_LOG_ERROR(component, message) do { (void)(component); (void)(message); } while(0)
+#define REMOTE_LOG_HOMEKIT_OP(operation, service, oldVal, newVal, success, error) \
+    do { (void)(operation); (void)(service); (void)(oldVal); (void)(newVal); (void)(success); (void)(error); } while(0)
+#define REMOTE_WEBLOG(message) do { (void)(message); } while(0)

@@ -22,9 +22,7 @@ def test_device(device_ip, port=80):
     pages = [
         ("/", "主頁"),
         ("/wifi", "WiFi設定"),
-        ("/homekit", "HomeKit設定"),
-        ("/simulation-toggle", "模擬切換"),
-        ("/ota", "OTA更新")
+        ("/homekit", "HomeKit設定")
     ]
     
     success_count = 0

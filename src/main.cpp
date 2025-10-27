@@ -1,11 +1,8 @@
 // DaiSpan 智能恆溫器系統
-// 基於事件驅動架構的現代化智能家居解決方案
+// 精簡版架構：專注 HomeKit + Wi-Fi + OTA 核心功能
 
 #include "HomeSpan.h"
 #include "controller/ThermostatController.h"
-#ifndef DISABLE_MOCK_CONTROLLER
-#include "controller/MockThermostatController.h"
-#endif
 #include "device/ThermostatDevice.h"
 #include "device/FanDevice.h"
 #include "protocol/S21Protocol.h"
@@ -15,22 +12,14 @@
 #include "common/Config.h"
 #include "common/WiFiManager.h"
 #include "common/SystemManager.h"
+#ifdef ENABLE_OTA_UPDATE
 #include <ArduinoOTA.h>
-#include "common/OTAManager.h"
+#endif
 #include "WiFi.h"
 #include "WebServer.h"
 #include "common/WebUI.h"
 #include "common/WebTemplates.h"
-#include "common/RemoteDebugger.h"  // 自動處理條件編譯：調試環境=實際功能，生產環境=空實現
-#include "common/DebugWebClient.h"
 #include "common/MemoryOptimization.h"
-
-// 核心架構組件
-#include "core/EventSystem.h"
-#include "core/ServiceContainer.h"
-#include "domain/ThermostatDomain.h"
-#include "domain/ConfigDomain.h"
-#include <Preferences.h>
 
 // 硬體定義
 #if defined(ESP32C3_SUPER_MINI)
@@ -47,9 +36,6 @@
 // 核心系統全域變數
 std::unique_ptr<ACProtocolFactory> protocolFactory = nullptr;
 IThermostatControl* thermostatController = nullptr;
-#ifndef DISABLE_MOCK_CONTROLLER
-MockThermostatController* mockController = nullptr;
-#endif
 ThermostatDevice* thermostatDevice = nullptr;
 FanDevice* fanDevice = nullptr;
 SpanAccessory* accessory = nullptr;
@@ -59,7 +45,6 @@ bool homeKitInitialized = false;
 // 配置和管理器
 ConfigManager configManager;
 WiFiManager* wifiManager = nullptr;
-OTAManager* otaManager = nullptr;
 SystemManager* systemManager = nullptr;
 
 // WebServer
@@ -72,25 +57,95 @@ std::unique_ptr<MemoryOptimization::WebPageGenerator> pageGenerator = nullptr;
 std::unique_ptr<MemoryOptimization::MemoryManager> memoryManager = nullptr;
 
 // 核心架構組件
-DaiSpan::Core::EventPublisher* g_eventBus = nullptr;
-DaiSpan::Core::ServiceContainer* g_serviceContainer = nullptr;
-Preferences g_preferences;
-bool modernArchitectureEnabled = false;
-
 // 系統啟動時間追蹤
 unsigned long systemStartTime = 0;
+
+// 共用樣式/版面輔助
+static const char CONFIG_PAGE_STYLE[] PROGMEM = R"rawliteral(
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:20px;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh;}
+.config-page{max-width:960px;margin:0 auto;}
+.page-header{text-align:center;color:#fff;margin-bottom:20px;}
+.page-header h1{margin:0;font-size:2.2em;text-shadow:0 2px 4px rgba(0,0,0,0.3);}
+.page-header p{margin:8px 0 0;font-size:1em;opacity:0.9;}
+.config-panel{background:#fff;border-radius:18px;padding:24px;box-shadow:0 12px 30px rgba(0,0,0,0.12);display:flex;flex-direction:column;gap:24px;}
+.summary-block,.action-block{background:#f8f9fa;border-radius:14px;padding:20px;}
+.summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;}
+.summary-card{background:#fff;border-radius:12px;padding:16px;border:1px solid #e5e7eb;}
+.summary-card h3{margin:0 0 12px;color:#0f172a;font-size:1.05em;}
+.summary-item{display:flex;justify-content:space-between;margin:4px 0;font-size:0.95em;color:#475569;}
+.summary-badge{display:inline-block;padding:4px 10px;border-radius:999px;font-size:0.8em;}
+.badge-good{background:#dcfce7;color:#166534;}
+.badge-warn{background:#fef9c3;color:#854d0e;}
+.badge-bad{background:#fee2e2;color:#b91c1c;}
+.action-group{background:#fff;border-radius:12px;padding:18px;border:1px solid #e5e7eb;margin-bottom:16px;}
+.action-group h3{margin:0 0 10px;color:#0f172a;}
+.action-hint{color:#64748b;font-size:0.9em;margin-bottom:10px;}
+.form-group{margin:15px 0;}
+.form-group label{display:block;font-weight:600;margin-bottom:6px;color:#0f172a;}
+.form-group input{width:100%;padding:12px;border:1px solid #d0d7e2;border-radius:8px;font-size:0.95em;box-sizing:border-box;}
+.form-group input:focus{outline:none;border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,0.15);}
+.button{display:inline-flex;align-items:center;justify-content:center;padding:12px 20px;border:none;border-radius:10px;background:#2563eb;color:#fff;font-weight:600;text-decoration:none;cursor:pointer;margin:6px 4px 0 0;transition:transform 0.15s,box-shadow 0.15s;}
+.button:hover{transform:translateY(-1px);box-shadow:0 8px 20px rgba(37,99,235,0.25);}
+.button.secondary{background:#475569;}
+.button.success{background:#16a34a;}
+.button.warning{background:#f59e0b;color:#1f2937;}
+.button.danger{background:#dc2626;}
+.button.ghost{background:transparent;color:#2563eb;border:1px solid rgba(37,99,235,0.4);}
+.tag{display:inline-flex;align-items:center;padding:4px 10px;border-radius:999px;font-size:0.8em;background:#e2e8f0;color:#1e293b;margin-right:6px;}
+.tag span{font-weight:600;margin-left:6px;}
+.network-list{max-height:220px;overflow-y:auto;margin-top:10px;border:1px solid #e2e8f0;border-radius:10px;padding:6px;background:#fff;}
+.network-item{display:flex;justify-content:space-between;padding:10px;border-radius:8px;margin:4px 0;cursor:pointer;border:1px solid transparent;}
+.network-item:hover{background:#eff6ff;}
+.network-item.selected{border-color:#2563eb;background:#dbeafe;}
+.signal-strong{color:#15803d;}
+.signal-medium{color:#b45309;}
+.signal-weak{color:#b91c1c;}
+.loading{text-align:center;padding:16px;color:#475569;display:none;}
+.homekit-qr{border:2px dashed #2563eb;border-radius:12px;padding:16px;margin:10px 0;background:#fff;}
+.footer-link{text-align:center;margin-top:14px;}
+.footer-link a{color:#e0e7ff;text-decoration:none;font-weight:600;}
+.footer-link a:hover{text-decoration:underline;}
+@media (max-width:768px){
+  .config-panel{padding:18px;}
+  .summary-grid{grid-template-columns:1fr;}
+}
+)rawliteral";
+
+static String buildConfigPage(const char* title,
+                              const String& summaryContent,
+                              const String& actionContent,
+                              const String& subtitle = "",
+                              const String& extraScript = "") {
+    String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
+    html += "<title>" + String(title) + "</title>";
+    html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+    html += "<style>";
+    html += CONFIG_PAGE_STYLE;
+    html += "</style></head><body>";
+    html += "<div class='config-page'>";
+    html += "<header class='page-header'><h1>" + String(title) + "</h1>";
+    if (subtitle.length() > 0) {
+        html += "<p>" + subtitle + "</p>";
+    }
+    html += "</header>";
+    html += "<section class='config-panel'>";
+    html += "<div class='summary-block'>" + summaryContent + "</div>";
+    html += "<div class='action-block'>" + actionContent + "</div>";
+    html += "</section>";
+    html += "<div class='footer-link'><a href='/'>← 返回主頁</a></div>";
+    html += "</div>";
+    if (extraScript.length() > 0) {
+        html += extraScript;
+    }
+    html += "</body></html>";
+    return html;
+}
 
 // 函數聲明
 void safeRestart();
 void initializeMemoryOptimization();
 void generateOptimizedMainPage();
 void generateUnifiedMainPage();
-#ifndef DISABLE_SIMULATION_MODE
-void generateOptimizedSimulationPage();
-#endif
-void setupModernArchitecture();
-void setupCoreEventListeners();
-void processCoreEvents();
 void initializeMonitoring();
 void initializeHomeKit();
 void initializeHardware();
@@ -112,18 +167,6 @@ void safeRestart() {
     }
     
     // 核心架構清理
-    if (g_serviceContainer) {
-        DEBUG_INFO_PRINT("[Core] 清理服務容器\n");
-        delete g_serviceContainer;
-        g_serviceContainer = nullptr;
-    }
-    
-    if (g_eventBus) {
-        DEBUG_INFO_PRINT("[Core] 清理事件總線\n");
-        delete g_eventBus;
-        g_eventBus = nullptr;
-    }
-    
     delay(500);
     ESP.restart();
 }
@@ -138,15 +181,24 @@ void initializeMemoryOptimization() {
     DEBUG_INFO_PRINT("[Main] 初始化前可用記憶體: %u bytes\n", availableMemory);
     
     try {
-        // 總是創建記憶體管理器 (輕量級)
-        memoryManager = std::make_unique<MemoryOptimization::MemoryManager>();
+        const auto& profile = MemoryOptimization::RefreshActiveMemoryProfile();
+        String profileDesc = MemoryOptimization::DescribeProfile(profile);
+        DEBUG_INFO_PRINT("[Main] 選擇記憶體配置檔: %s\n", profileDesc.c_str());
         
-        // 只在記憶體充足時創建頁面生成器
-        if (availableMemory >= 70000) {
-            pageGenerator = std::make_unique<MemoryOptimization::WebPageGenerator>();
-            DEBUG_INFO_PRINT("[Main] 完整記憶體優化功能已啟用\n");
-        } else {
-            DEBUG_WARN_PRINT("[Main] 記憶體不足 (%u bytes)，使用精簡模式\n", availableMemory);
+        // 總是創建記憶體管理器 (輕量級)
+        memoryManager = std::make_unique<MemoryOptimization::MemoryManager>(profile);
+        
+        // 嘗試建立頁面生成器，即使記憶體緊張也盡力提供最小功能
+        try {
+            pageGenerator = std::make_unique<MemoryOptimization::WebPageGenerator>(profile);
+            if (availableMemory < profile.thresholds.medium) {
+                DEBUG_WARN_PRINT("[Main] 記憶體僅有 %u bytes，頁面生成器將以精簡模式運作\n", availableMemory);
+            } else {
+                DEBUG_INFO_PRINT("[Main] 完整記憶體優化功能已啟用\n");
+            }
+        } catch (const std::bad_alloc&) {
+            pageGenerator.reset();
+            DEBUG_ERROR_PRINT("[Main] 記憶體不足，無法建立頁面生成器 (僅提供 API 功能)\n");
         }
         
         // 檢查初始記憶體狀態
@@ -183,7 +235,14 @@ void generateOptimizedMainPage() {
     try {
         // 使用 StreamingResponseBuilder 生成主頁面
         MemoryOptimization::StreamingResponseBuilder stream;
-        stream.begin(webServer);
+        if (memoryManager && memoryManager->isEmergencyMode()) {
+            webServer->send(200, "text/html",
+                "<html><body><h1>系統記憶體不足</h1><p>目前僅保留核心功能，請稍後再試或重新啟動設備。</p><p><a href='/' style='display:inline-block;margin-top:10px;'>返回主頁</a></p></body></html>");
+            return;
+        }
+
+        const auto& profile = MemoryOptimization::GetActiveMemoryProfile();
+        stream.begin(webServer, "text/html", profile.streamingChunkSize);
         
         // HTML頭部
         stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
@@ -200,6 +259,14 @@ void generateOptimizedMainPage() {
         // 記憶體狀態卡片
         stream.append("<div class='status-card'>");
         stream.append("<h3>🔧 系統狀態</h3>");
+        stream.append("<div class='status-item'>");
+        stream.append("<span class='status-label'>記憶體配置檔:</span>");
+        stream.appendf("<span class='status-value'>%s</span>", profile.name.c_str());
+        stream.append("</div>");
+        stream.append("<div class='status-item'>");
+        stream.append("<span class='status-label'>配置說明:</span>");
+        stream.appendf("<span class='status-value'>%s</span>", profile.selectionReason.c_str());
+        stream.append("</div>");
         
         // 記憶體信息（合併顯示）
         stream.appendf("<div class='status-item'>");
@@ -250,20 +317,24 @@ void generateOptimizedMainPage() {
             stream.appendf("<span class='status-value'>%02lu:%02lu:%02lu</span>", hours, minutes % 60, seconds % 60);
         }
         stream.append("</div>");
-        
-#ifndef PRODUCTION_BUILD
-        // 事件系統統計（開發模式）
-        if (modernArchitectureEnabled && g_eventBus) {
+
+        if (systemManager) {
+            uint8_t pressureLevel = systemManager->getMemoryPressureLevel();
+            const char* pressureClass = (pressureLevel == 0) ? "status-value" : (pressureLevel == 1 ? "status-warning" : "status-error");
+            String pressureText = systemManager->getMemoryPressureText();
             stream.append("<div class='status-item'>");
-            stream.append("<span class='status-label'>事件統計:</span>");
-            stream.appendf("<span class='status-value'>佇列:%zu 訂閱:%zu 已處理:%zu</span>",
-                          g_eventBus->getQueueSize(),
-                          g_eventBus->getSubscriptionCount(),
-                          g_eventBus->getProcessedEventCount());
+            stream.append("<span class='status-label'>記憶體壓力:</span>");
+            stream.appendf("<span class='%s'>%s</span>", pressureClass, pressureText.c_str());
+            stream.append("</div>");
+
+            stream.append("<div class='status-item'>");
+            stream.append("<span class='status-label'>排程負載:</span>");
+            stream.appendf("<span class='status-value'>%u 任務 / %.2f ms</span>",
+                           systemManager->getSchedulerTaskCount(),
+                           systemManager->getSchedulerDurationUs() / 1000.0f);
             stream.append("</div>");
         }
-#endif
-        
+
         // 恆溫器狀態
         if (thermostatController) {
             stream.append("<div class='status-item'>");
@@ -301,18 +372,6 @@ void generateOptimizedMainPage() {
         stream.append("<a href='/wifi' class='button'>WiFi 設定</a>");
         stream.append("<a href='/homekit' class='button'>HomeKit 設定</a>");
         
-#ifndef DISABLE_SIMULATION_MODE
-        // 智能模擬控制按鈕
-        if (configManager.getSimulationMode()) {
-            if (mockController) {
-                stream.append("<a href='/simulation' class='button'>🔧 模擬控制</a>");
-            } else {
-                stream.append("<a href='/simulation-toggle' class='button' style='background:#ffc107;'>⚠️ 模擬控制 (重新初始化)</a>");
-            }
-        } else {
-            stream.append("<a href='/simulation-toggle' class='button' style='background:#28a745;'>🔧 啟用模擬模式</a>");
-        }
-#endif
         
 #ifndef PRODUCTION_BUILD
         stream.append("<a href='/api/memory/cleanup' class='button secondary'>記憶體清理</a>");
@@ -342,12 +401,10 @@ void generateOptimizedMainPage() {
  */
 void generateUnifiedMainPage() {
     try {
-        // 設置HTTP頭部
         webServer->sendHeader("Cache-Control", "no-cache, must-revalidate");
         webServer->sendHeader("Pragma", "no-cache");
         webServer->sendHeader("Connection", "close");
         
-        // HomeKit配對狀態檢查
         if (homeKitPairingActive) {
             String pairingHtml = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
             pairingHtml += "<title>DaiSpan - HomeKit配對中</title>";
@@ -372,122 +429,116 @@ void generateUnifiedMainPage() {
             return;
         }
         
-        // 統一的現代化主頁面設計
         String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
         html += "<title>DaiSpan 智能恆溫器</title>";
         html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
         html += "<style>";
-        
-        // 現代化CSS樣式
         html += "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:20px;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh;}";
-        html += ".container{max-width:800px;margin:0 auto;}";
-        html += ".header{text-align:center;color:white;margin-bottom:30px;}";
-        html += ".header h1{font-size:2.5em;margin:0;text-shadow:0 2px 4px rgba(0,0,0,0.3);}";
-        html += ".header p{font-size:1.1em;opacity:0.9;margin:10px 0;}";
-        
-        // 卡片樣式
-        html += ".card{background:white;padding:25px;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.1);margin-bottom:20px;transition:transform 0.2s;}";
-        html += ".card:hover{transform:translateY(-2px);}";
-        html += ".card h3{margin:0 0 20px 0;color:#333;border-bottom:2px solid #007bff;padding-bottom:8px;}";
-        
-        // 狀態顯示
-        html += ".status-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:15px;margin-bottom:20px;}";
-        html += ".status-item{padding:15px;background:#f8f9fa;border-radius:8px;border-left:4px solid #007bff;}";
-        html += ".status-label{font-weight:bold;color:#495057;display:block;margin-bottom:5px;}";
-        html += ".status-value{font-size:1.2em;color:#28a745;}";
-        html += ".status-warning{color:#ffc107;}";
-        html += ".status-error{color:#dc3545;}";
-        
-        // 導航按鈕
-        html += ".nav-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:15px;}";
-        html += ".nav-btn{display:block;padding:20px;text-decoration:none;background:#007bff;color:white;border-radius:8px;text-align:center;transition:all 0.2s;font-weight:bold;}";
-        html += ".nav-btn:hover{background:#0056b3;transform:translateY(-1px);}";
-        html += ".nav-btn.secondary{background:#6c757d;}";
-        html += ".nav-btn.success{background:#28a745;}";
-        html += ".nav-btn.warning{background:#ffc107;color:#212529;}";
-        
-        // 響應式設計
-        html += "@media (max-width:768px){.status-grid,.nav-grid{grid-template-columns:1fr;}}";
-        html += "</style>";
-        html += "</head><body>";
-        
+        html += ".container{max-width:1100px;margin:0 auto;color:#0f172a;}";
+        html += ".header{text-align:center;color:white;margin-bottom:25px;}";
+        html += ".header h1{font-size:2.6em;margin:0;text-shadow:0 8px 24px rgba(0,0,0,0.25);}";
+        html += ".header p{margin:8px 0 0;opacity:0.85;}";
+        html += ".layout-grid{display:grid;grid-template-columns:2fr 1fr;gap:20px;align-items:start;}";
+        html += ".panel{background:#fff;border-radius:20px;padding:26px;box-shadow:0 18px 40px rgba(15,23,42,0.18);}";
+        html += ".panel-title{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;font-size:1.1em;font-weight:600;}";
+        html += ".badge{padding:4px 10px;border-radius:999px;font-size:0.82em;}";
+        html += ".badge.good{background:#dcfce7;color:#166534;}";
+        html += ".badge.warn{background:#fef9c3;color:#854d0e;}";
+        html += ".badge.bad{background:#fee2e2;color:#b91c1c;}";
+        html += ".status-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;}";
+        html += ".status-card{border:1px solid #e2e8f0;border-radius:16px;padding:18px;background:#f8fafc;}";
+        html += ".status-card h3{margin:0 0 12px;font-size:1.05em;color:#0f172a;}";
+        html += ".stat-row{display:flex;justify-content:space-between;font-size:0.95em;margin:4px 0;color:#475569;}";
+        html += ".stat-row span:last-child{font-weight:600;color:#0f172a;}";
+        html += ".action-grid{display:flex;flex-direction:column;gap:14px;}";
+        html += ".action-card{display:block;border:1px solid #e2e8f0;border-radius:16px;padding:18px;text-decoration:none;color:#0f172a;transition:transform 0.15s,box-shadow 0.15s;}";
+        html += ".action-card:hover{transform:translateY(-2px);box-shadow:0 12px 30px rgba(15,23,42,0.15);}";
+        html += ".action-card .action-title{font-weight:600;font-size:1.05em;margin-bottom:6px;}";
+        html += ".action-card .action-desc{color:#475569;font-size:0.9em;margin:0 0 10px;}";
+        html += ".action-card .action-link{font-weight:600;color:#2563eb;}";
+        html += ".tone-primary{border-left:5px solid #2563eb;}";
+        html += ".tone-success{border-left:5px solid #16a34a;}";
+        html += ".tone-warning{border-left:5px solid #f59e0b;}";
+        html += ".tone-neutral{border-left:5px solid #475569;}";
+        html += ".footer{text-align:center;margin-top:25px;color:rgba(255,255,255,0.85);}";
+        html += "@media(max-width:960px){.layout-grid{grid-template-columns:1fr;}}";
+        html += "</style></head><body>";
         html += "<div class='container'>";
-        html += "<div class='header'>";
-        html += "<h1>🌡️ DaiSpan</h1>";
-        html += "<p>智能恆溫器控制中心</p>";
-        html += "</div>";
+        html += "<div class='header'><h1>🌡️ DaiSpan</h1><p>智能恆溫器控制中心</p></div>";
         
-        // 系統狀態卡片
-        html += "<div class='card'>";
-        html += "<h3>📊 系統狀態</h3>";
-        html += "<div class='status-grid'>";
-        
-        // 記憶體狀態
         uint32_t freeHeap = ESP.getFreeHeap();
-        String memoryClass = (freeHeap > 100000) ? "status-value" : (freeHeap > 50000) ? "status-warning" : "status-error";
-        html += "<div class='status-item'>";
-        html += "<span class='status-label'>可用記憶體:</span>";
-        html += "<span class='" + memoryClass + "'>" + String(freeHeap/1024) + " KB</span>";
-        html += "</div>";
+        unsigned long uptimeSeconds = millis() / 1000;
+        unsigned long uptimeHours = uptimeSeconds / 3600;
+        unsigned long uptimeMinutes = (uptimeSeconds % 3600) / 60;
+        bool wifiConnected = WiFi.status() == WL_CONNECTED;
+        uint8_t pressureLevel = (systemManager != nullptr) ? systemManager->getMemoryPressureLevel() : 0;
+        String pressureText = (systemManager != nullptr) ? systemManager->getMemoryPressureText() : "未知";
+        String pressureBadge = (pressureLevel == 0) ? "badge good" : (pressureLevel == 1 ? "badge warn" : "badge bad");
+        uint16_t schedulerCount = (systemManager != nullptr) ? systemManager->getSchedulerTaskCount() : 0;
+        float schedulerDuration = (systemManager != nullptr) ? systemManager->getSchedulerDurationUs() / 1000.0f : 0.0f;
         
-        // WiFi狀態
-        html += "<div class='status-item'>";
-        html += "<span class='status-label'>WiFi連接:</span>";
-        if (WiFi.status() == WL_CONNECTED) {
-            html += "<span class='status-value'>" + WiFi.SSID() + " (" + String(WiFi.RSSI()) + " dBm)</span>";
+        String statusPanel = "<div class='status-cards'>";
+        statusPanel += "<div class='status-card'><h3>🖥️ 系統概況</h3>";
+        statusPanel += "<div class='stat-row'><span>可用記憶體</span><span>" + String(freeHeap / 1024) + " KB</span></div>";
+        statusPanel += "<div class='stat-row'><span>運行時間</span><span>" + String(uptimeHours) + "h " + String(uptimeMinutes) + "m</span></div>";
+        statusPanel += "<div class='stat-row'><span>排程任務</span><span>" + String(schedulerCount) + " / " + String(schedulerDuration, 2) + " ms</span></div>";
+        statusPanel += "<span class='" + pressureBadge + "'>記憶體壓力：" + pressureText + "</span>";
+        statusPanel += "</div>";
+        
+        statusPanel += "<div class='status-card'><h3>📶 網路狀態</h3>";
+        if (wifiConnected) {
+            statusPanel += "<div class='stat-row'><span>SSID</span><span>" + WiFi.SSID() + "</span></div>";
+            statusPanel += "<div class='stat-row'><span>信號</span><span>" + String(WiFi.RSSI()) + " dBm</span></div>";
+            statusPanel += "<div class='stat-row'><span>IP</span><span>" + WiFi.localIP().toString() + "</span></div>";
         } else {
-            html += "<span class='status-error'>未連接</span>";
+            statusPanel += "<div class='stat-row'><span>狀態</span><span>未連線</span></div>";
         }
+        statusPanel += "<div class='stat-row'><span>MAC</span><span>" + WiFi.macAddress() + "</span></div>";
+        statusPanel += "</div>";
+        
+        statusPanel += "<div class='status-card'><h3>🏠 HomeKit</h3>";
+        statusPanel += "<div class='stat-row'><span>服務</span><span>" + String(homeKitInitialized ? "運行中" : "未啟動") + "</span></div>";
+        statusPanel += "<div class='stat-row'><span>設備</span><span>" + String(deviceInitialized ? "已初始化" : "待機") + "</span></div>";
+        statusPanel += "<div class='stat-row'><span>配對狀態</span><span>" + String(homeKitPairingActive ? "配對中" : "待命") + "</span></div>";
+        statusPanel += "</div>";
+        statusPanel += "</div>";
+        
+        auto actionCard = [](const char* toneClass, const char* titleText, const char* description, const char* href) -> String {
+            String card = "<a class='action-card ";
+            card += toneClass;
+            card += "' href='";
+            card += href;
+            card += "'>";
+            card += "<div class='action-title'>";
+            card += titleText;
+            card += "</div><p class='action-desc'>";
+            card += description;
+            card += "</p><span class='action-link'>立即前往 →</span></a>";
+            return card;
+        };
+        
+        String actionPanel = "<div class='action-grid'>";
+        actionPanel += actionCard("tone-primary", "📶 WiFi 設定", "更新網路認證並掃描附近基地台。", "/wifi");
+        actionPanel += actionCard("tone-primary", "🏠 HomeKit 設定", "調整配對碼、裝置名稱與 QR ID。", "/homekit");
+        actionPanel += actionCard("tone-warning", "⬆️ OTA 更新", "透過瀏覽器上傳韌體 (如已啟用)。", "/ota");
+        actionPanel += actionCard("tone-neutral", "📋 系統狀態 API", "檢視 JSON 健康資訊。", "/api/health");
+        actionPanel += actionCard("tone-success", "📄 系統日誌", "監看近期事件與診斷輸出。", "/logs");
+        actionPanel += "</div>";
+        
+        html += "<div class='layout-grid'>";
+        html += "<section class='panel status-panel'><div class='panel-title'><span>狀態面板</span><span class='" + pressureBadge + "'>" + pressureText + "</span></div>";
+        html += statusPanel;
+        html += "</section>";
+        html += "<section class='panel action-panel'><div class='panel-title'><span>操作面板</span><span class='badge good'>核心入口</span></div>";
+        html += actionPanel;
+        html += "</section>";
         html += "</div>";
         
-        // IP地址
-        html += "<div class='status-item'>";
-        html += "<span class='status-label'>IP地址:</span>";
-        html += "<span class='status-value'>" + WiFi.localIP().toString() + "</span>";
-        html += "</div>";
-        
-        // 運行時間
-        unsigned long uptime = millis() / 1000;
-        unsigned long hours = uptime / 3600;
-        unsigned long minutes = (uptime % 3600) / 60;
-        unsigned long seconds = uptime % 60;
-        html += "<div class='status-item'>";
-        html += "<span class='status-label'>運行時間:</span>";
-        html += "<span class='status-value'>" + String(hours) + ":" + String(minutes) + ":" + String(seconds) + "</span>";
-        html += "</div>";
-        
-        html += "</div></div>";
-        
-        // 功能導航卡片
-        html += "<div class='card'>";
-        html += "<h3>🛠️ 功能選單</h3>";
-        html += "<div class='nav-grid'>";
-        html += "<a href='/wifi' class='nav-btn'>📶 WiFi設定</a>";
-        html += "<a href='/homekit' class='nav-btn'>🏠 HomeKit設定</a>";
-        html += "<a href='/api/health' class='nav-btn secondary'>📋 系統狀態</a>";
-        html += "<a href='/ota' class='nav-btn warning'>⬆️ OTA更新</a>";
-        html += "<a href='/logs' class='nav-btn success'>📄 系統日誌</a>";
-
-#ifndef DISABLE_SIMULATION_MODE
-        // 模擬控制按鈕（如果啟用）
-        if (configManager.getSimulationMode() && mockController) {
-            html += "<a href='/simulation' class='nav-btn secondary'>🔧 模擬控制</a>";
-        }
-#endif
-        
-        html += "</div></div>";
-        
-        // 版權資訊
-        html += "<div style='text-align:center;margin-top:30px;color:rgba(255,255,255,0.8);font-size:14px;'>";
-        html += "DaiSpan Smart Thermostat Controller | 統一WebServer界面";
-        html += "</div>";
-        
+        html += "<div class='footer'>DaiSpan Smart Thermostat Controller | 統一 Web 介面</div>";
         html += "</div></body></html>";
         
         webServer->send(200, "text/html", html);
-        
     } catch (...) {
-        // 極簡緊急頁面
         String emergencyHtml = "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>DaiSpan</title></head><body>";
         emergencyHtml += "<h1>🌡️ DaiSpan 智能恆溫器</h1>";
         emergencyHtml += "<p><strong>可用記憶體:</strong> " + String(ESP.getFreeHeap()) + " bytes</p>";
@@ -499,356 +550,9 @@ void generateUnifiedMainPage() {
     }
 }
 
-#ifndef DISABLE_SIMULATION_MODE
-/**
- * 生成優化的模擬控制頁面（使用流式響應）
- */
-void generateOptimizedSimulationPage() {
-    if (!pageGenerator || !memoryManager || !mockController) {
-        DEBUG_ERROR_PRINT("[Main] 模擬頁面生成器或控制器未初始化\n");
-        webServer->send(500, "text/html; charset=utf-8", 
-                       "<html><body><h1>服務器內部錯誤</h1></body></html>");
-        return;
-    }
-    
-    try {
-        // 使用流式響應構建器
-        MemoryOptimization::StreamingResponseBuilder stream;
-        
-        // 設置HTTP頭
-        webServer->sendHeader("Content-Type", "text/html; charset=utf-8");
-        webServer->sendHeader("Cache-Control", "no-cache, must-revalidate");
-        webServer->sendHeader("Connection", "close");
-        
-        // 開始流式響應
-        stream.begin(webServer, "text/html; charset=utf-8");
-        
-        // HTML頭部
-        stream.append("<!DOCTYPE html><html><head>");
-        stream.append("<meta charset='UTF-8'>");
-        stream.append("<title>模擬控制</title>");
-        stream.append("<style>");
-        stream.append("body{font-family:Arial,sans-serif;margin:0;padding:20px;background:#f5f5f5;}");
-        stream.append(".container{max-width:600px;margin:0 auto;background:white;padding:20px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1);}");
-        stream.append("h1{color:#333;text-align:center;margin-bottom:30px;}");
-        stream.append(".status-grid{display:grid;grid-template-columns:1fr 1fr;gap:15px;margin-bottom:20px;}");
-        stream.append(".status-item{padding:15px;background:#f8f9fa;border-radius:6px;border-left:4px solid #007bff;}");
-        stream.append(".status-label{font-weight:bold;color:#495057;display:block;margin-bottom:5px;}");
-        stream.append(".status-value{font-size:1.2em;color:#28a745;}");
-        stream.append(".control-form{background:#fff;padding:20px;border:2px solid #e9ecef;border-radius:8px;}");
-        stream.append(".form-group{margin-bottom:15px;}");
-        stream.append("label{display:block;margin-bottom:5px;font-weight:bold;color:#495057;}");
-        stream.append("input,select{width:100%;padding:8px;border:1px solid #ced4da;border-radius:4px;font-size:16px;}");
-        stream.append(".button{background:#007bff;color:white;padding:12px 24px;border:none;border-radius:4px;cursor:pointer;font-size:16px;margin:5px;}");
-        stream.append(".button:hover{background:#0056b3;}");
-        stream.append(".button.secondary{background:#6c757d;}");
-        stream.append("</style>");
-        stream.append("</head><body>");
-        
-        // 主要內容
-        stream.append("<div class='container'>");
-        stream.append("<h1>🔧 模擬控制台</h1>");
-        
-        // 當前狀態顯示
-        stream.append("<div class='status-grid'>");
-        
-        // 電源狀態
-        stream.append("<div class='status-item'>");
-        stream.append("<span class='status-label'>電源狀態:</span>");
-        stream.appendf("<span class='status-value'>%s</span>", 
-                      mockController->getPower() ? "開啟" : "關閉");
-        stream.append("</div>");
-        
-        // 當前溫度
-        stream.append("<div class='status-item'>");
-        stream.append("<span class='status-label'>當前溫度:</span>");
-        stream.appendf("<span class='status-value'>%.1f°C</span>", 
-                      mockController->getCurrentTemperature());
-        stream.append("</div>");
-        
-        // 目標溫度
-        stream.append("<div class='status-item'>");
-        stream.append("<span class='status-label'>目標溫度:</span>");
-        stream.appendf("<span class='status-value'>%.1f°C</span>", 
-                      mockController->getTargetTemperature());
-        stream.append("</div>");
-        
-        // 運行狀態
-        stream.append("<div class='status-item'>");
-        stream.append("<span class='status-label'>運行狀態:</span>");
-        const char* runStatus = mockController->isSimulationHeating() ? "🔥 加熱中" : 
-                                (mockController->isSimulationCooling() ? "❄️ 制冷中" : "⏸️ 待機");
-        stream.appendf("<span class='status-value'>%s</span>", runStatus);
-        stream.append("</div>");
-        
-        stream.append("</div>"); // 結束狀態網格
-        
-        // 控制表單
-        stream.append("<form method='post' action='/simulation-control' class='control-form'>");
-        stream.append("<h3>控制設定</h3>");
-        
-        // 電源控制
-        stream.append("<div class='form-group'>");
-        stream.append("<label>電源:</label>");
-        stream.append("<select name='power'>");
-        stream.appendf("<option value='0'%s>關閉</option>", 
-                      !mockController->getPower() ? " selected" : "");
-        stream.appendf("<option value='1'%s>開啟</option>", 
-                      mockController->getPower() ? " selected" : "");
-        stream.append("</select>");
-        stream.append("</div>");
-        
-        // 模式控制
-        stream.append("<div class='form-group'>");
-        stream.append("<label>運行模式:</label>");
-        stream.append("<select name='mode'>");
-        int currentMode = mockController->getTargetMode();
-        stream.appendf("<option value='0'%s>關閉</option>", currentMode == 0 ? " selected" : "");
-        stream.appendf("<option value='1'%s>制熱</option>", currentMode == 1 ? " selected" : "");
-        stream.appendf("<option value='2'%s>制冷</option>", currentMode == 2 ? " selected" : "");
-        stream.appendf("<option value='3'%s>自動</option>", currentMode == 3 ? " selected" : "");
-        stream.append("</select>");
-        stream.append("</div>");
-        
-        // 目標溫度
-        stream.append("<div class='form-group'>");
-        stream.append("<label>目標溫度 (°C):</label>");
-        stream.appendf("<input type='number' name='target_temp' min='16' max='30' step='0.5' value='%.1f'>", 
-                      mockController->getTargetTemperature());
-        stream.append("</div>");
-        
-        // 模擬房間溫度
-        stream.append("<div class='form-group'>");
-        stream.append("<label>模擬房間溫度 (°C):</label>");
-        stream.appendf("<input type='number' name='room_temp' min='10' max='40' step='0.5' value='%.1f'>", 
-                      mockController->getSimulatedRoomTemp());
-        stream.append("</div>");
-        
-        // 風扇速度
-        stream.append("<div class='form-group'>");
-        stream.append("<label>風扇速度:</label>");
-        stream.append("<select name='fan_speed'>");
-        int fanSpeed = mockController->getFanSpeed();
-        stream.appendf("<option value='0'%s>自動</option>", fanSpeed == 0 ? " selected" : "");
-        for (int i = 1; i <= 5; i++) {
-            stream.appendf("<option value='%d'%s>%d檔</option>", 
-                          i, fanSpeed == i ? " selected" : "", i);
-        }
-        stream.append("</select>");
-        stream.append("</div>");
-        
-        // 提交按鈕
-        stream.append("<div style='text-align:center;margin-top:20px;'>");
-        stream.append("<button type='submit' class='button'>套用設定</button>");
-        stream.append("<a href='/' class='button secondary'>返回主頁</a>");
-        stream.append("</div>");
-        
-        stream.append("</form>");
-        stream.append("</div>"); // 結束容器
-        stream.append("</body></html>");
-        
-        // 完成響應
-        stream.finish();
-        
-        DEBUG_VERBOSE_PRINT("[Main] 優化模擬頁面生成完成\n");
-        
-    } catch (const std::exception& e) {
-        DEBUG_ERROR_PRINT("[Main] 模擬頁面生成失敗: %s\n", e.what());
-        webServer->send(500, "text/html; charset=utf-8", 
-                       "<html><body><h1>頁面生成失敗</h1></body></html>");
-    }
-}
-#endif // DISABLE_SIMULATION_MODE
-
 /**
  * 初始化核心架構
  */
-void setupModernArchitecture() {
-    DEBUG_INFO_PRINT("[Core] 初始化核心架構...\n");
-    
-    try {
-        // 1. 初始化事件系統
-        g_eventBus = new DaiSpan::Core::EventPublisher();
-        if (!g_eventBus) {
-            DEBUG_ERROR_PRINT("[Core] 事件總線創建失敗\n");
-            return;
-        }
-        
-        // 確保統計數據從零開始
-        g_eventBus->resetStatistics();
-        DEBUG_INFO_PRINT("[Core] 事件總線統計已重置\n");
-        
-        // 2. 初始化服務容器
-        g_serviceContainer = new DaiSpan::Core::ServiceContainer();
-        if (!g_serviceContainer) {
-            DEBUG_ERROR_PRINT("[Core] 服務容器創建失敗\n");
-            return;
-        }
-        
-        // 3. 初始化偏好設定（用於 V3 配置）
-        if (!g_preferences.begin("daispan_core", false)) {
-            DEBUG_ERROR_PRINT("[Core] 系統偏好設定初始化失敗\n");
-            return;
-        }
-        
-        // 4. 註冊配置服務
-        g_serviceContainer->registerFactory<DaiSpan::Domain::Config::ConfigurationManager>(
-            "ConfigurationManager",
-            [](DaiSpan::Core::ServiceContainer& container) -> std::shared_ptr<DaiSpan::Domain::Config::ConfigurationManager> {
-                return std::make_shared<DaiSpan::Domain::Config::ConfigurationManager>(g_preferences);
-            });
-        
-        DEBUG_INFO_PRINT("[Core] 基礎架構初始化完成\n");
-        modernArchitectureEnabled = true;
-        
-    } catch (const std::exception& e) {
-        DEBUG_ERROR_PRINT("[Core] 架構初始化異常: %s\n", e.what());
-        modernArchitectureEnabled = false;
-    }
-}
-
-/**
- * 設置核心架構事件監聽
- */
-void setupCoreEventListeners() {
-    if (!modernArchitectureEnabled || !g_eventBus) {
-        DEBUG_WARN_PRINT("[Core] 核心架構未啟用，跳過事件監聽設置\n");
-        return;
-    }
-    
-    DEBUG_INFO_PRINT("[Core] 設置核心架構事件監聽...\n");
-    
-    // 設置事件監聽器（用於調試和監控）
-    g_eventBus->subscribe<DaiSpan::Domain::Thermostat::Events::StateChanged>(
-        [](const DaiSpan::Domain::Thermostat::Events::StateChanged& event) {
-            DEBUG_VERBOSE_PRINT("[Core] 狀態變化事件接收\n");
-            REMOTE_WEBLOG("[Core-Event] 恆溫器狀態變化");
-        });
-    
-    g_eventBus->subscribe<DaiSpan::Domain::Thermostat::Events::CommandReceived>(
-        [](const DaiSpan::Domain::Thermostat::Events::CommandReceived& event) {
-            DEBUG_VERBOSE_PRINT("[Core] 命令接收事件\n");
-            REMOTE_WEBLOG("[Core-Event] 命令接收");
-        });
-    
-    g_eventBus->subscribe<DaiSpan::Domain::Thermostat::Events::TemperatureUpdated>(
-        [](const DaiSpan::Domain::Thermostat::Events::TemperatureUpdated& event) {
-            DEBUG_INFO_PRINT("[Core] 溫度更新事件\n");
-            REMOTE_WEBLOG("[Core-Event] 溫度更新");
-        });
-    
-    g_eventBus->subscribe<DaiSpan::Domain::Thermostat::Events::Error>(
-        [](const DaiSpan::Domain::Thermostat::Events::Error& event) {
-            DEBUG_ERROR_PRINT("[Core] 領域錯誤事件\n");
-            REMOTE_WEBLOG("[Core-Error] 系統錯誤");
-        });
-    
-    DEBUG_INFO_PRINT("[Core] 系統遷移橋接設置完成\n");
-}
-
-/**
- * 處理核心事件（在主循環中調用）
- */
-void processCoreEvents() {
-    if (!modernArchitectureEnabled || !g_eventBus) {
-        return;
-    }
-    
-    // 處理事件總線
-    g_eventBus->processEvents(5); // 每次最多處理 5 個事件
-    
-    // 定期輸出統計資訊和記憶體檢查（每 60 秒）
-    static unsigned long lastStatsTime = 0;
-    static uint32_t lastFreeHeap = ESP.getFreeHeap();
-    static uint32_t minFreeHeap = ESP.getFreeHeap();
-    static uint32_t maxFreeHeap = ESP.getFreeHeap();
-    
-    if (millis() - lastStatsTime > 60000) {
-        if (g_eventBus) {
-            uint32_t currentFreeHeap = ESP.getFreeHeap();
-            float memoryUsage = (float)(currentFreeHeap) / (float)(ESP.getHeapSize()) * 100.0f;
-            
-            // 更新記憶體使用範圍
-            if (currentFreeHeap < minFreeHeap) minFreeHeap = currentFreeHeap;
-            if (currentFreeHeap > maxFreeHeap) maxFreeHeap = currentFreeHeap;
-            
-            DEBUG_INFO_PRINT("[Core] 事件統計: 隊列:%d 訂閱:%d 處理:%d 記憶體:%.1f%% (最小:%d 最大:%d) 運行:%ds\n",
-                           g_eventBus->getQueueSize(),
-                           g_eventBus->getSubscriptionCount(),
-                           g_eventBus->getProcessedEventCount(),
-                           memoryUsage,
-                           minFreeHeap,
-                           maxFreeHeap,
-                           millis() / 1000);
-            
-            // 記憶體洩漏檢測
-            if (lastFreeHeap > currentFreeHeap) {
-                uint32_t memoryDrop = lastFreeHeap - currentFreeHeap;
-                if (memoryDrop > 1000) {  // 記憶體下降超過 1KB
-                    DEBUG_WARN_PRINT("[Core] 記憶體洩漏警告: 下降 %d bytes (從 %d 到 %d)\n",
-                                     memoryDrop, lastFreeHeap, currentFreeHeap);
-                }
-            }
-            
-            // 記憶體清理
-            if (currentFreeHeap < 50000) {
-                DEBUG_WARN_PRINT("[Core] 記憶體不足，嘗試清理...\n");
-                // 重置事件統計以釋放可能的累積記憶體
-                g_eventBus->resetStatistics();
-                delay(100);  // 讓系統有時間清理
-                DEBUG_INFO_PRINT("[Core] 清理後記憶體: %d bytes\n", ESP.getFreeHeap());
-            }
-            
-            if (g_eventBus->getQueueSize() > 10) {
-                DEBUG_WARN_PRINT("[Core] 事件佇列積壓過多: %d\n", g_eventBus->getQueueSize());
-            }
-            
-            // 記錄HomeKit狀態
-            if (thermostatDevice && thermostatController) {
-                DEBUG_VERBOSE_PRINT("[Core] HomeKit 狀態: 電源:%s 模式:%d 溫度:%.1f/%.1f°C\n",
-                                   thermostatController->getPower() ? "開" : "關",
-                                   thermostatController->getTargetMode(),
-                                   thermostatController->getCurrentTemperature(),
-                                   thermostatController->getTargetTemperature());
-            }
-            
-            lastFreeHeap = currentFreeHeap;
-        }
-        lastStatsTime = millis();
-    }
-}
-
-/**
- * 獲取核心架構狀態資訊（用於 WebServer API）
- */
-String getCoreStatusInfo() {
-    if (!modernArchitectureEnabled) {
-        return "\"modernArchitecture\":false";
-    }
-    
-    String info = "\"modernArchitecture\":true";
-    
-    if (g_eventBus) {
-        info += ",\"eventBus\":{";
-        info += "\"queueSize\":" + String(g_eventBus->getQueueSize()) + ",";
-        info += "\"subscriptions\":" + String(g_eventBus->getSubscriptionCount()) + ",";
-        info += "\"processed\":" + String(g_eventBus->getProcessedEventCount());
-        info += "}";
-    }
-    
-    if (g_eventBus) {
-        info += ",\"architecture\":{";
-        info += "\"active\":" + String(modernArchitectureEnabled ? "true" : "false");
-        info += ",\"event_bus_ready\":" + String(g_eventBus ? "true" : "false");
-        info += ",\"service_container_ready\":" + String(g_serviceContainer ? "true" : "false");
-        info += "}";
-    }
-    
-    return info;
-}
-
-// 統一WebServer初始化函數 - 所有版本都使用相同的基礎功能（端口8080）
-// 只有RemoteDebugger部分根據編譯環境有所不同
 void initializeMonitoring() {
     static bool memoryFailureFlag = false;  // 防止記憶體不足時的無限重試
     static unsigned long lastFailureTime = 0;
@@ -868,11 +572,6 @@ void initializeMonitoring() {
     // 嘗試釋放一些記憶體
     if (ESP.getFreeHeap() < 65000) {
         DEBUG_INFO_PRINT("[Main] 記憶體偏低，嘗試釋放資源...\n");
-        
-        // 釋放事件系統統計數據
-        if (g_eventBus) {
-            g_eventBus->resetStatistics();
-        }
         
         // 清理未使用的記憶體優化組件
         if (pageGenerator && ESP.getFreeHeap() < 55000) {
@@ -929,12 +628,6 @@ void initializeMonitoring() {
             deviceInitialized,
             millis()
         );
-        
-        // 在 JSON 結尾前插入核心架構狀態
-        if (json.endsWith("}")) {
-            json = json.substring(0, json.length() - 1); // 移除最後的 '}'
-            json += "," + getCoreStatusInfo() + "}";
-        }
         
         webServer->send(200, "application/json", json);
     });
@@ -1127,7 +820,8 @@ void initializeMonitoring() {
             
             // 使用優化版本生成成功頁面
             MemoryOptimization::StreamingResponseBuilder stream;
-            stream.begin(webServer);
+            const auto& profile = MemoryOptimization::GetActiveMemoryProfile();
+            stream.begin(webServer, "text/html", profile.streamingChunkSize);
             stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
             stream.append("<title>WiFi配置已保存</title>");
             stream.append("<meta http-equiv='refresh' content='3;url=/restart'>");
@@ -1348,11 +1042,13 @@ void initializeMonitoring() {
             configChanged = true;
         }
         
+        const auto& profile = MemoryOptimization::GetActiveMemoryProfile();
+
         if (configChanged) {
             configManager.setHomeKitConfig(currentPairingCode, currentDeviceName, currentQRID);
             
             MemoryOptimization::StreamingResponseBuilder stream;
-            stream.begin(webServer);
+            stream.begin(webServer, "text/html", profile.streamingChunkSize);
             stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
             stream.append("<title>HomeKit配置已保存</title>");
             stream.append("<meta http-equiv='refresh' content='3;url=/restart'>");
@@ -1366,7 +1062,7 @@ void initializeMonitoring() {
             stream.finish();
         } else {
             MemoryOptimization::StreamingResponseBuilder stream;
-            stream.begin(webServer);
+            stream.begin(webServer, "text/html", profile.streamingChunkSize);
             stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
             stream.append("<title>無需更新</title>");
             stream.appendf("<style>%s</style></head><body>", WebUI::getCompactCSS());
@@ -1379,219 +1075,8 @@ void initializeMonitoring() {
             stream.finish();
         }
     });
+    // 模擬功能已移除
     
-    #ifndef DISABLE_SIMULATION_MODE
-    // 模擬控制頁面
-    webServer->on("/simulation", [](){
-        if (!configManager.getSimulationMode()) {
-            webServer->send(403, "text/plain", "模擬功能未啟用");
-            return;
-        }
-        
-        if (!mockController) {
-            webServer->send(500, "text/plain", "模擬控制器不可用");
-            return;
-        }
-        
-        // 使用記憶體優化的流式響應生成模擬頁面
-        if (pageGenerator && memoryManager) {
-            if (!memoryManager->shouldServePage("simulation")) {
-                webServer->send(503, "text/html; charset=utf-8", 
-                               "<html><body><h1>系統記憶體不足</h1><p>請稍後重試</p></body></html>");
-                return;
-            }
-            
-            generateOptimizedSimulationPage();
-            return;
-        }
-        
-        // 使用統一的MemoryOptimization版本作為降級處理
-        generateOptimizedSimulationPage();
-    });
-    
-    // 模擬控制處理
-    webServer->on("/simulation-control", HTTP_POST, [](){
-        if (!configManager.getSimulationMode() || !mockController) {
-            webServer->send(403, "text/plain", "模擬功能不可用");
-            return;
-        }
-        
-        String powerStr = webServer->arg("power");
-        String modeStr = webServer->arg("mode");
-        String targetTempStr = webServer->arg("target_temp");
-        String currentTempStr = webServer->arg("current_temp");
-        String roomTempStr = webServer->arg("room_temp");
-        String fanSpeedStr = webServer->arg("fan_speed");
-        
-        // 電源控制
-        if (powerStr.length() > 0) {
-            bool power = (powerStr.toInt() == 1);
-            mockController->setPower(power);
-            if (!power) {
-                mockController->setTargetMode(0);
-            }
-        }
-        
-        // 模式控制
-        if (modeStr.length() > 0 && mockController->getPower()) {
-            uint8_t mode = modeStr.toInt();
-            if (mode >= 0 && mode <= 3) {
-                mockController->setTargetMode(mode);
-            }
-        }
-        
-        // 溫度設定
-        if (targetTempStr.length() > 0 && mockController->getPower()) {
-            float targetTemp = targetTempStr.toFloat();
-            if (targetTemp >= 16.0f && targetTemp <= 30.0f) {
-                mockController->setTargetTemperature(targetTemp);
-            }
-        }
-        
-        if (currentTempStr.length() > 0) {
-            float currentTemp = currentTempStr.toFloat();
-            if (currentTemp >= 10.0f && currentTemp <= 40.0f) {
-                mockController->setCurrentTemperature(currentTemp);
-            }
-        }
-        
-        if (roomTempStr.length() > 0) {
-            float roomTemp = roomTempStr.toFloat();
-            if (roomTemp >= 10.0f && roomTemp <= 40.0f) {
-                mockController->setSimulatedRoomTemp(roomTemp);
-            }
-        }
-        
-        // 風量控制
-        if (fanSpeedStr.length() > 0 && mockController->getPower()) {
-            uint8_t fanSpeed = fanSpeedStr.toInt();
-            if (fanSpeed >= 0 && fanSpeed <= 6) {
-                mockController->setFanSpeed(fanSpeed);
-            }
-        }
-        
-        MemoryOptimization::StreamingResponseBuilder stream;
-        stream.begin(webServer);
-        stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
-        stream.append("<title>設置已更新</title>");
-        stream.appendf("<style>%s</style></head><body>", WebUI::getCompactCSS());
-        stream.append("<div class='container'><h1>✅ 設置已更新</h1>");
-        stream.append("<div class='status'>模擬參數已成功更新！</div>");
-        stream.append("<div style='text-align:center;margin:20px 0;'>");
-        stream.append("<a href='/simulation' class='button'>🔧 返回模擬控制</a>&nbsp;&nbsp;");
-        stream.append("<a href='/' class='button secondary'>🏠 返回主頁</a>");
-        stream.append("</div></div></body></html>");
-        stream.finish();
-    });
-    
-    // 模式切換頁面 - 使用MemoryOptimization版本
-    webServer->on("/simulation-toggle", [](){
-        bool currentMode = configManager.getSimulationMode();
-        
-        MemoryOptimization::StreamingResponseBuilder stream;
-        stream.begin(webServer);
-        stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
-        stream.append("<title>模式切換</title>");
-        stream.appendf("<style>%s</style></head><body>", WebUI::getCompactCSS());
-        stream.append("<div class='container'><h1>🔄 運行模式切換</h1>");
-        stream.appendf("<div class='status'>當前模式: %s</div>", 
-                      currentMode ? "🔧 模擬模式" : "🏠 實際硬體模式");
-        stream.append("<div class='warning'>⚠️ 切換模式將會重啟設備</div>");
-        stream.append("<form method='post' action='/simulation-toggle-confirm'>");
-        stream.appendf("<p>確認要切換到 <strong>%s</strong> 嗎？</p>", 
-                      currentMode ? "實際硬體模式" : "模擬模式");
-        stream.append("<div style='text-align:center;margin:20px 0;'>");
-        stream.append("<button type='submit' class='button danger'>✅ 確認切換</button>");
-        stream.append("<a href='/' class='button secondary'>❌ 取消</a>");
-        stream.append("</div></form></div></body></html>");
-        stream.finish();
-    });
-    
-    // 模式切換確認 - 使用MemoryOptimization版本
-    webServer->on("/simulation-toggle-confirm", HTTP_POST, [](){
-        bool currentMode = configManager.getSimulationMode();
-        configManager.setSimulationMode(!currentMode);
-        
-        MemoryOptimization::StreamingResponseBuilder stream;
-        stream.begin(webServer);
-        stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
-        stream.append("<title>模式切換中</title>");
-        stream.append("<meta http-equiv='refresh' content='3;url=/restart'>");
-        stream.appendf("<style>%s</style></head><body>", WebUI::getCompactCSS());
-        stream.append("<div class='container'><h1>🔄 模式切換中</h1>");
-        stream.append("<div class='status'>運行模式已切換，設備將重啟。</div>");
-        stream.append("<div style='text-align:center;margin:20px 0;'>");
-        stream.append("<a href='/restart' class='button'>立即重啟</a>");
-        stream.append("<a href='/' class='button secondary'>返回主頁</a>");
-        stream.append("</div></div></body></html>");
-        stream.finish();
-    });
-    #endif // DISABLE_SIMULATION_MODE
-    
-    // 核心架構調試端點 - 手動觸發事件測試
-    webServer->on("/core-test-event", [](){
-        if (!modernArchitectureEnabled || !g_eventBus) {
-            webServer->send(400, "text/plain", "核心架構未啟用");
-            return;
-        }
-        
-        try {
-            // 觸發一個測試事件
-            auto testEvent = DaiSpan::Domain::Thermostat::Events::CommandReceived(
-                DaiSpan::Domain::Thermostat::Events::CommandReceived::Type::Temperature,
-                "debug-test",
-                "手動測試事件"
-            );
-            
-            g_eventBus->publish(testEvent);
-            
-            String response = "✅ V3 測試事件已發布!\n";
-            response += "佇列大小: " + String(g_eventBus->getQueueSize()) + "\n";
-            response += "訂閱數: " + String(g_eventBus->getSubscriptionCount()) + "\n"; 
-            response += "已處理: " + String(g_eventBus->getProcessedEventCount()) + "\n";
-            
-            webServer->send(200, "text/plain", response);
-            
-            DEBUG_INFO_PRINT("[Core-Debug] 手動觸發測試事件\n");
-            
-        } catch (...) {
-            webServer->send(500, "text/plain", "❌ 事件發布失敗");
-        }
-    });
-    
-#ifndef PRODUCTION_BUILD
-    // 核心架構統計 API (開發模式)
-    webServer->on("/api/core/stats", [](){
-        if (!modernArchitectureEnabled || !g_eventBus) {
-            webServer->send(400, "application/json", "{\"error\":\"Core architecture not enabled\"}");
-            return;
-        }
-        
-        String json = "{";
-        json += "\"queueSize\":" + String(g_eventBus->getQueueSize()) + ",";
-        json += "\"subscriptions\":" + String(g_eventBus->getSubscriptionCount()) + ",";
-        json += "\"processed\":" + String(g_eventBus->getProcessedEventCount()) + ",";
-        json += "\"architecture\":" + String(modernArchitectureEnabled ? "true" : "false") + ",";
-        json += "\"uptime\":" + String(millis() / 1000) + ",";
-        json += "\"freeHeap\":" + String(ESP.getFreeHeap()) + ",";
-        json += "\"timestamp\":" + String(millis());
-        json += "}";
-        
-        webServer->send(200, "application/json", json);
-    });
-    
-    // 核心架構統計重置端點 (開發模式)
-    webServer->on("/api/core/reset-stats", [](){
-        if (!modernArchitectureEnabled || !g_eventBus) {
-            webServer->send(400, "application/json", "{\"error\":\"Core architecture not enabled\"}");
-            return;
-        }
-        
-        g_eventBus->resetStatistics();
-        String json = "{\"status\":\"success\",\"message\":\"Statistics reset successfully\",\"timestamp\":" + String(millis()) + "}";
-        webServer->send(200, "application/json", json);
-    });
-#endif
     
     // 系統健康檢查端點
     webServer->on("/api/health", [](){
@@ -1602,15 +1087,21 @@ void initializeMonitoring() {
         json += "\"hardware\":" + String(deviceInitialized ? "true" : "false") + ",";
         json += "\"wifi\":" + String(WiFi.status() == WL_CONNECTED ? "true" : "false") + ",";
         json += "\"webserver\":" + String(monitoringEnabled ? "true" : "false");
-        if (modernArchitectureEnabled) {
-            json += ",\"coreArchitecture\":" + String(g_eventBus ? "true" : "false");
-        }
         json += "},";
         json += "\"memory\":{";
         json += "\"free\":" + String(ESP.getFreeHeap()) + ",";
         json += "\"total\":" + String(ESP.getHeapSize()) + ",";
         json += "\"usage\":" + String(100.0 * (ESP.getHeapSize() - ESP.getFreeHeap()) / ESP.getHeapSize(), 1);
         json += "},";
+        if (systemManager) {
+            json += "\"scheduler\":{";
+            json += "\"lastTasks\":" + String(systemManager->getSchedulerTaskCount()) + ",";
+            json += "\"lastDurationUs\":" + String(systemManager->getSchedulerDurationUs()) + ",";
+            json += "\"memoryPressure\":\"" + systemManager->getMemoryPressureText() + "\"";
+            json += "},";
+        } else {
+            json += "\"scheduler\":{\"lastTasks\":0,\"lastDurationUs\":0,\"memoryPressure\":\"unknown\"},";
+        }
         json += "\"uptime\":" + String(millis() / 1000) + ",";
         json += "\"timestamp\":" + String(millis());
         json += "}";
@@ -1749,20 +1240,7 @@ void initializeMonitoring() {
             WiFi.getHostname()
         );
         
-        // 添加事件系統指標
-        if (modernArchitectureEnabled && g_eventBus && written < sizeof(buffer) - 200) {
-            written += snprintf(buffer + written, sizeof(buffer) - written,
-                ",\"eventSystem\":{"
-                "\"queueSize\":%d,"
-                "\"subscriptions\":%d,"
-                "\"processed\":%d"
-                "}",
-                g_eventBus->getQueueSize(),
-                g_eventBus->getSubscriptionCount(),
-                g_eventBus->getProcessedEventCount()
-            );
-        }
-        
+
         // 添加 HomeKit 指標
         if (thermostatDevice && thermostatController && written < sizeof(buffer) - 200) {
             written += snprintf(buffer + written, sizeof(buffer) - written,
@@ -1804,13 +1282,6 @@ void initializeMonitoring() {
             "{\"level\":\"info\",\"component\":\"system\",\"message\":\"System running normally\",\"timestamp\":%u}",
             timestamp);
         
-        // 架構信息
-        if (modernArchitectureEnabled && written < sizeof(buffer) - 100) {
-            written += snprintf(buffer + written, sizeof(buffer) - written,
-                ",{\"level\":\"info\",\"component\":\"core\",\"message\":\"Modern architecture enabled\",\"timestamp\":%u}",
-                timestamp);
-        }
-        
         // 內存信息
         if (written < sizeof(buffer) - 150) {
             if (freeHeap < 50000) {
@@ -1831,20 +1302,7 @@ void initializeMonitoring() {
                 timestamp);
         }
         
-        // 事件系統狀態
-        if (modernArchitectureEnabled && g_eventBus && written < sizeof(buffer) - 150) {
-            size_t queueSize = g_eventBus->getQueueSize();
-            if (queueSize > 10) {
-                written += snprintf(buffer + written, sizeof(buffer) - written,
-                    ",{\"level\":\"warn\",\"component\":\"events\",\"message\":\"Event queue backlog: %zu events\",\"timestamp\":%u}",
-                    queueSize, timestamp);
-            } else {
-                written += snprintf(buffer + written, sizeof(buffer) - written,
-                    ",{\"level\":\"info\",\"component\":\"events\",\"message\":\"Event system healthy, queue: %zu\",\"timestamp\":%u}",
-                    queueSize, timestamp);
-            }
-        }
-        
+
         // 結束 JSON
         if (written < sizeof(buffer) - 100) {
             snprintf(buffer + written, sizeof(buffer) - written,
@@ -1853,7 +1311,7 @@ void initializeMonitoring() {
                 "\"logCount\":%d,"
                 "\"timestamp\":%u"
                 "}",
-                5 + (modernArchitectureEnabled ? 1 : 0), timestamp);
+                5, timestamp);
         }
         
         webServer->send(200, "application/json", buffer);
@@ -1862,6 +1320,12 @@ void initializeMonitoring() {
     // OTA 頁面
     webServer->on("/ota", [](){
         try {
+            if (memoryManager && memoryManager->isEmergencyMode()) {
+                webServer->send(200, "text/html", 
+                    "<html><body><h1>系統記憶體不足</h1><p>目前僅保留核心功能，OTA 頁面暫時不可用。</p><p><a href='/' style='display:inline-block;margin-top:10px;'>返回主頁</a></p></body></html>");
+                return;
+            }
+
             String deviceIP = WiFi.localIP().toString();
             
             // 使用基本HTML建構（更可靠）
@@ -2109,11 +1573,6 @@ void initializeMonitoring() {
     webServer->on("/api/memory/cleanup", [](){
         uint32_t beforeCleanup = ESP.getFreeHeap();
         
-        // 執行記憶體清理
-        if (g_eventBus) {
-            g_eventBus->resetStatistics();
-        }
-        
         // 強制垃圾回收
         delay(100);
         
@@ -2138,15 +1597,16 @@ void initializeMonitoring() {
     
     // 記憶體優化狀態 API 端點 (開發模式)
     webServer->on("/api/memory/stats", [](){
-        if (!memoryManager || !pageGenerator) {
+        if (!memoryManager) {
             webServer->send(503, "application/json", 
                            "{\"error\":\"Memory optimization not initialized\"}");
             return;
         }
-        
+
         // 使用 StreamingResponseBuilder 生成 JSON 響應
+        const auto& profile = MemoryOptimization::GetActiveMemoryProfile();
         MemoryOptimization::StreamingResponseBuilder stream;
-        stream.begin(webServer, "application/json");
+        stream.begin(webServer, "application/json", profile.streamingChunkSize);
         
         stream.append("{");
         stream.append("\"status\":\"success\",");
@@ -2168,6 +1628,21 @@ void initializeMonitoring() {
         stream.appendf("\"shouldUseStreaming\":%s,", 
                       memoryManager->shouldUseStreamingResponse() ? "true" : "false");
         
+        stream.append("\"profile\":{");
+        stream.appendf("\"name\":\"%s\",", profile.name.c_str());
+        stream.appendf("\"hardwareTag\":\"%s\",", profile.hardwareTag.c_str());
+        stream.append("\"thresholds\":{");
+        stream.appendf("\"low\":%u,", profile.thresholds.low);
+        stream.appendf("\"medium\":%u,", profile.thresholds.medium);
+        stream.appendf("\"high\":%u,", profile.thresholds.high);
+        stream.appendf("\"critical\":%u}", profile.thresholds.critical);
+        stream.appendf(",\"bufferPools\":{\"small\":%zu,\"medium\":%zu,\"large\":%zu},",
+                      profile.pools.smallCount, profile.pools.mediumCount, profile.pools.largeCount);
+        stream.appendf("\"streamingChunk\":%zu,", profile.streamingChunkSize);
+        stream.appendf("\"maxRender\":%zu,", profile.maxRenderSize);
+        stream.appendf("\"selectionReason\":\"%s\"", profile.selectionReason.c_str());
+        stream.append("},");
+
         stream.appendf("\"timestamp\":%u", (uint32_t)(millis() / 1000));
         stream.append("}");
         
@@ -2180,14 +1655,15 @@ void initializeMonitoring() {
 #ifndef PRODUCTION_BUILD
     // 詳細記憶體分析 API 端點 (開發模式)
     webServer->on("/api/memory/detailed", [](){
-        if (!memoryManager || !pageGenerator) {
+        if (!memoryManager) {
             webServer->send(503, "application/json", 
                            "{\"error\":\"Memory optimization not initialized\"}");
             return;
         }
-        
+
+        const auto& profile = memoryManager->getActiveProfile();
         MemoryOptimization::StreamingResponseBuilder stream;
-        stream.begin(webServer, "application/json");
+        stream.begin(webServer, "application/json", profile.streamingChunkSize);
         
         stream.append("{");
         stream.append("\"status\":\"success\",");
@@ -2230,20 +1706,30 @@ void initializeMonitoring() {
         stream.appendf("\"useStreaming\":%s", 
                       memoryManager->shouldUseStreamingResponse() ? "true" : "false");
         stream.append("},");
+
+        stream.append("\"profile\":{");
+        stream.appendf("\"name\":\"%s\",", profile.name.c_str());
+        stream.appendf("\"hardwareTag\":\"%s\",", profile.hardwareTag.c_str());
+        stream.append("\"thresholds\":{");
+        stream.appendf("\"low\":%u,", profile.thresholds.low);
+        stream.appendf("\"medium\":%u,", profile.thresholds.medium);
+        stream.appendf("\"high\":%u,", profile.thresholds.high);
+        stream.appendf("\"critical\":%u}", profile.thresholds.critical);
+        stream.appendf(",\"bufferPools\":{\"small\":%zu,\"medium\":%zu,\"large\":%zu},",
+                      profile.pools.smallCount, profile.pools.mediumCount, profile.pools.largeCount);
+        stream.appendf("\"streamingChunk\":%zu,", profile.streamingChunkSize);
+        stream.appendf("\"maxRender\":%zu,", profile.maxRenderSize);
+        stream.appendf("\"selectionReason\":\"%s\"", profile.selectionReason.c_str());
+        stream.append("},");
         
         // 系統統計信息
-        String memoryStats, bufferStats;
-        memoryManager->getMemoryStats(memoryStats);
-        pageGenerator->getSystemStats(bufferStats);
+        bool hasPageGenerator = (pageGenerator != nullptr);
         
         stream.append("\"statistics\":{");
-        stream.append("\"memoryManager\":\"");
-        // 簡化統計信息以避免JSON轉義問題
-        stream.append("Available in /api/memory/stats-text");
-        stream.append("\",");
-        stream.append("\"bufferPool\":\"");
-        stream.append("Available in /api/buffer/stats");
-        stream.append("\"},");
+        stream.append("\"memorySummary\":\"Available in /api/memory/stats-text\",");
+        stream.append("\"bufferSummary\":\"Available in /api/buffer/stats\",");
+        stream.appendf("\"pageGenerator\":%s", hasPageGenerator ? "true" : "false");
+        stream.append("},");
         
         stream.appendf("\"timestamp\":%u", (uint32_t)(millis() / 1000));
         stream.append("}");
@@ -2259,7 +1745,11 @@ void initializeMonitoring() {
         }
         
         String stats;
-        pageGenerator->getSystemStats(stats);
+        if (pageGenerator) {
+            pageGenerator->getSystemStats(stats);
+        } else {
+            stats = "Page generator unavailable\nMemory statistics: see /api/memory/stats";
+        }
         webServer->send(200, "text/plain", stats);
     });
 #endif
@@ -2270,8 +1760,9 @@ void initializeMonitoring() {
         uint32_t startTime = millis();
         uint32_t startHeap = ESP.getFreeHeap();
         
+        const auto& profile = MemoryOptimization::GetActiveMemoryProfile();
         MemoryOptimization::StreamingResponseBuilder stream;
-        stream.begin(webServer, "application/json");
+        stream.begin(webServer, "application/json", profile.streamingChunkSize);
         
         stream.append("{");
         stream.append("\"status\":\"success\",");
@@ -2288,7 +1779,7 @@ void initializeMonitoring() {
         
         // 測試2: 流式響應性能
         uint32_t streamTestStart = millis();
-        MemoryOptimization::StreamingResponseBuilder testStream;
+        MemoryOptimization::StreamingResponseBuilder testStream(profile.streamingChunkSize);
         // 注意：這裡不能真正測試流式響應，因為會衝突
         uint32_t streamTestTime = millis() - streamTestStart;
         
@@ -2333,8 +1824,9 @@ void initializeMonitoring() {
         if (iterCount > 100) iterCount = 100; // 限制最大迭代次數
         if (delayTime < 50) delayTime = 50;   // 最小延遲50ms
         
+        const auto& profile = MemoryOptimization::GetActiveMemoryProfile();
         MemoryOptimization::StreamingResponseBuilder stream;
-        stream.begin(webServer, "application/json");
+        stream.begin(webServer, "application/json", profile.streamingChunkSize);
         
         stream.append("{");
         stream.append("\"status\":\"success\",");
@@ -2388,8 +1880,9 @@ void initializeMonitoring() {
     
     // 基準測試比較 API 端點 (開發模式)
     webServer->on("/api/performance/benchmark", [](){
+        const auto& profile = MemoryOptimization::GetActiveMemoryProfile();
         MemoryOptimization::StreamingResponseBuilder stream;
-        stream.begin(webServer, "application/json");
+        stream.begin(webServer, "application/json", profile.streamingChunkSize);
         
         stream.append("{");
         stream.append("\"status\":\"success\",");
@@ -2446,8 +1939,9 @@ void initializeMonitoring() {
     
     // 即時監控儀表板 API 端點 (開發模式)
     webServer->on("/api/monitor/dashboard", [](){
+        const auto& profile = MemoryOptimization::GetActiveMemoryProfile();
         MemoryOptimization::StreamingResponseBuilder stream;
-        stream.begin(webServer, "application/json");
+        stream.begin(webServer, "application/json", profile.streamingChunkSize);
         
         stream.append("{");
         stream.append("\"status\":\"success\",");
@@ -2482,6 +1976,7 @@ void initializeMonitoring() {
         if (memoryManager) {
             auto pressure = memoryManager->updateMemoryPressure();
             auto strategy = memoryManager->getRenderStrategy();
+            const auto& activeProfile = memoryManager->getActiveProfile();
             
             stream.append("\"memoryOptimization\":{");
             stream.append("\"enabled\":true,");
@@ -2490,6 +1985,23 @@ void initializeMonitoring() {
             stream.appendf("\"maxBufferSize\":%zu,", memoryManager->getMaxBufferSize());
             stream.appendf("\"useStreaming\":%s", 
                           memoryManager->shouldUseStreamingResponse() ? "true" : "false");
+            stream.append("},");
+
+            stream.append("\"memoryProfile\":{");
+            stream.appendf("\"name\":\"%s\",", activeProfile.name.c_str());
+            stream.appendf("\"hardwareTag\":\"%s\",", activeProfile.hardwareTag.c_str());
+            stream.append("\"thresholds\":{");
+            stream.appendf("\"low\":%u,", activeProfile.thresholds.low);
+            stream.appendf("\"medium\":%u,", activeProfile.thresholds.medium);
+            stream.appendf("\"high\":%u,", activeProfile.thresholds.high);
+            stream.appendf("\"critical\":%u}", activeProfile.thresholds.critical);
+            stream.appendf(",\"bufferPools\":{\"small\":%zu,\"medium\":%zu,\"large\":%zu},",
+                          activeProfile.pools.smallCount,
+                          activeProfile.pools.mediumCount,
+                          activeProfile.pools.largeCount);
+            stream.appendf("\"streamingChunk\":%zu,", activeProfile.streamingChunkSize);
+            stream.appendf("\"maxRender\":%zu,", activeProfile.maxRenderSize);
+            stream.appendf("\"selectionReason\":\"%s\"", activeProfile.selectionReason.c_str());
             stream.append("},");
         } else {
             stream.append("\"memoryOptimization\":{\"enabled\":false},");
@@ -2511,9 +2023,10 @@ void initializeMonitoring() {
     // 重啟端點 - 使用MemoryOptimization版本
     webServer->on("/restart", [](){
         String deviceIP = WiFi.localIP().toString();
+        const auto& profile = MemoryOptimization::GetActiveMemoryProfile();
         
         MemoryOptimization::StreamingResponseBuilder stream;
-        stream.begin(webServer);
+        stream.begin(webServer, "text/html", profile.streamingChunkSize);
         stream.append("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
         stream.append("<title>設備重啟中</title>");
         stream.append("<meta http-equiv='refresh' content='10;url=http://");
@@ -2529,12 +2042,6 @@ void initializeMonitoring() {
         stream.finish();
         delay(1000);
         safeRestart();
-    });
-    
-    // 遠端調試界面
-    webServer->on("/debug", [](){
-        String html = DebugWebClient::getDebugHTML();
-        webServer->send(200, "text/html", html);
     });
     
     // 404 處理
@@ -2556,34 +2063,7 @@ void initializeMonitoring() {
                      WiFi.localIP().toString().c_str());
     DEBUG_INFO_PRINT("[Main] 所有版本均提供: WiFi設定 | HomeKit設定 | 系統狀態 | OTA更新 | 日誌查看\n");
     
-    // 初始化RemoteDebugger調試系統 - 根據編譯環境自動選擇實現
-    RemoteDebugger& debugger = RemoteDebugger::getInstance();
-    
-#if defined(ENABLE_REMOTE_DEBUG)
-    // WebSocket調試器 (高功能版本) - 端口8081
-    if (debugger.begin(8081)) {
-        DEBUG_INFO_PRINT("[Main] 額外調試功能: WebSocket調試系統已啟動 ws://%s:8081\n", 
-                         WiFi.localIP().toString().c_str());
-        DEBUG_INFO_PRINT("[Main] 高級調試界面: http://%s:8080/debug\n", 
-                         WiFi.localIP().toString().c_str());
-    } else {
-        DEBUG_ERROR_PRINT("[Main] WebSocket調試系統啟動失敗\n");
-    }
-#elif defined(ENABLE_LIGHTWEIGHT_DEBUG)
-    // HTTP輕量級調試器 (節省記憶體版本) - 端口8082
-    if (debugger.begin(8082)) {
-        DEBUG_INFO_PRINT("[Main] 額外調試功能: 輕量級調試系統已啟動 http://%s:8082\n", 
-                         WiFi.localIP().toString().c_str());
-        DEBUG_INFO_PRINT("[Main] 輕量級調試界面: http://%s:8082/\n", 
-                         WiFi.localIP().toString().c_str());
-    } else {
-        DEBUG_ERROR_PRINT("[Main] 輕量級調試系統啟動失敗\n");
-    }
-#else
-    // 生產環境 - 調用空實現（編譯器會優化掉）
-    debugger.begin(); // 空實現始終返回true
-    DEBUG_INFO_PRINT("[Main] 基礎功能模式：RemoteDebugger調試系統已禁用以節省記憶體\n");
-#endif
+    DEBUG_INFO_PRINT("[Main] 遠端除錯已停用，請使用序列埠觀察 log。\n");
 }
 
 // 現有的初始化函數（保持不變）
@@ -2643,7 +2123,6 @@ void initializeHomeKit() {
         }
         
         // HomeKit 初始化完成後，設置核心事件監聽
-        setupCoreEventListeners();
         
     } else {
         DEBUG_ERROR_PRINT("[Main] 硬件未初始化，無法創建HomeKit設備\n");
@@ -2659,26 +2138,8 @@ void initializeHardware() {
         DEBUG_INFO_PRINT("[Main] 硬件已經初始化\n");
         return;
     }
-    
-#ifndef DISABLE_SIMULATION_MODE
-    bool simulationMode = configManager.getSimulationMode();
-    
-    if (simulationMode) {
-        DEBUG_INFO_PRINT("[Main] 啟用模擬模式 - 創建模擬控制器\n");
-        
-        mockController = new MockThermostatController(25.0f);
-        if (!mockController) {
-            DEBUG_ERROR_PRINT("[Main] MockThermostatController 創建失敗\n");
-            return;
-        }
-        
-        thermostatController = static_cast<IThermostatControl*>(mockController);
-        deviceInitialized = true;
-        DEBUG_INFO_PRINT("[Main] 模擬模式初始化完成\n");
-        
-    } else 
-#endif
-    {
+    // 模擬功能已移除
+{
         DEBUG_INFO_PRINT("[Main] 啟用真實模式 - 初始化串口通訊...\n");
         
         Serial1.begin(2400, SERIAL_8E2, S21_RX_PIN, S21_TX_PIN);
@@ -2736,7 +2197,6 @@ void setup() {
     DEBUG_INFO_PRINT("[Main] 現代化架構已啟用\n");
     
     // 初始化現代化架構
-    setupModernArchitecture();
     
     // 原有的設置程序（保持不變）
     #if defined(ESP32C3_SUPER_MINI)
@@ -2812,7 +2272,8 @@ void setup() {
                 DEBUG_INFO_PRINT("[Main] ESP32-C3 切換到節能模式 (8.5dBm)\n");
             #endif
             
-            // Arduino OTA 設置（保持原有）
+#ifdef ENABLE_OTA_UPDATE
+            // Arduino OTA 設置（可選功能）
             ArduinoOTA.setHostname("DaiSpan-Thermostat");
             ArduinoOTA.setPassword("12345678");
             ArduinoOTA.setPort(3232);
@@ -2851,6 +2312,9 @@ void setup() {
             
             ArduinoOTA.begin();
             DEBUG_INFO_PRINT("[Main] Arduino OTA已啟用 - 主機名: DaiSpan-Thermostat\n");
+#else
+            DEBUG_INFO_PRINT("[Main] OTA 功能未啟用，此版本僅提供核心功能。\n");
+#endif
             
             // 先初始化硬件組件
             initializeHardware();
@@ -2868,12 +2332,7 @@ void setup() {
     // 統一的SystemManager初始化
     systemManager = new SystemManager(
         configManager, wifiManager, webServer,
-        thermostatController, 
-        #ifndef DISABLE_MOCK_CONTROLLER
-        mockController, 
-        #else
-        nullptr,
-        #endif
+        thermostatController,
         thermostatDevice,
         deviceInitialized, homeKitInitialized, monitoringEnabled, homeKitPairingActive
     );
@@ -2892,18 +2351,9 @@ void setup() {
         DEBUG_INFO_PRINT("[Main] WiFiManager已清理，進入純HomeKit模式\n");
     }
     
-    if (modernArchitectureEnabled) {
-        DEBUG_INFO_PRINT("[Core] 核心架構設置完成，系統運行正常\n");
-    }
 }
 
 void loop() {
-    // 處理RemoteDebugger調試器 - 生產環境為空實現，調試環境為實際功能
-    RemoteDebugger::getInstance().loop();
-    
-    // 核心事件處理（優先處理）
-    processCoreEvents();
-    
     // 使用系統管理器處理主迴圈邏輯
     if (systemManager) {
         systemManager->processMainLoop();

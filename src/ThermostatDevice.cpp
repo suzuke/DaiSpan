@@ -1,15 +1,6 @@
 #include "device/ThermostatDevice.h"
 #include "common/Debug.h"
-#include "common/RemoteDebugger.h"
-
-#include "domain/ThermostatDomain.h"
-#include "core/EventSystem.h"
-extern DaiSpan::Core::EventPublisher* g_eventBus;
-
-// 靜態變量用於記錄上一次輸出的值
-static float lastOutputCurrentTemp = 0;
-static float lastOutputTargetTemp = 0;
-static int lastOutputMode = -1;
+#include <cmath>
 
 // 常量定義
 namespace {
@@ -34,7 +25,9 @@ ThermostatDevice::ThermostatDevice(IThermostatControl& thermostatControl)
       controller(thermostatControl),
       lastUpdateTime(0),
       lastHeartbeatTime(0),
-      lastSignificantChange(0) {
+      lastSignificantChange(0),
+      pendingHomeKitSync(false),
+      lastCommandProcess(0) {
     
     // 初始化特性（使用HomeSpan推薦方式，支持NVS存儲）
     currentTemp = new Characteristic::CurrentTemperature(21.0);
@@ -66,7 +59,7 @@ ThermostatDevice::ThermostatDevice(IThermostatControl& thermostatControl)
 boolean ThermostatDevice::update() {
     DEBUG_INFO_PRINT("[Device] *** HomeKit update() 回調被觸發 ***\n");
     
-    bool changed = false;
+    bool enqueued = false;
     
     // 檢查目標模式變更（使用updated()方法檢測變更）
     if (targetMode->updated()) {
@@ -75,40 +68,21 @@ boolean ThermostatDevice::update() {
                        targetMode->getNewVal(), getHomeKitModeText(targetMode->getNewVal()));
         
         uint8_t newMode = targetMode->getNewVal<uint8_t>();
-        
-        // 處理電源和模式的設定順序很重要：
-        // 1. 如果要切換到關閉模式，直接關閉電源
-        // 2. 如果要切換到運行模式，先設定模式（會自動處理電源）
-        if (newMode == HAP_MODE_OFF) {
-            DEBUG_INFO_PRINT("[Device] 切換到關閉模式，自動關閉電源\n");
-            if (controller.setPower(false)) {
-                DEBUG_INFO_PRINT("[Device] 電源自動關閉成功\n");
+        uint8_t currentModeValue = targetMode->getVal<uint8_t>();
+
+        if (newMode != currentModeValue) {
+            enqueueModeCommand(newMode);
+
+            // 只在沒有收到溫度設定時才自動調整溫度
+            if (!targetTemp->updated()) {
+                autoAdjustTemperatureForMode(newMode);
             }
-        }
-        // 注意：從關閉模式切換到運行模式時，不在這裡開啟電源
-        // 而是在後面的 setTargetMode 中處理，這樣可以確保模式正確
-        
-        // 只在沒有收到溫度設定時才自動調整溫度
-        if (!targetTemp->updated()) {
-            autoAdjustTemperatureForMode(newMode);
-        }
-        
-        if (controller.setTargetMode(newMode)) {
-            changed = true;
-            DEBUG_INFO_PRINT("[Device] 模式變更成功應用\n");
-            // 記錄HomeKit操作到遠端調試器
-            REMOTE_LOG_HOMEKIT_OP("設定模式", "恆溫器", 
-                                 String(targetMode->getVal()) + "(" + getHomeKitModeText(targetMode->getVal()) + ")",
-                                 String(newMode) + "(" + getHomeKitModeText(newMode) + ")",
-                                 true, "");
+
+            // 保留舊值直到命令成功確認
+            targetMode->setVal(currentModeValue);
+            enqueued = true;
         } else {
-            DEBUG_WARN_PRINT("[Device] 模式變更請求被拒絕，但繼續處理其他更新\n");
-            // 記錄失敗的HomeKit操作
-            REMOTE_LOG_HOMEKIT_OP("設定模式", "恆溫器", 
-                                 String(targetMode->getVal()) + "(" + getHomeKitModeText(targetMode->getVal()) + ")",
-                                 String(newMode) + "(" + getHomeKitModeText(newMode) + ")",
-                                 false, "控制器拒絕模式變更");
-            // 不直接返回 false，允許繼續處理其他更新
+            DEBUG_INFO_PRINT("[Device] 模式未變更，忽略命令\n");
         }
     }
     
@@ -118,27 +92,19 @@ boolean ThermostatDevice::update() {
                        targetTemp->getVal<float>(), targetTemp->getNewVal<float>());
         
         float newTemp = targetTemp->getNewVal<float>();
-        if (controller.setTargetTemperature(newTemp)) {
-            changed = true;
-            DEBUG_INFO_PRINT("[Device] 溫度變更成功應用\n");
-            // 記錄HomeKit操作到遠端調試器
-            REMOTE_LOG_HOMEKIT_OP("設定溫度", "恆溫器", 
-                                 String(targetTemp->getVal<float>(), 1) + "°C",
-                                 String(newTemp, 1) + "°C",
-                                 true, "");
+        float currentTempValue = targetTemp->getVal<float>();
+
+        if (fabs(newTemp - currentTempValue) >= 0.05f) {
+            enqueueTemperatureCommand(newTemp);
+            targetTemp->setVal(currentTempValue);
+            enqueued = true;
         } else {
-            DEBUG_WARN_PRINT("[Device] 溫度變更請求被拒絕，但繼續處理其他更新\n");
-            // 記錄失敗的HomeKit操作
-            REMOTE_LOG_HOMEKIT_OP("設定溫度", "恆溫器", 
-                                 String(targetTemp->getVal<float>(), 1) + "°C",
-                                 String(newTemp, 1) + "°C",
-                                 false, "控制器拒絕溫度變更");
-            // 不直接返回 false，允許繼續處理其他更新
+            DEBUG_INFO_PRINT("[Device] 溫度變化小於閾值，忽略命令\n");
         }
     }
     
-    if (changed) {
-        handleSuccessfulUpdate();
+    if (enqueued) {
+        flagHomeKitSyncNeeded();
     } else {
         DEBUG_INFO_PRINT("[Device] HomeKit update() 被調用但未檢測到變更\n");
     }
@@ -148,7 +114,8 @@ boolean ThermostatDevice::update() {
 
 // 自動調整溫度的輔助方法
 void ThermostatDevice::autoAdjustTemperatureForMode(uint8_t mode) {
-    float newTargetTemp = targetTemp->getVal<float>();  // 使用當前的目標溫度作為基礎
+    float currentTarget = targetTemp->getVal<float>();
+    float newTargetTemp = currentTarget;
     float currentTemp = controller.getCurrentTemperature();
     
     // 當切換到製冷模式時，自動調整目標溫度
@@ -164,9 +131,9 @@ void ThermostatDevice::autoAdjustTemperatureForMode(uint8_t mode) {
         DEBUG_INFO_PRINT("[Device] 切換到製熱模式，自動調整目標溫度為 %.1f°C\n", newTargetTemp);
     }
     
-    // 應用自動調整的溫度
-    if (controller.setTargetTemperature(newTargetTemp)) {
-        targetTemp->setVal(newTargetTemp);
+    if (fabs(newTargetTemp - currentTarget) >= 0.05f) {
+        enqueueTemperatureCommand(newTargetTemp);
+        targetTemp->setVal(currentTarget);
     }
 }
 
@@ -175,38 +142,120 @@ void ThermostatDevice::handleSuccessfulUpdate() {
     DEBUG_INFO_PRINT("[Device] HomeKit 變更處理完成，已應用到設備\n");
     
     // 立即觸發狀態同步，提供快速響應
+    pendingHomeKitSync = false;
     lastUpdateTime = FORCED_UPDATE_INTERVAL; // 重置更新時間，強制下次loop()立即執行同步
     
-    publishCoreEvents();
 }
 
-// 核心事件發布輔助方法
-void ThermostatDevice::publishCoreEvents() {
-    if (!g_eventBus) return;
-    
-    // 檢查是否有模式變更
-    if (targetMode->updated()) {
-        String modeDetails = String("模式變更: ") + getHomeKitModeText(targetMode->getNewVal());
-        auto event = DaiSpan::Domain::Thermostat::Events::CommandReceived(
-            DaiSpan::Domain::Thermostat::Events::CommandReceived::Type::Mode,
-            "homekit",
-            modeDetails.c_str()
-        );
-        g_eventBus->publish(event);
-        DEBUG_VERBOSE_PRINT("[Core] 發布 HomeKit 模式變更事件\n");
+void ThermostatDevice::flagHomeKitSyncNeeded() {
+    pendingHomeKitSync = true;
+    lastUpdateTime = 0;
+}
+
+void ThermostatDevice::enqueueModeCommand(uint8_t hapMode) {
+    PendingCommand command{};
+    command.type = CommandType::Mode;
+    command.modeValue = hapMode;
+    command.prevMode = targetMode->getVal<uint8_t>();
+
+    for (auto it = commandQueue.begin(); it != commandQueue.end(); ) {
+        if (it->type == CommandType::Mode) {
+            it = commandQueue.erase(it);
+        } else {
+            ++it;
+        }
     }
-    
-    // 檢查是否有溫度變更
-    if (targetTemp->updated()) {
-        String tempDetails = String("溫度變更: ") + String(targetTemp->getNewVal<float>(), 1) + "°C";
-        auto event = DaiSpan::Domain::Thermostat::Events::CommandReceived(
-            DaiSpan::Domain::Thermostat::Events::CommandReceived::Type::Temperature,
-            "homekit",
-            tempDetails.c_str()
-        );
-        g_eventBus->publish(event);
-        DEBUG_VERBOSE_PRINT("[Core] 發布 HomeKit 溫度變更事件\n");
+
+    commandQueue.push_back(command);
+    DEBUG_INFO_PRINT("[Device] 已排入模式命令：%d(%s)\n", hapMode, getHomeKitModeText(hapMode));
+}
+
+void ThermostatDevice::enqueueTemperatureCommand(float temperature) {
+    float clamped = constrain(temperature, MIN_TEMP, MAX_TEMP);
+
+    PendingCommand command{};
+    command.type = CommandType::Temperature;
+    command.tempValue = clamped;
+    command.prevTemp = targetTemp->getVal<float>();
+
+    for (auto it = commandQueue.begin(); it != commandQueue.end(); ) {
+        if (it->type == CommandType::Temperature) {
+            it = commandQueue.erase(it);
+        } else {
+            ++it;
+        }
     }
+
+    commandQueue.push_back(command);
+    DEBUG_INFO_PRINT("[Device] 已排入溫度命令：%.1f°C\n", clamped);
+}
+
+ThermostatDevice::CommandExecutionStatus ThermostatDevice::processCommandQueue(unsigned long currentTime) {
+    if (commandQueue.empty()) {
+        return CommandExecutionStatus::NoCommand;
+    }
+
+    if ((currentTime - lastCommandProcess) < COMMAND_PROCESS_INTERVAL && !pendingHomeKitSync) {
+        return CommandExecutionStatus::NoCommand;
+    }
+
+    PendingCommand command = commandQueue.front();
+    commandQueue.pop_front();
+    lastCommandProcess = currentTime;
+
+    bool success = executeCommand(command);
+    if (success) {
+        applyCommandSuccess(command);
+        handleSuccessfulUpdate();
+        lastSignificantChange = currentTime;
+        return CommandExecutionStatus::Success;
+    }
+
+    rollbackCommand(command);
+    return CommandExecutionStatus::Failure;
+}
+
+bool ThermostatDevice::executeCommand(const PendingCommand& command) {
+    switch (command.type) {
+        case CommandType::Mode:
+            return controller.setTargetMode(command.modeValue);
+        case CommandType::Temperature:
+            return controller.setTargetTemperature(command.tempValue);
+    }
+    return false;
+}
+
+void ThermostatDevice::applyCommandSuccess(const PendingCommand& command) {
+    switch (command.type) {
+        case CommandType::Mode:
+            targetMode->setVal(command.modeValue);
+            targetMode->timeVal();
+            DEBUG_INFO_PRINT("[Device] 模式命令執行成功 -> %d(%s)\n",
+                             command.modeValue, getHomeKitModeText(command.modeValue));
+            break;
+        case CommandType::Temperature:
+            targetTemp->setVal(command.tempValue);
+            targetTemp->timeVal();
+            DEBUG_INFO_PRINT("[Device] 溫度命令執行成功 -> %.1f°C\n", command.tempValue);
+            break;
+    }
+}
+
+void ThermostatDevice::rollbackCommand(const PendingCommand& command) {
+    switch (command.type) {
+        case CommandType::Mode:
+            targetMode->setVal(command.prevMode);
+            targetMode->timeVal();
+            DEBUG_WARN_PRINT("[Device] 模式命令失敗，回復為 %d(%s)\n",
+                             command.prevMode, getHomeKitModeText(command.prevMode));
+            break;
+        case CommandType::Temperature:
+            targetTemp->setVal(command.prevTemp);
+            targetTemp->timeVal();
+            DEBUG_WARN_PRINT("[Device] 溫度命令失敗，回復為 %.1f°C\n", command.prevTemp);
+            break;
+    }
+    pendingHomeKitSync = false;
 }
 
 // 同步目標模式的輔助方法
@@ -323,8 +372,6 @@ void ThermostatDevice::loop() {
     unsigned long currentTime = millis();
     bool changed = false; // 追蹤是否有狀態變更
     
-    // 移除調試日誌以節省資源
-    
     // 檢查是否需要輸出心跳信息和當前狀態
     if (currentTime - lastHeartbeatTime >= HEARTBEAT_INTERVAL) {
         DEBUG_INFO_PRINT("[Device] HomeSpan loop 運行中... 電源:%s 模式:%d 當前溫度:%.1f°C 目標溫度:%.1f°C\n", 
@@ -335,9 +382,22 @@ void ThermostatDevice::loop() {
         lastHeartbeatTime = currentTime;
     }
     
-    // 強制每次都執行狀態更新檢查 - 確保 HomeKit 狀態同步
-    // 移除間隔限制，讓 HomeKit 狀態同步更頻繁
-    lastUpdateTime = currentTime;
+    bool continueProcessing = true;
+    while (continueProcessing) {
+        auto status = processCommandQueue(currentTime);
+        switch (status) {
+            case CommandExecutionStatus::Success:
+                changed = true;
+                continue;
+            case CommandExecutionStatus::Failure:
+                DEBUG_WARN_PRINT("[Device] 命令執行失敗，已回滾並停止後續佇列\n");
+                continueProcessing = false;
+                break;
+            case CommandExecutionStatus::NoCommand:
+                continueProcessing = false;
+                break;
+        }
+    }
     
     controller.update();
     

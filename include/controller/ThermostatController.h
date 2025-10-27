@@ -35,6 +35,9 @@ private:
     bool handleProtocolError(const char* operation);
     bool isInErrorRecoveryMode() const;
     void resetErrorCount();
+    bool waitForConfirmation(std::function<bool(const ACStatus&)> validator,
+                             unsigned long timeoutMs,
+                             unsigned long pollIntervalMs = 150);
     
 public:
     // 構造函數使用協議實例

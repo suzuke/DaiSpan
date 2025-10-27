@@ -27,59 +27,9 @@ pio run -t clean
 ```
 
 ### Environment Configuration
-The project supports flexible upload methods via different environments:
-
-#### USB Upload (Default)
-```bash
-# Uses esp32-s3-usb environment (default)
-pio run -e esp32-s3-usb -t upload
-```
-
-#### OTA Upload
-```bash
-# Uses esp32-s3-ota environment
-pio run -e esp32-s3-ota -t upload
-```
-
-**Note**: For OTA uploads, ensure the device IP address is correctly set in `platformio.ini` under the respective OTA environment section. The default OTA authentication password is `12345678`.
-
-### Multi-Board Support
-
-#### ESP32-S3 DevKitC-1 (Primary Target)
-```bash
-# USB Upload
-pio run -e esp32-s3-usb -t upload
-
-# OTA Upload  
-pio run -e esp32-s3-ota -t upload
-
-# Legacy environment (build only)
-pio run -e esp32-s3-devkitc-1-n16r8v
-```
-
-#### ESP32-C3 SuperMini
-```bash
-# USB Upload
-pio run -e esp32-c3-supermini-usb -t upload
-
-# OTA Upload
-pio run -e esp32-c3-supermini-ota -t upload
-
-# Legacy environment (build only)
-pio run -e esp32-c3-supermini
-```
-
-#### ESP32-S3 SuperMini
-```bash
-# USB Upload
-pio run -e esp32-s3-supermini-usb -t upload
-
-# OTA Upload
-pio run -e esp32-s3-supermini-ota -t upload
-
-# Legacy environment (build only)
-pio run -e esp32-s3-supermini
-```
+The default environment targets `esp32-c3-supermini`.
+- Minimal build: `pio run -e esp32-c3-supermini`
+- Optional OTA build: `pio run -e esp32-c3-supermini-ota`
 
 ## Architecture Overview
 
@@ -104,7 +54,6 @@ The codebase follows a modern event-driven architecture:
 4. **Controller Layer** (`include/controller/`): Business logic adapters
    - `IThermostatControl.h`: Control interface
    - `ThermostatController.h`: Main controller implementation
-   - `MockThermostatController.h`: Simulation mode
 
 5. **Device Layer** (`include/device/`): HomeKit integration
    - `ThermostatDevice.h`: HomeSpan-based HomeKit thermostat
@@ -126,18 +75,14 @@ The codebase follows a modern event-driven architecture:
 ## Configuration and Setup
 
 ### Hardware Configuration
-The system supports multiple ESP32 variants with different pin assignments:
-- ESP32-C3 Super Mini: RX=4, TX=3
-- ESP32-S3 Super Mini: RX=13, TX=12
-- ESP32-S3 DevKitC-1: RX=14, TX=13
-
+The system targets ESP32-C3 SuperMini (RX=4, TX=3).
 Pin configurations are defined in `include/common/Config.h`.
 
 ### Operating Modes
-1. **Real Hardware Mode**: Communicates with actual Daikin AC via S21 protocol
-2. **Simulation Mode**: Mock implementation for testing and development
+- **Production Mode**: Communicates with actual Daikin AC via S21 protocol
+- **Optional OTA Mode**: Enable via `ENABLE_OTA_UPDATE` when remote flashing is needed
 
-Mode selection is controlled via web interface. The system uses modern event-driven architecture for efficient processing.
+Mode selection is controlled via build flags and the web interface.
 
 ### Initial Setup Process
 1. Device creates "DaiSpan-Config" WiFi access point
@@ -159,12 +104,10 @@ The architecture is designed for easy protocol extension:
 
 The built-in web server provides:
 - System status monitoring with real-time metrics
-- Core architecture status and event system statistics
 - WiFi configuration and network management
 - HomeKit settings management
-- Simulation mode controls
-- Advanced API endpoints for monitoring and debugging
-- OTA update capability
+- Memory and health APIs (`/api/memory/stats`, `/api/monitor/dashboard`)
+- Optional OTA update入口（若啟用 `ENABLE_OTA_UPDATE`）
 - Chinese language support
 
 ### API Endpoints
@@ -177,11 +120,16 @@ The built-in web server provides:
 
 ## Memory Constraints
 
-Current usage (ESP32-C3):
-- Flash: 92.4% (1.6MB/1.7MB)
-- RAM: 46.2% (151KB/327KB)
+Current usage (ESP32-C3 minimal build):
+- Flash: 77.0% (1.56MB/2.03MB)
+- RAM: 22.4% (73KB/327KB)
 
-Keep these limits in mind when adding features. The custom partition table reserves space for OTA updates.
+Keep these limits in mind when adding features. Optional OTA builds consume slightly more flash/RAM.
+
+### Memory Profiles
+- `MemoryProfile` 模組現聚焦於 ESP32-C3，區分最小與 OTA 兩種 profile。
+- `MemoryOptimization::MemoryManager`、`BufferPool`、`StreamingResponseBuilder` 會讀取配置檔；可透過 `/api/memory/*` 與 `scripts/quick_check.py` 查詢當前設定。
+- 如需調整，請更新 `src/MemoryProfile.cpp` 中的 C3 profile 定義。
 
 ## HomeKit Integration
 

@@ -42,7 +42,7 @@
 **解决问题**: 消除大型缓冲区分配
 
 **设计特点**:
-- 512字节小块分批传输
+- 依記憶體配置檔自動調整分塊大小（預設512B，可放大至1536B）
 - 支持 HTTP 分块传输编码
 - 自动管理发送状态
 
@@ -61,7 +61,7 @@ class StreamingResponseBuilder {
 **解决问题**: 避免频繁动态内存分配
 
 **设计特点**:
-- 三级缓冲区池 (512B/1024B/2048B)
+- 緩衝區池數量依配置檔自動調整 (512B/1024B/2048B)
 - RAII 自动归还机制
 - 线程安全访问
 
@@ -108,6 +108,16 @@ class TemplateEngine {
 - 四级内存压力监控
 - 动态策略切换
 - 实时性能统计
+
+### 5. 記憶體配置檔 (MemoryProfile)
+
+**解決問題**：不同硬體與建置模式需要差異化的閾值與緩衝池設定。
+
+**設計特點**：
+- `MemoryProfile` 描述名稱、硬體標籤、閾值、緩衝池數量、串流分塊與最大渲染大小。
+- `MemoryProfileFactory` 會根據巨集（如 `ESP32C3_SUPER_MINI`、`PRODUCTION_BUILD`、`ENABLE_LIGHTWEIGHT_DEBUG`）與執行期資訊（PSRAM 可用性）推導配置。
+- `MemoryManager`、`BufferPool`、`StreamingResponseBuilder` 在建構時套用配置，可於 OTA 或旗標變更時重新載入。
+- `/api/memory/stats`、`/api/memory/detailed` 以及 `scripts/quick_check.py` 會顯示當前配置檔以協助除錯。
 
 **关键API**:
 ```cpp

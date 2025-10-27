@@ -6,8 +6,12 @@
 #include <memory>
 #include <map>
 #include <functional>
-#include <bitset>
 #include <mutex>
+#include <vector>
+#include <numeric>
+#include <algorithm>
+
+#include "MemoryProfile.h"
 
 namespace MemoryOptimization {
 
@@ -17,27 +21,54 @@ namespace MemoryOptimization {
 
 class StreamingResponseBuilder {
 private:
-    static constexpr size_t CHUNK_SIZE = 512;
-    char chunk_buffer[CHUNK_SIZE + 1]; // +1 for null terminator
+    size_t chunk_size = 512;
+    std::vector<char> chunk_buffer;
     size_t buffer_pos = 0;
     WebServer* server = nullptr;
     bool response_started = false;
     bool response_finished = false;
 
+    void ensureBufferAllocated(size_t desiredSize) {
+        if (desiredSize == 0) {
+            desiredSize = 512;
+        }
+        if (desiredSize < 256) {
+            desiredSize = 256;
+        }
+        if (chunk_buffer.empty() || chunk_size != desiredSize) {
+            chunk_size = desiredSize;
+            chunk_buffer.assign(chunk_size + 1, '\0');
+            buffer_pos = 0;
+        }
+    }
+
 public:
     StreamingResponseBuilder() {
-        chunk_buffer[0] = '\0';
+        ensureBufferAllocated(GetActiveMemoryProfile().streamingChunkSize);
+    }
+
+    explicit StreamingResponseBuilder(size_t configuredChunkSize) {
+        ensureBufferAllocated(configuredChunkSize);
+    }
+
+    void setChunkSize(size_t newChunkSize) {
+        ensureBufferAllocated(newChunkSize);
     }
 
     // 开始流式响应
-    void begin(WebServer* srv, const String& content_type = "text/html") {
+    void begin(WebServer* srv, const String& content_type = "text/html", size_t overrideChunkSize = 0) {
+        if (overrideChunkSize > 0) {
+            ensureBufferAllocated(overrideChunkSize);
+        }
         server = srv;
         server->setContentLength(CONTENT_LENGTH_UNKNOWN);
         server->send(200, content_type, "");
         response_started = true;
         response_finished = false;
         buffer_pos = 0;
-        chunk_buffer[0] = '\0';
+        if (!chunk_buffer.empty()) {
+            chunk_buffer[0] = '\0';
+        }
     }
 
     // 添加内容到缓冲区
@@ -48,13 +79,13 @@ public:
         size_t pos = 0;
 
         while (pos < content_len) {
-            size_t copy_len = min(content_len - pos, CHUNK_SIZE - buffer_pos);
-            memcpy(chunk_buffer + buffer_pos, content + pos, copy_len);
+            size_t copy_len = min(content_len - pos, chunk_size - buffer_pos);
+            memcpy(chunk_buffer.data() + buffer_pos, content + pos, copy_len);
             buffer_pos += copy_len;
             pos += copy_len;
 
             // 如果缓冲区满了，发送chunk
-            if (buffer_pos >= CHUNK_SIZE) {
+            if (buffer_pos >= chunk_size) {
                 flush();
             }
         }
@@ -78,7 +109,7 @@ public:
         if (!response_started || response_finished || buffer_pos == 0) return;
 
         chunk_buffer[buffer_pos] = '\0';
-        server->sendContent(chunk_buffer);
+        server->sendContent(chunk_buffer.data());
         buffer_pos = 0;
         chunk_buffer[0] = '\0';
     }
@@ -94,7 +125,8 @@ public:
 
     // 获取当前缓冲区使用情况
     size_t getBufferUsage() const { return buffer_pos; }
-    size_t getBufferCapacity() const { return CHUNK_SIZE; }
+    size_t getBufferCapacity() const { return chunk_size; }
+    size_t getChunkSize() const { return chunk_size; }
 };
 
 // ================================================================================================
@@ -126,11 +158,9 @@ public:
             }
         }
         
-        // 禁止复制
         BufferGuard(const BufferGuard&) = delete;
         BufferGuard& operator=(const BufferGuard&) = delete;
         
-        // 支持移动
         BufferGuard(BufferGuard&& other) noexcept 
             : pool(other.pool), buffer(other.buffer), size(other.size), index(other.index) {
             other.pool = nullptr;
@@ -139,17 +169,13 @@ public:
         
         BufferGuard& operator=(BufferGuard&& other) noexcept {
             if (this != &other) {
-                // 释放当前资源
                 if (pool && buffer) {
                     pool->returnBuffer(buffer, size, index);
                 }
-                
-                // 移动资源
                 pool = other.pool;
                 buffer = other.buffer;
                 size = other.size;
                 index = other.index;
-                
                 other.pool = nullptr;
                 other.buffer = nullptr;
             }
@@ -161,23 +187,137 @@ public:
         bool isValid() const { return buffer != nullptr; }
     };
 
+    BufferPool() {
+        applyProfile(GetActiveMemoryProfile());
+    }
+
+    explicit BufferPool(const MemoryProfile& profileRef) {
+        applyProfile(profileRef);
+    }
+
+    void applyProfile(const MemoryProfile& profileRef) {
+        std::lock_guard<std::mutex> lock(pool_mutex);
+        profile = &profileRef;
+        pool_config = profileRef.pools;
+
+        auto initPool = [](std::vector<std::unique_ptr<char[]>>& buffers,
+                           std::vector<uint8_t>& used,
+                           size_t count,
+                           BufferSize size) {
+            buffers.clear();
+            used.clear();
+            buffers.reserve(count);
+            used.resize(count, 0);
+            for (size_t i = 0; i < count; ++i) {
+                buffers.emplace_back(std::make_unique<char[]>(static_cast<size_t>(size)));
+            }
+        };
+
+        initPool(small_buffers, small_used, pool_config.smallCount, BufferSize::SMALL);
+        initPool(medium_buffers, medium_used, pool_config.mediumCount, BufferSize::MEDIUM);
+
+        if (pool_config.enableLargePool && pool_config.largeCount > 0) {
+            initPool(large_buffers, large_used, pool_config.largeCount, BufferSize::LARGE);
+        } else {
+            large_buffers.clear();
+            large_used.clear();
+        }
+
+        stats = {};
+    }
+
+    const BufferPoolConfig& getConfig() const {
+        return pool_config;
+    }
+
+    bool hasLargeBuffers() const {
+        return pool_config.enableLargePool && pool_config.largeCount > 0;
+    }
+
+    std::unique_ptr<BufferGuard> acquireBuffer(BufferSize size) {
+        std::lock_guard<std::mutex> lock(pool_mutex);
+        stats.total_requests++;
+
+        auto tryAcquire = [&](std::vector<std::unique_ptr<char[]>>& buffers,
+                              std::vector<uint8_t>& usedFlags,
+                              BufferSize bufferSize,
+                              uint32_t& allocationCounter) -> std::unique_ptr<BufferGuard> {
+            for (size_t i = 0; i < usedFlags.size(); ++i) {
+                if (!usedFlags[i]) {
+                    usedFlags[i] = 1;
+                    stats.successful_allocations++;
+                    allocationCounter++;
+                    return std::make_unique<BufferGuard>(this, buffers[i].get(), bufferSize, i);
+                }
+            }
+            return nullptr;
+        };
+
+        std::unique_ptr<BufferGuard> guard;
+        BufferSize currentSize = size;
+        for (int attempt = 0; attempt < 3 && !guard; ++attempt) {
+            switch (currentSize) {
+                case BufferSize::SMALL:
+                    guard = tryAcquire(small_buffers, small_used, BufferSize::SMALL, stats.small_allocations);
+                    break;
+                case BufferSize::MEDIUM:
+                    guard = tryAcquire(medium_buffers, medium_used, BufferSize::MEDIUM, stats.medium_allocations);
+                    if (!guard) {
+                        currentSize = BufferSize::SMALL;
+                        continue;
+                    }
+                    break;
+                case BufferSize::LARGE:
+                    if (!large_buffers.empty()) {
+                        guard = tryAcquire(large_buffers, large_used, BufferSize::LARGE, stats.large_allocations);
+                        if (guard) {
+                            break;
+                        }
+                    }
+                    currentSize = BufferSize::MEDIUM;
+                    continue;
+            }
+        }
+
+        if (!guard) {
+            stats.failed_allocations++;
+        }
+
+        return guard;
+    }
+
+    void getStats(String& stats_str) const {
+        std::lock_guard<std::mutex> lock(pool_mutex);
+        stats_str = "BufferPool Stats:\n";
+        stats_str += "Profile: ";
+        stats_str += profile ? profile->name : "unknown";
+        stats_str += "\nTotal Requests: " + String(stats.total_requests) + "\n";
+        stats_str += "Successful: " + String(stats.successful_allocations) + "\n";
+        stats_str += "Failed: " + String(stats.failed_allocations) + "\n";
+        stats_str += "Small/Medium/Large: " + String(stats.small_allocations) + "/" + 
+                     String(stats.medium_allocations) + "/" + String(stats.large_allocations) + "\n";
+        auto countUsage = [](const std::vector<uint8_t>& data) {
+            return std::accumulate(data.begin(), data.end(), 0);
+        };
+        stats_str += "Current Usage: " + String(countUsage(small_used)) + "/" + String(pool_config.smallCount) + " (S), " +
+                     String(countUsage(medium_used)) + "/" + String(pool_config.mediumCount) + " (M), " +
+                     String(countUsage(large_used)) + "/" + String(pool_config.largeCount) + " (L)\n";
+    }
+
 private:
-    // 不同大小的缓冲区池
-    static constexpr size_t SMALL_POOL_SIZE = 4;
-    static constexpr size_t MEDIUM_POOL_SIZE = 2;
-    static constexpr size_t LARGE_POOL_SIZE = 1;
+    const MemoryProfile* profile = nullptr;
+    BufferPoolConfig pool_config{};
 
-    std::array<std::unique_ptr<char[]>, SMALL_POOL_SIZE> small_buffers;
-    std::array<std::unique_ptr<char[]>, MEDIUM_POOL_SIZE> medium_buffers;
-    std::array<std::unique_ptr<char[]>, LARGE_POOL_SIZE> large_buffers;
+    std::vector<std::unique_ptr<char[]>> small_buffers;
+    std::vector<std::unique_ptr<char[]>> medium_buffers;
+    std::vector<std::unique_ptr<char[]>> large_buffers;
 
-    std::bitset<SMALL_POOL_SIZE> small_used;
-    std::bitset<MEDIUM_POOL_SIZE> medium_used;
-    std::bitset<LARGE_POOL_SIZE> large_used;
+    std::vector<uint8_t> small_used;
+    std::vector<uint8_t> medium_used;
+    std::vector<uint8_t> large_used;
 
     mutable std::mutex pool_mutex;
 
-    // 统计信息
     struct {
         uint32_t total_requests = 0;
         uint32_t successful_allocations = 0;
@@ -187,98 +327,30 @@ private:
         uint32_t large_allocations = 0;
     } stats;
 
-public:
-    BufferPool() {
-        // 预分配所有缓冲区
-        for (size_t i = 0; i < SMALL_POOL_SIZE; ++i) {
-            small_buffers[i] = std::make_unique<char[]>(static_cast<size_t>(BufferSize::SMALL));
-        }
-        for (size_t i = 0; i < MEDIUM_POOL_SIZE; ++i) {
-            medium_buffers[i] = std::make_unique<char[]>(static_cast<size_t>(BufferSize::MEDIUM));
-        }
-        for (size_t i = 0; i < LARGE_POOL_SIZE; ++i) {
-            large_buffers[i] = std::make_unique<char[]>(static_cast<size_t>(BufferSize::LARGE));
-        }
-    }
-
-    std::unique_ptr<BufferGuard> acquireBuffer(BufferSize size) {
-        std::lock_guard<std::mutex> lock(pool_mutex);
-        stats.total_requests++;
-
-        switch (size) {
-            case BufferSize::SMALL:
-                for (size_t i = 0; i < SMALL_POOL_SIZE; ++i) {
-                    if (!small_used[i]) {
-                        small_used[i] = true;
-                        stats.successful_allocations++;
-                        stats.small_allocations++;
-                        return std::make_unique<BufferGuard>(this, small_buffers[i].get(), size, i);
-                    }
-                }
-                break;
-                
-            case BufferSize::MEDIUM:
-                for (size_t i = 0; i < MEDIUM_POOL_SIZE; ++i) {
-                    if (!medium_used[i]) {
-                        medium_used[i] = true;
-                        stats.successful_allocations++;
-                        stats.medium_allocations++;
-                        return std::make_unique<BufferGuard>(this, medium_buffers[i].get(), size, i);
-                    }
-                }
-                break;
-                
-            case BufferSize::LARGE:
-                for (size_t i = 0; i < LARGE_POOL_SIZE; ++i) {
-                    if (!large_used[i]) {
-                        large_used[i] = true;
-                        stats.successful_allocations++;
-                        stats.large_allocations++;
-                        return std::make_unique<BufferGuard>(this, large_buffers[i].get(), size, i);
-                    }
-                }
-                break;
-        }
-
-        stats.failed_allocations++;
-        return nullptr;
-    }
-
-    // 获取池使用统计
-    void getStats(String& stats_str) const {
-        std::lock_guard<std::mutex> lock(pool_mutex);
-        stats_str = "BufferPool Stats:\n";
-        stats_str += "Total Requests: " + String(stats.total_requests) + "\n";
-        stats_str += "Successful: " + String(stats.successful_allocations) + "\n";
-        stats_str += "Failed: " + String(stats.failed_allocations) + "\n";
-        stats_str += "Small/Medium/Large: " + String(stats.small_allocations) + "/" + 
-                     String(stats.medium_allocations) + "/" + String(stats.large_allocations) + "\n";
-        stats_str += "Current Usage: " + String(small_used.count()) + "/" + String(SMALL_POOL_SIZE) + " (S), " +
-                     String(medium_used.count()) + "/" + String(MEDIUM_POOL_SIZE) + " (M), " +
-                     String(large_used.count()) + "/" + String(LARGE_POOL_SIZE) + " (L)\n";
-    }
-
-private:
     friend class BufferGuard;
-    
+
     void returnBuffer(char* buffer, BufferSize size, size_t index) {
+        if (!buffer) {
+            return;
+        }
+
         std::lock_guard<std::mutex> lock(pool_mutex);
-        
+
+        auto release = [&](std::vector<uint8_t>& usedFlags) {
+            if (index < usedFlags.size()) {
+                usedFlags[index] = 0;
+            }
+        };
+
         switch (size) {
             case BufferSize::SMALL:
-                if (index < SMALL_POOL_SIZE) {
-                    small_used[index] = false;
-                }
+                release(small_used);
                 break;
             case BufferSize::MEDIUM:
-                if (index < MEDIUM_POOL_SIZE) {
-                    medium_used[index] = false;
-                }
+                release(medium_used);
                 break;
             case BufferSize::LARGE:
-                if (index < LARGE_POOL_SIZE) {
-                    large_used[index] = false;
-                }
+                release(large_used);
                 break;
         }
     }
@@ -306,9 +378,10 @@ public:
 
 private:
     static constexpr uint32_t MEMORY_CHECK_INTERVAL = 5000; // 5秒检查一次
-    static constexpr uint32_t LOW_MEMORY_THRESHOLD = 25000;  // 25KB (针对ESP32-C3优化)
-    static constexpr uint32_t MEDIUM_MEMORY_THRESHOLD = 18000; // 18KB 
-    static constexpr uint32_t HIGH_MEMORY_THRESHOLD = 15000;   // 15KB
+
+    const MemoryProfile* profile = nullptr;
+    ThresholdConfig thresholds{};
+    size_t profile_max_render_size = 2048;
 
     MemoryPressure current_pressure = MemoryPressure::PRESSURE_LOW;
     RenderStrategy current_strategy = RenderStrategy::FULL_FEATURED;
@@ -326,6 +399,29 @@ private:
     } stats;
 
 public:
+    MemoryManager() {
+        applyProfile(GetActiveMemoryProfile());
+    }
+
+    explicit MemoryManager(const MemoryProfile& profileRef) {
+        applyProfile(profileRef);
+    }
+
+    void applyProfile(const MemoryProfile& profileRef) {
+        profile = &profileRef;
+        thresholds = profileRef.thresholds;
+        profile_max_render_size = profileRef.maxRenderSize;
+        current_pressure = MemoryPressure::PRESSURE_LOW;
+        current_strategy = RenderStrategy::FULL_FEATURED;
+        last_memory_check = 0;
+        consecutive_low_memory = 0;
+        stats = {};
+    }
+
+    const MemoryProfile& getActiveProfile() const {
+        return profile ? *profile : GetActiveMemoryProfile();
+    }
+
     MemoryPressure updateMemoryPressure() {
         uint32_t current_time = millis();
         
@@ -335,13 +431,13 @@ public:
             updateStats(free_heap);
             
             MemoryPressure new_pressure;
-            if (free_heap >= LOW_MEMORY_THRESHOLD) {
+            if (free_heap >= thresholds.low) {
                 new_pressure = MemoryPressure::PRESSURE_LOW;
                 consecutive_low_memory = 0;
-            } else if (free_heap >= MEDIUM_MEMORY_THRESHOLD) {
+            } else if (free_heap >= thresholds.medium) {
                 new_pressure = MemoryPressure::PRESSURE_MEDIUM;
                 consecutive_low_memory++;
-            } else if (free_heap >= HIGH_MEMORY_THRESHOLD) {
+            } else if (free_heap >= thresholds.high) {
                 new_pressure = MemoryPressure::PRESSURE_HIGH;
                 consecutive_low_memory++;
             } else {
@@ -366,38 +462,60 @@ public:
         return current_strategy;
     }
 
-    bool shouldUseStreamingResponse() const {
+    bool shouldUseStreamingResponse() {
+        updateMemoryPressure();
+        if (profile && !profile->enableStreaming) {
+            return false;
+        }
         return current_strategy == RenderStrategy::FULL_FEATURED || 
                current_strategy == RenderStrategy::OPTIMIZED;
     }
 
     size_t getMaxBufferSize() const {
+        size_t base = profile_max_render_size;
         switch (current_strategy) {
             case RenderStrategy::FULL_FEATURED:
-                return 2048;
+                return base;
             case RenderStrategy::OPTIMIZED:
-                return 1024;
+                return base > 512 ? std::max<size_t>(base * 3 / 4, 768) : base;
             case RenderStrategy::MINIMAL:
-                return 512;
+                return base > 512 ? std::max<size_t>(base / 2, static_cast<size_t>(512)) : base;
             case RenderStrategy::EMERGENCY:
-                return 256;
+                return std::max<size_t>(base / 4, static_cast<size_t>(256));
             default:
-                return 512;
+                return std::max<size_t>(base / 2, static_cast<size_t>(512));
         }
     }
 
     BufferPool::BufferSize getRecommendedBufferSize() const {
         size_t max_size = getMaxBufferSize();
-        if (max_size >= 2048) return BufferPool::BufferSize::LARGE;
-        if (max_size >= 1024) return BufferPool::BufferSize::MEDIUM;
+        const bool hasLarge = profile ? (profile->pools.enableLargePool && profile->pools.largeCount > 0) : true;
+        const bool hasMedium = profile ? (profile->pools.mediumCount > 0) : true;
+        if (hasLarge && max_size >= static_cast<size_t>(BufferPool::BufferSize::LARGE)) {
+            return BufferPool::BufferSize::LARGE;
+        }
+        if (hasMedium && max_size >= static_cast<size_t>(BufferPool::BufferSize::MEDIUM)) {
+            return BufferPool::BufferSize::MEDIUM;
+        }
         return BufferPool::BufferSize::SMALL;
     }
 
-    bool shouldServePage(const String& page_type) const {
+    bool shouldServePage(const String& page_type) {
+        updateMemoryPressure();
         if (current_strategy == RenderStrategy::EMERGENCY) {
             return page_type == "status" || page_type == "error";
         }
+        if (profile && !profile->enableLargeTemplates && 
+            (current_strategy == RenderStrategy::MINIMAL) &&
+            page_type != "status" && page_type != "error") {
+            return false;
+        }
         return true;
+    }
+
+    bool isEmergencyMode() {
+        updateMemoryPressure();
+        return current_strategy == RenderStrategy::EMERGENCY;
     }
 
     void getMemoryStats(String& stats_str) const {
@@ -410,6 +528,15 @@ public:
         stats_str += "Pressure Changes: " + String(stats.pressure_changes) + "\n";
         stats_str += "Emergency Activations: " + String(stats.emergency_activations) + "\n";
         stats_str += "Sample Count: " + String(stats.sample_count) + "\n";
+        if (profile) {
+            stats_str += "Active Profile: " + profile->name + " (" + profile->hardwareTag + ")\n";
+            stats_str += "Thresholds: low=" + String(thresholds.low) + 
+                         ", medium=" + String(thresholds.medium) +
+                         ", high=" + String(thresholds.high) +
+                         ", critical=" + String(thresholds.critical) + "\n";
+            stats_str += "Streaming Chunk: " + String(profile->streamingChunkSize) + " bytes\n";
+            stats_str += "Max Render Size: " + String(profile_max_render_size) + " bytes\n";
+        }
     }
 
 private:
@@ -477,15 +604,38 @@ private:
 
 class WebPageGenerator {
 private:
+    const MemoryProfile* active_profile = nullptr;
     std::unique_ptr<MemoryManager> memory_manager;
     std::unique_ptr<BufferPool> buffer_pool;
     std::unique_ptr<StreamingResponseBuilder> stream_builder;
 
 public:
     WebPageGenerator() {
-        memory_manager = std::make_unique<MemoryManager>();
-        buffer_pool = std::make_unique<BufferPool>();
-        stream_builder = std::make_unique<StreamingResponseBuilder>();
+        const auto& profile = GetActiveMemoryProfile();
+        memory_manager = std::make_unique<MemoryManager>(profile);
+        buffer_pool = std::make_unique<BufferPool>(profile);
+        stream_builder = std::make_unique<StreamingResponseBuilder>(profile.streamingChunkSize);
+        active_profile = &profile;
+    }
+
+    explicit WebPageGenerator(const MemoryProfile& profile) {
+        memory_manager = std::make_unique<MemoryManager>(profile);
+        buffer_pool = std::make_unique<BufferPool>(profile);
+        stream_builder = std::make_unique<StreamingResponseBuilder>(profile.streamingChunkSize);
+        active_profile = &profile;
+    }
+
+    void applyProfile(const MemoryProfile& profile) {
+        active_profile = &profile;
+        if (memory_manager) {
+            memory_manager->applyProfile(profile);
+        }
+        if (buffer_pool) {
+            buffer_pool->applyProfile(profile);
+        }
+        if (stream_builder) {
+            stream_builder->setChunkSize(profile.streamingChunkSize);
+        }
     }
 
     // 生成简单的状态页面
@@ -506,7 +656,7 @@ public:
         }
 
         // 使用流式响应
-        stream_builder->begin(server);
+        stream_builder->begin(server, "text/html", active_profile ? active_profile->streamingChunkSize : 0);
         
         // 生成HTML头部
         stream_builder->append("<!DOCTYPE html><html><head>");
@@ -532,12 +682,19 @@ public:
     // 生成WiFi配置页面（简化版）
     void generateWiFiConfigPage(WebServer* server) {
         if (!memory_manager->shouldServePage("wifi_config")) {
-            server->send(503, "text/html", 
-                        "<html><body><h1>系统内存不足</h1><p>请稍后重试</p></body></html>");
+            server->send(200, "text/html", 
+                        "<html><body><h1>系统内存不足</h1><p>当前处于紧急模式，仅保留核心功能。</p><p><a href='/' style='display:inline-block;margin-top:10px;'>返回主頁</a></p></body></html>");
             return;
         }
 
-        stream_builder->begin(server);
+        auto strategy = memory_manager->getRenderStrategy();
+        if (strategy == MemoryManager::RenderStrategy::EMERGENCY) {
+            server->send(200, "text/html", 
+                        "<html><body><h1>系统内存不足</h1><p>当前无法加载完整 WiFi 配置頁面。</p><p><a href='/' style='display:inline-block;margin-top:10px;'>返回主頁</a></p></body></html>");
+            return;
+        }
+
+        stream_builder->begin(server, "text/html", active_profile ? active_profile->streamingChunkSize : 0);
         
         // HTML头部
         stream_builder->append("<!DOCTYPE html><html><head>");
@@ -592,6 +749,11 @@ public:
         stats += buffer_stats + "\n";
         stats += "Stream Buffer Usage: " + String(stream_builder->getBufferUsage()) + "/" + 
                  String(stream_builder->getBufferCapacity()) + " bytes\n";
+        if (active_profile) {
+            stats += "Active Profile: " + active_profile->name + " (" + active_profile->hardwareTag + ")\n";
+            stats += "Profile Chunk Size: " + String(active_profile->streamingChunkSize) + " bytes\n";
+            stats += "Profile Reason: " + active_profile->selectionReason + "\n";
+        }
     }
 
 private:

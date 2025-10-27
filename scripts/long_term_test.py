@@ -44,9 +44,7 @@ class DaiSpanMonitor:
         self.test_pages = {
             "/": "主頁",
             "/wifi": "WiFi設定頁",
-            "/homekit": "HomeKit設定頁", 
-            "/simulation-toggle": "模擬切換頁",
-            "/ota": "OTA更新頁"
+            "/homekit": "HomeKit設定頁"
         }
         
         self.log_message("=== DaiSpan 長期穩定性測試開始 ===")

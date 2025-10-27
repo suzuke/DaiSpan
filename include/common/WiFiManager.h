@@ -6,7 +6,6 @@
 #include "Update.h"
 #include "Config.h"
 #include "Debug.h"
-#include "OTAManager.h"
 #include "LogManager.h"
 #include "WebUI.h"
 #include "esp_wifi.h"
@@ -19,7 +18,6 @@ private:
     ConfigManager& config;
     WebServer* webServer;
     DNSServer* dnsServer;
-    OTAManager* otaManager;
     bool isAPMode;
     bool isConfigured;
     int connectionAttempts;
@@ -50,7 +48,6 @@ public:
         config(cfg), 
         webServer(nullptr), 
         dnsServer(nullptr),
-        otaManager(nullptr),
         isAPMode(false), 
         isConfigured(false),
         connectionAttempts(0),
@@ -65,7 +62,6 @@ public:
     ~WiFiManager() {
         if (webServer) delete webServer;
         if (dnsServer) delete dnsServer;
-        // OTA 管理器由外部管理，不在此處刪除
     }
     
     // 初始化 WiFi 管理器
@@ -810,11 +806,6 @@ public:
         }
     }
     
-    // 設置 OTA 管理器
-    void setOTAManager(OTAManager* ota) {
-        otaManager = ota;
-    }
-    
     // 停止 AP 模式並切換到 STA 模式
     void stopAPMode() {
         if (!isAPMode) return;
@@ -959,13 +950,11 @@ private:
 
     // 生成 OTA 頁面 HTML
     String getOTAPageHTML() {
-        String otaStatus = "";
-        if (otaManager) {
-            otaStatus = otaManager->getStatusHTML();
-        } else {
-            otaStatus = "<p><span style=\"color: red;\">●</span> OTA 管理器未初始化</p>";
-        }
-        
+        #ifdef ENABLE_OTA_UPDATE
+        String otaStatus = "<p><span style=\"color: green;\">●</span> OTA 服務已啟用，請使用 PlatformIO 或 Arduino IDE 進行更新。</p>";
+        #else
+        String otaStatus = "<p><span style=\"color: red;\">●</span> OTA 功能未啟用。</p>";
+        #endif
         return WebUI::getOTAPage(WiFi.localIP().toString(), "DaiSpan-Thermostat", otaStatus);
     }
 };

@@ -18,7 +18,7 @@ python3 scripts/quick_check.py 192.168.4.1
 
 **功能：**
 - 自動掃描常見IP地址尋找DaiSpan設備
-- 測試所有網頁端點（/, /wifi, /homekit, /simulation-toggle, /ota）
+- 測試核心頁面（/, /wifi, /homekit），並顯示回應時間與頁面大小
 - 顯示回應時間和頁面大小
 - 檢查頁面內容完整性
 

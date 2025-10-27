@@ -23,15 +23,6 @@
 - ⚡ **Real-time Updates** - Instant status synchronization
 - 📱 **Siri Integration** - Voice control support
 
-### **Advanced Remote Debugging** 🛠️
-- 🌐 **Multi-Strategy Debugging System** - Three debugging environments with unified web interface
-- 📊 **Live Serial Log Streaming** - Equivalent to `pio device monitor` but accessible remotely
-- 🔍 **System Diagnostics** - Comprehensive health checks and status monitoring
-- 📈 **Memory Health Monitoring** - Real-time memory usage tracking with health status indicators
-- 🎯 **HomeKit Operation Tracking** - Real-time logging of all HomeKit interactions
-- 💻 **Unified Web Interface** - Consistent professional dashboard across all build environments
-- ⚡ **Environment-Specific Backends** - Optimized debugging for development vs production use
-
 ### **Protocol & Hardware Support**
 - 🔌 **Multiple ESP32 Variants** - ESP32-S3, ESP32-C3 SuperMini support
 - 📡 **S21 Protocol Versions** - Full support for 1.0, 2.0, and 3.xx
@@ -46,14 +37,18 @@
 - 🇹🇼 **Chinese Language Support** - Full Traditional Chinese interface
 - 📊 **Real-time Monitoring** - Live system status and performance metrics
 
+## 🔄 **Recent Architecture Updates**
+
+- 🧾 **HomeKit Command Queue with Confirmation** – Mode and temperature changes are queued and applied only after the indoor unit confirms success, preventing HomeKit/UI desynchronization.
+- 🚦 **Memory Pressure Levels** – The dashboard and `/api/health` expose Normal / Tight / Critical indicators so you can see when the system is throttling background work.
+- ⏱️ **Scheduler Load Metrics** – Latest task count and execution time (μs) are displayed to help diagnose loop bottlenecks on constrained ESP32-C3 hardware.
+- 🧹 **Legacy System Cleanup** – Removed unused event bus and service container layers to lower memory footprint while keeping HomeKit, Wi-Fi provisioning, and OTA as the core focus.
 ## 🛠️ **Hardware Requirements**
 
 ### **Supported ESP32 Boards**
 | Board | Status | RX Pin | TX Pin | Flash Size | Notes |
 |-------|--------|--------|--------|------------|-------|
-| **ESP32-S3 DevKitC-1** | ✅ Primary | 14 | 13 | 16MB | Recommended |
-| **ESP32-C3 SuperMini** | ✅ Tested | 4 | 3 | 4MB | Compact option |
-| **ESP32-S3 SuperMini** | ✅ Supported | 13 | 12 | 16MB | Alternative |
+| **ESP32-C3 SuperMini** | ✅ Primary | 4 | 3 | 4MB | Minimal HomeKit bridge target |
 
 ### **Additional Hardware**
 - 🔌 **TTL to S21 Adapter** (3.3V level)
@@ -75,9 +70,8 @@ pip install platformio
 # Build firmware
 pio run
 
-# Upload to ESP32 (choose your board)
-pio run -e esp32-s3-usb -t upload        # ESP32-S3 via USB
-pio run -e esp32-c3-supermini-usb -t upload # ESP32-C3 via USB
+# Upload to ESP32-C3 SuperMini
+pio run -e esp32-c3-supermini -t upload
 ```
 
 ### **2. Initial Setup**
@@ -91,52 +85,19 @@ pio run -e esp32-c3-supermini-usb -t upload # ESP32-C3 via USB
 ### **3. Advanced Development**
 
 ```bash
-# Multiple build environments with unified web interface
-pio run -e esp32-s3-usb -t upload                    # USB upload (Full debugging)
-pio run -e esp32-c3-supermini-lightweight -t upload  # Lightweight debugging
-pio run -e esp32-c3-supermini-production -t upload   # Production build
-pio run -e esp32-s3-ota -t upload                    # OTA upload
+# Minimal production build (default)
+pio run -e esp32-c3-supermini -t upload
 
-# Monitoring and debugging - all environments provide web interface on port 8080
-pio device monitor                          # Local serial monitoring
-# Unified web interface: http://device-ip:8080 (consistent across all builds)
-# Remote debugging: http://device-ip:8081 (WebSocket) or :8082 (HTTP)
+# Optional: enable OTA support (requires updating upload_port/IP)
+pio run -e esp32-c3-supermini-ota -t upload
 
-# Testing and validation
-python3 scripts/quick_check.py [device_ip] # Quick health check
-python3 scripts/long_term_test.py 192.168.4.1 24 5  # 24-hour stability test
+# Serial monitor for日誌除錯
+pio device monitor
+
+# 基本驗證腳本
+python3 scripts/quick_check.py [device_ip]
+python3 scripts/long_term_test.py [device_ip] 24 5
 ```
-
-## 🌐 **Unified Debugging System**
-
-DaiSpan features a revolutionary **unified web interface** with three specialized debugging backends:
-
-### **Debugging Environments**
-
-| Environment | Build Flag | Backend | Memory Usage | Features |
-|-------------|------------|---------|--------------|----------|
-| **Full Debug** | `ENABLE_REMOTE_DEBUG` | WebSocket (8081) | ~65KB | Real-time logs, diagnostics |
-| **Lightweight** | `ENABLE_LIGHTWEIGHT_DEBUG` | HTTP (8082) | ~10KB | Current state only |
-| **Production** | `PRODUCTION_BUILD` | None | 0KB | Zero debugging overhead |
-
-### **Unified Web Interface**
-All environments provide the **same web interface** on port **8080**:
-```
-http://your-device-ip:8080
-```
-
-**Consistent Features Across All Builds:**
-- 🌐 **Unified Homepage** - Identical modern design and navigation
-- 🛜 **WiFi Configuration** - Network scanning and management  
-- 🏠 **HomeKit Settings** - Device configuration and pairing
-- 📊 **System Status** - Real-time monitoring with memory health indicators
-- 🔄 **OTA Updates** - Over-the-air firmware updates
-- 📝 **Log Viewing** - System logs with filtering capabilities
-
-### **Backend-Specific Features**
-- **WebSocket Debugging (8081)**: Real-time serial logs, multi-client support
-- **HTTP Debugging (8082)**: Lightweight current state API endpoints
-- **Production Mode**: Web interface only, no debugging overhead
 
 ## 🏗️ **Architecture**
 
@@ -158,8 +119,8 @@ DaiSpan follows a clean, modular architecture:
 ## 📊 **Performance & Memory**
 
 ### **Current Metrics (ESP32-C3)**
-- **Flash Usage**: 91.3% (1.53MB/1.69MB)
-- **RAM Usage**: 16.1% (~140KB available)
+- **Flash Usage**: 77.0% (1.56MB / 2.03MB)
+- **RAM Usage**: 22.4% (~73KB used)
 - **Update Frequency**: 6-second status polling
 - **Response Time**: <100ms for HomeKit operations
 
@@ -167,6 +128,7 @@ DaiSpan follows a clean, modular architecture:
 - ✅ **Optimized Partitions** - Custom partition table for OTA
 - ♻️ **Dynamic Memory** - Efficient memory allocation
 - 📈 **Unified Memory Monitoring** - Health status indicators across all build environments
+- 🧠 **Hardware-Aware Profiles** - Tuned thresholds/buffer pools for ESP32-C3 minimal vs OTA builds
 - 🚨 **Memory Health System** - EXCELLENT/GOOD/WARNING/CRITICAL/EMERGENCY status levels
 - 🔧 **Adaptive Memory Strategies** - Automatic optimization based on available resources
 
@@ -174,7 +136,7 @@ DaiSpan follows a clean, modular architecture:
 
 ### **Automated Testing Scripts**
 ```bash
-# Quick system validation
+# Quick system validation (includes memory profile check)
 python3 scripts/quick_check.py [device_ip]
 
 # Long-term stability testing  
@@ -188,7 +150,6 @@ python3 scripts/long_term_test.py [device_ip] [hours] [interval_minutes]
 - 🔬 **Unit Testing** - Protocol abstraction enables isolated testing
 - 🏃 **Integration Testing** - Web interface manual testing
 - 📊 **Performance Testing** - Long-term stability validation
-- 🔄 **Simulation Mode** - Mock controller for development
 
 ## 🛠️ **Configuration**
 
@@ -196,18 +157,14 @@ python3 scripts/long_term_test.py [device_ip] [hours] [interval_minutes]
 Automatically configured based on board selection in `include/common/Config.h`:
 
 ```cpp
-// ESP32-C3 SuperMini
+// ESP32-C3 SuperMini（唯一支援板）
 #define S21_RX_PIN 4
 #define S21_TX_PIN 3
-
-// ESP32-S3 variants  
-#define S21_RX_PIN 13  // or 14 for DevKitC-1
-#define S21_TX_PIN 12  // or 13 for DevKitC-1
 ```
 
 ### **Operating Modes**
 1. **Production Mode** - Full S21 communication with real AC unit
-2. **Simulation Mode** - Mock implementation for testing and development
+2. **Optional OTA Mode** - Enable via `ENABLE_OTA_UPDATE` when remote flashing is required
 
 ## 🤝 **Contributing**
 
@@ -228,16 +185,15 @@ We welcome contributions! Please see our contribution guidelines:
 ## 🐛 **Troubleshooting**
 
 ### **Common Issues**
-- **HomeKit not responding**: Check remote debug logs at `/debug`
+- **HomeKit not responding**: Inspect serial logs via `pio device monitor`
 - **WiFi connection issues**: Verify 2.4GHz network compatibility  
 - **S21 communication errors**: Verify pin connections and protocol settings
-- **Memory issues**: Monitor usage via remote debugging interface
+- **Memory issues**: Query `/api/memory/stats` 或 `/api/memory/detailed` 查看壓力指標
 
 ### **Debug Resources**
-- 🌐 **Unified Web Interface**: `http://device-ip:8080` (consistent across all builds)
-- 📡 **WebSocket Logs**: `ws://device-ip:8081` (full debug builds only)
-- 📝 **HTTP API**: `http://device-ip:8082` (lightweight debug builds)
-- 📊 **System Diagnostics**: Built-in health check commands and memory monitoring
+- 🌐 **Web Interface**: `http://device-ip:8080`
+- 📝 **Health APIs**: `/api/memory/stats`, `/api/memory/detailed`, `/api/monitor/dashboard`
+- 🧰 **Serial Log**: `pio device monitor` for real-time debugging
 
 ## 📄 **License**
 
@@ -252,7 +208,7 @@ This project incorporates code and concepts from:
 Special thanks to:
 - 🏠 **HomeSpan Project** - Excellent HomeKit library
 - 🌊 **ESP32-Faikin** - S21 protocol foundation  
-- 🤖 **Claude Code** - Development assistance and remote debugging system design
+- 🤖 **Claude Code** - Development assistance across refactors
 
 ---
 
@@ -260,6 +216,6 @@ Special thanks to:
 
 **Made with ❤️ for the Smart Home Community**
 
-*For support, please use the remote debugging tools or check the documentation*
+*For support, please monitor serial logs or參考文件*
 
 </div>

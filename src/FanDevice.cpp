@@ -1,6 +1,5 @@
 #include "device/FanDevice.h"
 #include "common/Debug.h"
-#include "common/RemoteDebugger.h"
 
 FanDevice::FanDevice(IThermostatControl& ctrl) 
     : Service::Fan(),

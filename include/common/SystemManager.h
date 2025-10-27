@@ -3,14 +3,12 @@
 #include <Arduino.h>
 #include "WiFi.h"
 #include "WebServer.h"
-#include "ArduinoOTA.h"
+#include "core/Scheduler.h"
 
 // 前向宣告
 class ConfigManager;
 class WiFiManager;
-class OTAManager;
 class IThermostatControl;
-class MockThermostatController;
 class ThermostatDevice;
 
 /**
@@ -19,44 +17,30 @@ class ThermostatDevice;
  */
 class SystemManager {
 private:
+    enum class MemoryPressure {
+        Normal,
+        Tight,
+        Critical
+    };
+
     // 高性能定時系統
-    struct OptimizedTimingSystem {
-        // 合併定時器到單一結構，減少比較次數
-        unsigned long nextPowerCheck;
-        unsigned long nextPairingCheck;
-        unsigned long nextHeartbeat;
-        unsigned long nextWebServerHandle;
-        unsigned long nextWiFiCheck;
-        unsigned long homeKitReadyTime;
-        
-        // 狀態標誌
-        bool webServerStartScheduled;
-        bool homeKitStabilized;
-        bool wasPairing;
-        int webServerSkipCounter;
-        uint32_t avgMemory;
-        
-        // 循環計數器優化 - 減少毫秒調用
-        uint16_t loopCounter;
-        uint16_t fastLoopDivider;
-        
-        OptimizedTimingSystem() : nextPowerCheck(0), nextPairingCheck(0), nextHeartbeat(0),
-                                 nextWebServerHandle(0), nextWiFiCheck(0), homeKitReadyTime(0),
-                                 webServerStartScheduled(false), homeKitStabilized(false),
-                                 wasPairing(false), webServerSkipCounter(0), avgMemory(0),
-                                 loopCounter(0), fastLoopDivider(100) {}
+    struct RuntimeState {
+        unsigned long homeKitReadyTime = 0;
+        bool homeKitStabilized = false;
+        bool wasPairing = false;
+        uint32_t avgMemory = 0;
+        MemoryPressure memoryPressure = MemoryPressure::Normal;
+        uint16_t lastTaskCount = 0;
+        uint32_t lastSchedulerDurationUs = 0;
     } state;
+    
+    DaiSpan::Core::Scheduler scheduler;
     
     // 系統組件引用
     ConfigManager& configManager;
     WiFiManager*& wifiManager;
     WebServer*& webServer;
     IThermostatControl*& thermostatController;
-    #ifndef DISABLE_MOCK_CONTROLLER
-    MockThermostatController*& mockController;
-    #else
-    MockThermostatController* mockController;
-    #endif
     ThermostatDevice*& thermostatDevice;
     
     // 系統狀態標誌
@@ -66,33 +50,20 @@ private:
     bool& homeKitPairingActive;
     
     // 私有方法
-    void handleOptimizedTimingTasks(unsigned long currentTime);
-    void handleESP32C3PowerManagement(unsigned long currentTime);
     void handleGlobalWiFiMonitoring(unsigned long currentTime);
-    void handleOTAUpdates();
     void handleHomeKitMode(unsigned long currentTime);
     void handleConfigurationMode();
-    void handleWebServerStartup(unsigned long currentTime);
     void handleHomeKitPairingDetection(unsigned long currentTime);
-    void handleWebServerProcessing(unsigned long currentTime);
-    void handlePeriodicTasks(unsigned long currentTime);
     void printHeartbeatInfo(unsigned long currentTime);
     void handleSmartWiFiPowerManagement();
+    void registerTasks();
     
     // 輔助方法
-    bool shouldStartWebServer(unsigned long currentTime) const;
-    unsigned long calculateWebServerInterval(uint32_t freeMemory);
-    bool shouldSkipWebServerProcessing() const;
     void updatePairingDetection(uint32_t currentMemory);
     
 public:
     SystemManager(ConfigManager& config, WiFiManager*& wifi, WebServer*& web,
-                 IThermostatControl*& controller, 
-                 #ifndef DISABLE_MOCK_CONTROLLER
-                 MockThermostatController*& mock,
-                 #else
-                 MockThermostatController* mock,
-                 #endif
+                 IThermostatControl*& controller,
                  ThermostatDevice*& device, bool& devInit, bool& hkInit, 
                  bool& monitoring, bool& pairing);
     
@@ -116,4 +87,11 @@ public:
      * 檢查是否需要啟動 WebServer 監控
      */
     bool shouldStartMonitoring() const;
-};
+
+    uint32_t getAverageMemory() const { return state.avgMemory; }
+    String getMemoryPressureText() const;
+    uint16_t getSchedulerTaskCount() const { return state.lastTaskCount; }
+    uint32_t getSchedulerDurationUs() const { return state.lastSchedulerDurationUs; }
+    bool isMemoryCritical() const { return state.memoryPressure == MemoryPressure::Critical; }
+    uint8_t getMemoryPressureLevel() const;
+}; 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "HomeSpan.h"
+#include <deque>
 #include "../controller/IThermostatControl.h"
 #include "../common/Debug.h"
 
@@ -39,6 +40,24 @@ private:
     unsigned long lastHeartbeatTime;  // 最後心跳時間
     unsigned long lastSignificantChange; // 最後重要狀態變化時間
     
+    enum class CommandType {
+        Mode,
+        Temperature
+    };
+
+    struct PendingCommand {
+        CommandType type;
+        uint8_t modeValue;
+        uint8_t prevMode;
+        float tempValue;
+        float prevTemp;
+    };
+
+    std::deque<PendingCommand> commandQueue;
+    bool pendingHomeKitSync = false;
+    static constexpr unsigned long COMMAND_PROCESS_INTERVAL = 50; // 每 50ms 檢查一次佇列
+    unsigned long lastCommandProcess = 0;
+    
     // 添加模式文字轉換函數
     static const char* getHomeKitModeText(int mode) {
         switch (mode) {
@@ -61,7 +80,18 @@ private:
     bool syncCurrentMode(unsigned long currentTime);
     uint8_t calculateAutoModeState();
     
-    void publishCoreEvents();
+    void enqueueModeCommand(uint8_t hapMode);
+    void enqueueTemperatureCommand(float temperature);
+    enum class CommandExecutionStatus {
+        NoCommand,
+        Success,
+        Failure
+    };
+    CommandExecutionStatus processCommandQueue(unsigned long currentTime);
+    bool executeCommand(const PendingCommand& command);
+    void applyCommandSuccess(const PendingCommand& command);
+    void rollbackCommand(const PendingCommand& command);
+    void flagHomeKitSyncNeeded();
     
 public:
     explicit ThermostatDevice(IThermostatControl& ctrl);

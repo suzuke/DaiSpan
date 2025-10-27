@@ -7,10 +7,11 @@
 ## 🚀 新增功能
 
 ### 1. 記憶體優化組件
-- **StreamingResponseBuilder**: 流式HTTP響應，512字節分塊傳輸
+- **StreamingResponseBuilder**: 流式HTTP響應，依配置檔自動調整（預設512B，可提升至1536B）
 - **BufferPool**: 三級緩衝區池 (512B/1024B/2048B)
 - **MemoryManager**: 四級內存壓力監控和自適應策略
 - **WebPageGenerator**: 統一的頁面生成器
+- **MemoryProfile**: 根據硬體與建置旗標自動選擇閾值、緩衝池數量與串流分塊大小，所有遙測會顯示目前啟用的配置檔
 
 ### 2. 監控API端點
 
@@ -77,13 +78,10 @@ GET /api/performance/benchmark
 ### 1. 部署韌體
 
 ```bash
-# 編譯韌體
-pio run -e esp32-c3-supermini-usb
+# 編譯與上傳最小韌體
+pio run -e esp32-c3-supermini -t upload
 
-# 上傳韌體 (USB)
-pio run -e esp32-c3-supermini-usb -t upload
-
-# 上傳韌體 (OTA)
+# 可選：啟用 OTA 版本
 pio run -e esp32-c3-supermini-ota -t upload
 ```
 
