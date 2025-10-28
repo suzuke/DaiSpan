@@ -31,7 +31,7 @@
 - ⚙️ **OTA Updates** - Over-the-air firmware updates
 
 ### **Web Interface & Management**
-- 🌐 **Comprehensive Web Dashboard** - Status monitoring and configuration
+- 🌐 **Comprehensive Web Dashboard** - Unified “Status” and “Actions” panels grouping related info/links
 - 🛜 **WiFi Management** - Easy setup and credential management  
 - 🔧 **Configuration Interface** - HomeKit settings and device management
 - 🇹🇼 **Chinese Language Support** - Full Traditional Chinese interface
