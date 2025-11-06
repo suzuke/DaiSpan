@@ -222,11 +222,23 @@ bool S21Protocol::detectFeatures() {
                     features.hasQuietMode = (payload[0] & 0x04) != 0;
                     features.hasComfortMode = (payload[0] & 0x08) != 0;
                     
+                    bool swingAny = (payload[0] & 0x04) != 0;
+                    bool swingHorizontal = (payload[0] & 0x08) != 0;
+                    
                     if (payloadLen >= 2) {
-                        features.hasSwingControl = (payload[1] & 0x01) != 0;
+                        bool legacySwing = (payload[1] & 0x01) != 0;
+                        features.hasSwingControl = swingAny || legacySwing;
                         features.hasScheduleMode = (payload[1] & 0x02) != 0;
                         features.hasHumiditySensor = (payload[1] & 0x04) != 0;
                         features.hasOutdoorTempSensor = (payload[1] & 0x08) != 0;
+                    } else {
+                        features.hasSwingControl = swingAny;
+                    }
+
+                    features.hasVerticalSwing = features.hasSwingControl;
+                    features.hasHorizontalSwing = swingHorizontal;
+                    if (!features.hasSwingControl && (payloadLen >= 2)) {
+                        features.hasSwingControl = features.hasVerticalSwing || features.hasHorizontalSwing;
                     }
                 }
             }

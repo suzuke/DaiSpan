@@ -5,6 +5,7 @@
 #include "controller/ThermostatController.h"
 #include "device/ThermostatDevice.h"
 #include "device/FanDevice.h"
+#include "device/SwingDevice.h"
 #include "protocol/S21Protocol.h"
 #include "protocol/IACProtocol.h"
 #include "protocol/ACProtocolFactory.h"
@@ -1920,6 +1921,24 @@ void initializeHomeKit() {
             DEBUG_ERROR_PRINT("[Main] 創建 FanDevice 失敗\n");
         } else {
             DEBUG_INFO_PRINT("[Main] FanDevice 創建成功並註冊到HomeKit\n");
+        }
+
+        if (thermostatController->supportsSwing(IACProtocol::SwingAxis::Vertical)) {
+            DEBUG_INFO_PRINT("[Main] 建立垂直擺風 HomeKit 控制\n");
+            new SwingSwitchService(*thermostatController,
+                                   IACProtocol::SwingAxis::Vertical,
+                                   "垂直擺風");
+        } else {
+            DEBUG_INFO_PRINT("[Main] 垂直擺風不支援，略過對應 HomeKit 控制\n");
+        }
+
+        if (thermostatController->supportsSwing(IACProtocol::SwingAxis::Horizontal)) {
+            DEBUG_INFO_PRINT("[Main] 建立水平擺風 HomeKit 控制\n");
+            new SwingSwitchService(*thermostatController,
+                                   IACProtocol::SwingAxis::Horizontal,
+                                   "水平擺風");
+        } else {
+            DEBUG_INFO_PRINT("[Main] 水平擺風不支援，略過對應 HomeKit 控制\n");
         }
         
         // HomeKit 初始化完成後，設置核心事件監聽

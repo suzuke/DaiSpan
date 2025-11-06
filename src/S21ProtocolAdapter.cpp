@@ -22,7 +22,10 @@ const std::vector<uint8_t> S21ProtocolAdapter::SUPPORTED_FAN_SPEEDS = {
 };
 
 S21ProtocolAdapter::S21ProtocolAdapter(std::unique_ptr<S21Protocol> protocol) 
-    : s21Protocol(std::move(protocol)), lastOperationSuccess(false) {
+    : s21Protocol(std::move(protocol)),
+      lastOperationSuccess(false),
+      swingCapabilityVertical(false),
+      swingCapabilityHorizontal(false) {
     DEBUG_INFO_PRINT("[S21Adapter] S21協議適配器初始化\n");
     lastStatus.isValid = false;
 }
@@ -40,6 +43,8 @@ bool S21ProtocolAdapter::begin() {
         lastOperationSuccess = true;
         setLastError("");
         DEBUG_INFO_PRINT("[S21Adapter] S21協議適配器初始化成功\n");
+        refreshSwingCapabilities();
+        refreshSwingStateFromStatus(0);
     } else {
         lastOperationSuccess = false;
         setLastError("S21協議初始化失敗");
@@ -202,10 +207,33 @@ bool S21ProtocolAdapter::queryStatus(ACStatus& status) {
     // 正確轉換風速字符到數值
     status.fanSpeed = convertACToFanSpeed(payload[3]);
     status.isValid = true;
+    status.swingVertical = lastStatus.swingVertical;
+    status.swingHorizontal = lastStatus.swingHorizontal;
+    status.hasSwingVertical = swingCapabilityVertical;
+    status.hasSwingHorizontal = swingCapabilityHorizontal;
+    status.hasVerticalAngle = false;
+    status.hasHorizontalAngle = false;
+    status.verticalAngle = -1;
+    status.horizontalAngle = -1;
     
     DEBUG_INFO_PRINT("[S21Adapter] 風速解析: 原始字符='%c' -> 數值=%d (%s)\n",
                       payload[3], status.fanSpeed, getFanSpeedText(status.fanSpeed));
     
+    if (swingCapabilityVertical || swingCapabilityHorizontal) {
+        if (s21Protocol->sendCommand('F', '5')) {
+            uint8_t swingPayload[4];
+            size_t swingLen;
+            if (s21Protocol->parseResponse(cmd0, cmd1, swingPayload, swingLen) &&
+                cmd0 == 'G' && cmd1 == '5' && swingLen >= 1) {
+                refreshSwingStateFromStatus(swingPayload[0]);
+                status.swingVertical = lastStatus.swingVertical;
+                status.swingHorizontal = lastStatus.swingHorizontal;
+                status.hasSwingVertical = lastStatus.hasSwingVertical;
+                status.hasSwingHorizontal = lastStatus.hasSwingHorizontal;
+            }
+        }
+    }
+
     // 更新內部緩存
     lastStatus = status;
     lastOperationSuccess = true;
@@ -288,6 +316,93 @@ bool S21ProtocolAdapter::supportsFanSpeed(uint8_t fanSpeed) const {
     return it != SUPPORTED_FAN_SPEEDS.end();
 }
 
+bool S21ProtocolAdapter::supportsSwing(SwingAxis axis) const {
+    if (!s21Protocol) {
+        return false;
+    }
+    if (!s21Protocol->isCommandSupported('D', '5')) {
+        return false;
+    }
+    return axis == SwingAxis::Vertical ? swingCapabilityVertical : swingCapabilityHorizontal;
+}
+
+bool S21ProtocolAdapter::setSwing(SwingAxis axis, bool enabled) {
+    if (!s21Protocol) {
+        setLastError("協議未初始化");
+        return false;
+    }
+    
+    if (!supportsSwing(axis)) {
+        setLastError(axis == SwingAxis::Vertical ? "不支援垂直擺風" : "不支援水平擺風");
+        lastOperationSuccess = false;
+        return false;
+    }
+    
+    bool targetVertical = axis == SwingAxis::Vertical ? enabled : lastStatus.swingVertical;
+    bool targetHorizontal = axis == SwingAxis::Horizontal ? enabled : lastStatus.swingHorizontal;
+    
+    if (!sendSwingCommand(targetVertical, targetHorizontal)) {
+        setLastError("擺風命令發送失敗");
+        lastOperationSuccess = false;
+        return false;
+    }
+    
+    // 嘗試立即讀回當前狀態更新緩存
+    if (s21Protocol->sendCommand('F', '5')) {
+        uint8_t swingPayload[4];
+        size_t swingLen;
+        uint8_t cmd0, cmd1;
+        if (s21Protocol->parseResponse(cmd0, cmd1, swingPayload, swingLen) &&
+            cmd0 == 'G' && cmd1 == '5' && swingLen >= 1) {
+            refreshSwingStateFromStatus(swingPayload[0]);
+        }
+    } else {
+        uint8_t combination = 0;
+        if (targetVertical) combination |= 0x01;
+        if (targetHorizontal) combination |= 0x02;
+        if (targetVertical && targetHorizontal) combination |= 0x04;
+        refreshSwingStateFromStatus('0' + combination);
+    }
+    
+    lastOperationSuccess = true;
+    setLastError("");
+    return true;
+}
+
+bool S21ProtocolAdapter::getSwingState(SwingAxis axis, bool& enabled) const {
+    if (axis == SwingAxis::Vertical) {
+        if (!swingCapabilityVertical) {
+            return false;
+        }
+        enabled = lastStatus.swingVertical;
+        return true;
+    }
+    if (!swingCapabilityHorizontal) {
+        return false;
+    }
+    enabled = lastStatus.swingHorizontal;
+    return true;
+}
+
+bool S21ProtocolAdapter::supportsSwingAngle(SwingAxis) const {
+    return false;
+}
+
+std::vector<int> S21ProtocolAdapter::getAvailableSwingAngles(SwingAxis) const {
+    return {};
+}
+
+bool S21ProtocolAdapter::setSwingAngle(SwingAxis, int) {
+    setLastError("S21 協議未支援擺風角度設定");
+    lastOperationSuccess = false;
+    return false;
+}
+
+bool S21ProtocolAdapter::getSwingAngle(SwingAxis, int& angleCode) const {
+    angleCode = -1;
+    return false;
+}
+
 std::pair<float, float> S21ProtocolAdapter::getTemperatureRange() const {
     return std::make_pair(MIN_TEMPERATURE, MAX_TEMPERATURE);
 }
@@ -344,4 +459,58 @@ bool S21ProtocolAdapter::validateMode(uint8_t mode) const {
 
 bool S21ProtocolAdapter::validateFanSpeed(uint8_t fanSpeed) const {
     return supportsFanSpeed(fanSpeed);
+}
+
+bool S21ProtocolAdapter::sendSwingCommand(bool verticalOn, bool horizontalOn) {
+    if (!s21Protocol) {
+        return false;
+    }
+    uint8_t payload[4];
+    uint8_t combination = 0;
+    if (verticalOn) combination |= 0x01;
+    if (horizontalOn) combination |= 0x02;
+    if (verticalOn && horizontalOn) combination |= 0x04;
+    
+    payload[0] = static_cast<uint8_t>('0' + (combination & 0x0F));
+    payload[1] = (verticalOn || horizontalOn) ? '?' : '0';
+    payload[2] = '0';
+    payload[3] = '0';
+    
+    return s21Protocol->sendCommand('D', '5', payload, 4);
+}
+
+void S21ProtocolAdapter::refreshSwingCapabilities() {
+    swingCapabilityVertical = false;
+    swingCapabilityHorizontal = false;
+    if (!s21Protocol) {
+        return;
+    }
+    if (!s21Protocol->isCommandSupported('D', '5')) {
+        return;
+    }
+    
+    const auto& features = s21Protocol->getFeatures();
+    swingCapabilityVertical = features.hasSwingControl || features.hasVerticalSwing || !features.hasHorizontalSwing;
+    swingCapabilityHorizontal = features.hasHorizontalSwing;
+    
+    if (!swingCapabilityVertical) {
+        // 大多數設備至少支援垂直擺風；若協議標誌缺失則保守預設為支援
+        swingCapabilityVertical = true;
+    }
+}
+
+void S21ProtocolAdapter::refreshSwingStateFromStatus(uint8_t rawValue) {
+    uint8_t combination = rawValue;
+    if (rawValue >= '0' && rawValue <= '9') {
+        combination = static_cast<uint8_t>(rawValue - '0');
+    }
+    lastStatus.swingVertical = (combination & 0x01) != 0;
+    lastStatus.swingHorizontal = (combination & 0x02) != 0;
+    lastStatus.hasSwingVertical = swingCapabilityVertical;
+    lastStatus.hasSwingHorizontal = swingCapabilityHorizontal;
+    lastStatus.hasVerticalAngle = false;
+    lastStatus.hasHorizontalAngle = false;
+    lastStatus.verticalAngle = -1;
+    lastStatus.horizontalAngle = -1;
+    lastStatus.isValid = true;
 }

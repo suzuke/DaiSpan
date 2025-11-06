@@ -9,6 +9,14 @@ ThermostatController::ThermostatController(std::unique_ptr<IACProtocol> p)
       targetTemperature(21.0),
       currentTemperature(21.0),
       fanSpeed(AC_FAN_AUTO),
+      swingVertical(false),
+      swingHorizontal(false),
+      verticalAngle(-1),
+      horizontalAngle(-1),
+      swingVerticalSupported(false),
+      swingHorizontalSupported(false),
+      verticalAngleSupported(false),
+      horizontalAngleSupported(false),
       consecutiveErrors(0),
       lastUpdateTime(0),
       lastSuccessfulUpdate(0),
@@ -16,10 +24,20 @@ ThermostatController::ThermostatController(std::unique_ptr<IACProtocol> p)
       lastUserFanSpeed(AC_FAN_AUTO),
       lastModeSetTime(0),
       lastUserMode(AC_MODE_AUTO) {
-    
     if (!protocol) {
         DEBUG_ERROR_PRINT("[Controller] 錯誤：協議實例為空\n");
         return;
+    }
+    
+    swingVerticalSupported = protocol->supportsSwing(IACProtocol::SwingAxis::Vertical);
+    swingHorizontalSupported = protocol->supportsSwing(IACProtocol::SwingAxis::Horizontal);
+    verticalAngleSupported = protocol->supportsSwingAngle(IACProtocol::SwingAxis::Vertical);
+    horizontalAngleSupported = protocol->supportsSwingAngle(IACProtocol::SwingAxis::Horizontal);
+    if (verticalAngleSupported) {
+        verticalAngleOptions = protocol->getAvailableSwingAngles(IACProtocol::SwingAxis::Vertical);
+    }
+    if (horizontalAngleSupported) {
+        horizontalAngleOptions = protocol->getAvailableSwingAngles(IACProtocol::SwingAxis::Horizontal);
     }
     
     DEBUG_INFO_PRINT("[Controller] 開始初始化通用控制器 - 協議: %s\n", 
@@ -45,9 +63,23 @@ ThermostatController::ThermostatController(ThermostatController&& other) noexcep
       targetTemperature(other.targetTemperature),
       currentTemperature(other.currentTemperature),
       fanSpeed(other.fanSpeed),
+      swingVertical(other.swingVertical),
+      swingHorizontal(other.swingHorizontal),
+      verticalAngle(other.verticalAngle),
+      horizontalAngle(other.horizontalAngle),
+      swingVerticalSupported(other.swingVerticalSupported),
+      swingHorizontalSupported(other.swingHorizontalSupported),
+      verticalAngleSupported(other.verticalAngleSupported),
+      horizontalAngleSupported(other.horizontalAngleSupported),
+      verticalAngleOptions(std::move(other.verticalAngleOptions)),
+      horizontalAngleOptions(std::move(other.horizontalAngleOptions)),
       consecutiveErrors(other.consecutiveErrors),
       lastUpdateTime(other.lastUpdateTime),
-      lastSuccessfulUpdate(other.lastSuccessfulUpdate) {
+      lastSuccessfulUpdate(other.lastSuccessfulUpdate),
+      lastFanSpeedSetTime(other.lastFanSpeedSetTime),
+      lastUserFanSpeed(other.lastUserFanSpeed),
+      lastModeSetTime(other.lastModeSetTime),
+      lastUserMode(other.lastUserMode) {
     
     DEBUG_INFO_PRINT("[Controller] 移動構造函數執行\n");
 }
@@ -60,9 +92,23 @@ ThermostatController& ThermostatController::operator=(ThermostatController&& oth
         targetTemperature = other.targetTemperature;
         currentTemperature = other.currentTemperature;
         fanSpeed = other.fanSpeed;
+        swingVertical = other.swingVertical;
+        swingHorizontal = other.swingHorizontal;
+        verticalAngle = other.verticalAngle;
+        horizontalAngle = other.horizontalAngle;
+        swingVerticalSupported = other.swingVerticalSupported;
+        swingHorizontalSupported = other.swingHorizontalSupported;
+        verticalAngleSupported = other.verticalAngleSupported;
+        horizontalAngleSupported = other.horizontalAngleSupported;
+        verticalAngleOptions = other.verticalAngleOptions;
+        horizontalAngleOptions = other.horizontalAngleOptions;
         consecutiveErrors = other.consecutiveErrors;
         lastUpdateTime = other.lastUpdateTime;
         lastSuccessfulUpdate = other.lastSuccessfulUpdate;
+        lastFanSpeedSetTime = other.lastFanSpeedSetTime;
+        lastUserFanSpeed = other.lastUserFanSpeed;
+        lastModeSetTime = other.lastModeSetTime;
+        lastUserMode = other.lastUserMode;
         
         DEBUG_INFO_PRINT("[Controller] 移動賦值操作符執行\n");
     }
@@ -276,6 +322,143 @@ bool ThermostatController::setFanSpeed(uint8_t speed) {
     return true;
 }
 
+bool ThermostatController::supportsSwing(IACProtocol::SwingAxis axis) const {
+    if (!protocol) {
+        return false;
+    }
+    return protocol->supportsSwing(axis);
+}
+
+bool ThermostatController::setSwing(IACProtocol::SwingAxis axis, bool enabled) {
+    if (!protocol) {
+        DEBUG_ERROR_PRINT("[Controller] 錯誤：協議實例無效，無法設定擺風\n");
+        return false;
+    }
+    
+    if (!supportsSwing(axis)) {
+        DEBUG_WARN_PRINT("[Controller] 協議不支援 %s 擺風控制\n",
+                         axis == IACProtocol::SwingAxis::Vertical ? "垂直" : "水平");
+        return false;
+    }
+    
+    DEBUG_INFO_PRINT("[Controller] 設置%s擺風狀態：%s\n",
+                     axis == IACProtocol::SwingAxis::Vertical ? "垂直" : "水平",
+                     enabled ? "開啟" : "關閉");
+    
+    if (!protocol->setSwing(axis, enabled)) {
+        handleProtocolError("setSwing");
+        return false;
+    }
+    
+    bool confirmed = waitForConfirmation(
+        [axis, enabled](const ACStatus& status) {
+            if (!status.isValid) {
+                return false;
+            }
+            if (axis == IACProtocol::SwingAxis::Vertical) {
+                return status.hasSwingVertical ? status.swingVertical == enabled : true;
+            }
+            return status.hasSwingHorizontal ? status.swingHorizontal == enabled : true;
+        },
+        2000
+    );
+    
+    if (!confirmed) {
+        handleProtocolError("confirmSwing");
+        return false;
+    }
+    
+    bool axisState = false;
+    if (protocol->getSwingState(IACProtocol::SwingAxis::Vertical, axisState)) {
+        swingVertical = axisState;
+    }
+    if (protocol->getSwingState(IACProtocol::SwingAxis::Horizontal, axisState)) {
+        swingHorizontal = axisState;
+    }
+    
+    resetErrorCount();
+    lastSuccessfulUpdate = millis();
+    DEBUG_INFO_PRINT("[Controller] %s擺風設定完成\n",
+                     axis == IACProtocol::SwingAxis::Vertical ? "垂直" : "水平");
+    return true;
+}
+
+bool ThermostatController::getSwing(IACProtocol::SwingAxis axis) const {
+    return axis == IACProtocol::SwingAxis::Vertical ? swingVertical : swingHorizontal;
+}
+
+bool ThermostatController::supportsSwingAngle(IACProtocol::SwingAxis axis) const {
+    if (!protocol) {
+        return false;
+    }
+    return protocol->supportsSwingAngle(axis);
+}
+
+std::vector<int> ThermostatController::getAvailableSwingAngles(IACProtocol::SwingAxis axis) const {
+    if (axis == IACProtocol::SwingAxis::Vertical) {
+        return verticalAngleOptions;
+    }
+    return horizontalAngleOptions;
+}
+
+bool ThermostatController::setSwingAngle(IACProtocol::SwingAxis axis, int angleCode) {
+    if (!protocol) {
+        DEBUG_ERROR_PRINT("[Controller] 錯誤：協議實例無效，無法設定擺風角度\n");
+        return false;
+    }
+    
+    if (!supportsSwingAngle(axis)) {
+        DEBUG_WARN_PRINT("[Controller] 協議不支援 %s 擺風角度設定\n",
+                         axis == IACProtocol::SwingAxis::Vertical ? "垂直" : "水平");
+        return false;
+    }
+    
+    DEBUG_INFO_PRINT("[Controller] 設置%s擺風角度：%d\n",
+                     axis == IACProtocol::SwingAxis::Vertical ? "垂直" : "水平",
+                     angleCode);
+    
+    if (!protocol->setSwingAngle(axis, angleCode)) {
+        handleProtocolError("setSwingAngle");
+        return false;
+    }
+    
+    bool confirmed = waitForConfirmation(
+        [axis, angleCode](const ACStatus& status) {
+            if (!status.isValid) {
+                return false;
+            }
+            if (axis == IACProtocol::SwingAxis::Vertical) {
+                return status.hasVerticalAngle ? status.verticalAngle == angleCode : true;
+            }
+            return status.hasHorizontalAngle ? status.horizontalAngle == angleCode : true;
+        },
+        2000
+    );
+    
+    if (!confirmed) {
+        handleProtocolError("confirmSwingAngle");
+        return false;
+    }
+    
+    int currentAngle = -1;
+    if (protocol->getSwingAngle(IACProtocol::SwingAxis::Vertical, currentAngle)) {
+        verticalAngle = currentAngle;
+    }
+    if (protocol->getSwingAngle(IACProtocol::SwingAxis::Horizontal, currentAngle)) {
+        horizontalAngle = currentAngle;
+    }
+    
+    resetErrorCount();
+    lastSuccessfulUpdate = millis();
+    DEBUG_INFO_PRINT("[Controller] %s擺風角度設定完成\n",
+                     axis == IACProtocol::SwingAxis::Vertical ? "垂直" : "水平");
+    return true;
+}
+
+int ThermostatController::getSwingAngle(IACProtocol::SwingAxis axis) const {
+    return axis == IACProtocol::SwingAxis::Vertical ? verticalAngle : horizontalAngle;
+}
+
 void ThermostatController::update() {
     unsigned long currentTime = millis();
     
@@ -358,6 +541,44 @@ void ThermostatController::update() {
                                     getFanSpeedText(fanSpeed), getFanSpeedText(status.fanSpeed));
                 }
                 fanSpeed = status.fanSpeed;
+            }
+            
+            swingVerticalSupported = status.hasSwingVertical || supportsSwing(IACProtocol::SwingAxis::Vertical);
+            swingHorizontalSupported = status.hasSwingHorizontal || supportsSwing(IACProtocol::SwingAxis::Horizontal);
+            if (status.hasSwingVertical) {
+                if (swingVertical != status.swingVertical) {
+                    DEBUG_INFO_PRINT("[Controller] 垂直擺風狀態更新：%s -> %s\n",
+                                     swingVertical ? "開啟" : "關閉",
+                                     status.swingVertical ? "開啟" : "關閉");
+                }
+                swingVertical = status.swingVertical;
+            }
+            if (status.hasSwingHorizontal) {
+                if (swingHorizontal != status.swingHorizontal) {
+                    DEBUG_INFO_PRINT("[Controller] 水平擺風狀態更新：%s -> %s\n",
+                                     swingHorizontal ? "開啟" : "關閉",
+                                     status.swingHorizontal ? "開啟" : "關閉");
+                }
+                swingHorizontal = status.swingHorizontal;
+            }
+            
+            verticalAngleSupported = status.hasVerticalAngle || supportsSwingAngle(IACProtocol::SwingAxis::Vertical);
+            horizontalAngleSupported = status.hasHorizontalAngle || supportsSwingAngle(IACProtocol::SwingAxis::Horizontal);
+            if (status.hasVerticalAngle) {
+                verticalAngle = status.verticalAngle;
+                if (verticalAngleOptions.empty() && protocol) {
+                    verticalAngleOptions = protocol->getAvailableSwingAngles(IACProtocol::SwingAxis::Vertical);
+                }
+            } else {
+                verticalAngle = -1;
+            }
+            if (status.hasHorizontalAngle) {
+                horizontalAngle = status.horizontalAngle;
+                if (horizontalAngleOptions.empty() && protocol) {
+                    horizontalAngleOptions = protocol->getAvailableSwingAngles(IACProtocol::SwingAxis::Horizontal);
+                }
+            } else {
+                horizontalAngle = -1;
             }
             
             DEBUG_VERBOSE_PRINT("[Controller] 狀態更新成功 - 電源：%s，模式：%d，目標溫度：%.1f°C，風速：%s\n",

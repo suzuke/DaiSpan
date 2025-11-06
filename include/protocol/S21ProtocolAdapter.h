@@ -5,6 +5,7 @@
 #include "S21Utils.h"
 #include "../common/Debug.h"
 #include "../common/ThermostatMode.h"
+#include <vector>
 
 // S21協議適配器 - 將S21協議適配到通用IACProtocol介面
 class S21ProtocolAdapter : public IACProtocol {
@@ -13,6 +14,8 @@ private:
     ACStatus lastStatus;
     bool lastOperationSuccess;
     String lastError;
+    bool swingCapabilityVertical;
+    bool swingCapabilityHorizontal;
     
     // 協議支持的能力
     static constexpr float MIN_TEMPERATURE = 16.0f;
@@ -25,6 +28,9 @@ private:
     bool validateTemperature(float temperature) const;
     bool validateMode(uint8_t mode) const;
     bool validateFanSpeed(uint8_t fanSpeed) const;
+    bool sendSwingCommand(bool verticalOn, bool horizontalOn);
+    void refreshSwingCapabilities();
+    void refreshSwingStateFromStatus(uint8_t swingFlags);
     
 public:
     explicit S21ProtocolAdapter(std::unique_ptr<S21Protocol> protocol);
@@ -43,6 +49,13 @@ public:
     // 協議能力查詢
     bool supportsMode(uint8_t mode) const override;
     bool supportsFanSpeed(uint8_t fanSpeed) const override;
+    bool supportsSwing(SwingAxis axis) const override;
+    bool setSwing(SwingAxis axis, bool enabled) override;
+    bool getSwingState(SwingAxis axis, bool& enabled) const override;
+    bool supportsSwingAngle(SwingAxis axis) const override;
+    std::vector<int> getAvailableSwingAngles(SwingAxis axis) const override;
+    bool setSwingAngle(SwingAxis axis, int angleCode) override;
+    bool getSwingAngle(SwingAxis axis, int& angleCode) const override;
     std::pair<float, float> getTemperatureRange() const override;
     std::vector<uint8_t> getSupportedModes() const override;
     std::vector<uint8_t> getSupportedFanSpeeds() const override;

@@ -1,0 +1,5 @@
+- [x] 1. 擴充 `IACProtocol` 與 `S21Protocol`，提供水平/垂直擺動支援偵測、開關控制及角度清單 API，並更新單元測試（若有）。
+- [x] 2. 更新 `ThermostatController`/`FanDevice` 或相關服務，串接新的擺動 API，處理 HomeKit 命令、狀態同步與錯誤回退。
+- [x] 3. 在 HomeSpan 層新增 HomeKit 擺動與角度特性，確保不支援時隱藏或鎖定，並驗證記憶體占用。
+- [x] 4. 撰寫或更新測試流程（腳本/手動測試）覆蓋擺動開關與角度控制；於實機測試 Daikin 機型的成功回覆。
+- [x] 5. 執行 `openspec validate add-hvac-swing-control --strict`，確認提案與規格無誤。

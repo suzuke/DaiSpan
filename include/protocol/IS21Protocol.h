@@ -47,6 +47,9 @@ struct S21Features {
     // 進階控制功能
     bool hasScheduleMode : 1;       // 支援定時功能
     bool hasSwingControl : 1;       // 支援擺風控制
+    bool hasVerticalSwing : 1;      // 支援垂直擺風
+    bool hasHorizontalSwing : 1;    // 支援水平擺風
+    bool hasSwingAngleControl : 1;  // 支援鎖定角度
     bool hasMultiZone : 1;          // 支援多區域控制
     bool hasWiFiModule : 1;         // 支援 WiFi 模組
     
@@ -62,7 +65,9 @@ struct S21Features {
         hasEcoMode(false), hasQuietMode(false), hasComfortMode(false),
         hasTemperatureDisplay(false), hasHumiditySensor(false),
         hasOutdoorTempSensor(false), hasErrorReporting(false),
-        hasScheduleMode(false), hasSwingControl(false), hasMultiZone(false),
+        hasScheduleMode(false), hasSwingControl(false),
+        hasVerticalSwing(false), hasHorizontalSwing(false),
+        hasSwingAngleControl(false), hasMultiZone(false),
         hasWiFiModule(false), hasAdvancedFilters(false), hasEnergyMonitoring(false),
         hasMaintenanceAlerts(false), hasRemoteDiagnostics(false) {}
 };

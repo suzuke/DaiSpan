@@ -5,6 +5,7 @@
 #include "../common/Debug.h"
 #include "../common/ThermostatMode.h"
 #include <memory>
+#include <vector>
 
 // 重構後的通用恆溫器控制器
 // 使用IACProtocol抽象介面，支持多種空調協議
@@ -16,6 +17,16 @@ private:
     float targetTemperature;
     float currentTemperature;
     uint8_t fanSpeed;
+    bool swingVertical;
+    bool swingHorizontal;
+    int verticalAngle;
+    int horizontalAngle;
+    bool swingVerticalSupported;
+    bool swingHorizontalSupported;
+    bool verticalAngleSupported;
+    bool horizontalAngleSupported;
+    std::vector<int> verticalAngleOptions;
+    std::vector<int> horizontalAngleOptions;
     unsigned long consecutiveErrors;
     unsigned long lastUpdateTime;
     unsigned long lastSuccessfulUpdate;
@@ -68,6 +79,15 @@ public:
     
     bool setFanSpeed(uint8_t speed) override;
     uint8_t getFanSpeed() const override { return fanSpeed; }
+
+    bool supportsSwing(IACProtocol::SwingAxis axis) const override;
+    bool setSwing(IACProtocol::SwingAxis axis, bool enabled) override;
+    bool getSwing(IACProtocol::SwingAxis axis) const override;
+
+    bool supportsSwingAngle(IACProtocol::SwingAxis axis) const override;
+    std::vector<int> getAvailableSwingAngles(IACProtocol::SwingAxis axis) const override;
+    bool setSwingAngle(IACProtocol::SwingAxis axis, int angleCode) override;
+    int getSwingAngle(IACProtocol::SwingAxis axis) const override;
     
     void update() override;
     
