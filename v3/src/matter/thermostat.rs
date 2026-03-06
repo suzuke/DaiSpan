@@ -16,11 +16,9 @@ use core::cell::Cell;
 use std::sync::mpsc::SyncSender;
 
 use crate::controller::state::{ControllerCmd, MatterMode, SharedState};
-use crate::matter::THERMOSTAT_ENDPOINT_ID;
-
 use esp_idf_matter::matter::dm::{
     Access, AsyncHandler, AttrId, Attribute, Cluster, ClusterId, Dataver,
-    HandlerContext, InvokeContext, InvokeReply, Quality, ReadContext,
+    InvokeContext, InvokeReply, Quality, ReadContext,
     ReadReply, Reply, WriteContext,
 };
 use esp_idf_matter::matter::error::{Error, ErrorCode};
@@ -230,7 +228,7 @@ impl ThermostatHandler {
                 ctx.notify_changed();
             }
             _ => {
-                return Err(ErrorCode::UnsupportedWrite.into());
+                return Err(ErrorCode::UnsupportedAccess.into());
             }
         }
 

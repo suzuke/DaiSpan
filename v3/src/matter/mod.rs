@@ -26,9 +26,9 @@ use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use static_cell::StaticCell;
 
 use esp_idf_matter::init_async_io;
-use esp_idf_matter::matter::crypto::default_crypto;
+use esp_idf_matter::matter::crypto::{default_crypto, Crypto};
 use esp_idf_matter::matter::dm::clusters::desc::{self, ClusterHandler as _, DescHandler};
-use esp_idf_matter::matter::dm::clusters::on_off::{self, OnOffHandler};
+use esp_idf_matter::matter::dm::clusters::on_off::{self, OnOffHandler, OnOffHooks};
 use esp_idf_matter::matter::dm::devices::test::{
     DAC_PRIVKEY, TEST_DEV_ATT, TEST_DEV_COMM,
 };
@@ -38,6 +38,7 @@ use esp_idf_matter::matter::dm::{
 };
 use esp_idf_matter::matter::dm::DeviceType;
 use esp_idf_matter::matter::{clusters, devices};
+use esp_idf_matter::matter::utils::init::InitMaybeUninit;
 use esp_idf_matter::wireless::{EspMatterWifi, EspWifiMatterStack};
 
 use esp_idf_svc::bt::reduce_bt_memory;

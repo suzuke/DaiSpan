@@ -7,7 +7,6 @@ use std::time::Duration;
 
 use esp_idf_hal::delay::TickType;
 use esp_idf_hal::gpio::{AnyIOPin, InputPin, OutputPin};
-use esp_idf_hal::peripheral::Peripheral;
 use esp_idf_hal::uart::{self, UartDriver};
 use esp_idf_hal::units::Hertz;
 
@@ -23,9 +22,9 @@ pub struct S21Uart<'d> {
 impl<'d> S21Uart<'d> {
     /// Initialize UART for S21 protocol: 2400 baud, 8E2.
     pub fn new(
-        uart: impl Peripheral<P = impl uart::Uart> + 'd,
-        tx_pin: impl Peripheral<P = impl OutputPin> + 'd,
-        rx_pin: impl Peripheral<P = impl InputPin> + 'd,
+        uart: impl uart::Uart + 'd,
+        tx_pin: impl OutputPin + 'd,
+        rx_pin: impl InputPin + 'd,
     ) -> Result<Self, S21Error> {
         let config = uart::config::Config::new()
             .baudrate(Hertz(2400))

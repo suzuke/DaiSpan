@@ -36,13 +36,14 @@ esp-idf-hal = "0.45"
 embuild = { version = "0.33", features = ["espidf"] }
 
 # Patch crates-io with git versions for esp-idf-matter compatibility.
-# esp-idf-matter requires esp-idf-svc 0.51 and aligned rs-matter versions.
+# All esp-idf-* crates must use git HEAD for embassy-sync 0.7 compatibility.
+# Requires ESP-IDF v5.4+ (set in .cargo/config.toml).
 [patch.crates-io]
 rs-matter = { git = "https://github.com/sysgrok/rs-matter", branch = "next" }
 rs-matter-stack = { git = "https://github.com/sysgrok/rs-matter-stack", branch = "next" }
-embedded-svc = { git = "https://github.com/esp-rs/embedded-svc" }
-esp-idf-svc = { git = "https://github.com/esp-rs/esp-idf-svc" }
-esp-idf-hal = { git = "https://github.com/esp-rs/esp-idf-hal" }
+embedded-svc = { git = "https://github.com/esp-rs/embedded-svc", rev = "007b7d6" }
+esp-idf-svc = { git = "https://github.com/esp-rs/esp-idf-svc", rev = "a72ed15" }
+esp-idf-hal = { git = "https://github.com/esp-rs/esp-idf-hal", rev = "552b00b" }
 esp-idf-sys = { git = "https://github.com/esp-rs/esp-idf-sys" }
 
 [profile.release]

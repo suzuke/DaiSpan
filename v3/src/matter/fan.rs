@@ -17,7 +17,7 @@ use crate::s21::types::FanSpeed;
 
 use esp_idf_matter::matter::dm::{
     Access, AsyncHandler, AttrId, Attribute, Cluster, ClusterId, Dataver,
-    HandlerContext, InvokeContext, InvokeReply, Quality, ReadContext,
+    InvokeContext, InvokeReply, Quality, ReadContext,
     ReadReply, Reply, WriteContext,
 };
 use esp_idf_matter::matter::error::{Error, ErrorCode};
@@ -228,7 +228,7 @@ impl FanHandler {
                 ctx.notify_changed();
             }
             _ => {
-                return Err(ErrorCode::UnsupportedWrite.into());
+                return Err(ErrorCode::UnsupportedAccess.into());
             }
         }
 

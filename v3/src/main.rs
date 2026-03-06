@@ -1,5 +1,11 @@
 mod s21;
 mod controller;
+
+/// Pender stub required by embassy-executor (pulled in transitively).
+/// We don't use the embassy executor directly — we use block_on() instead.
+#[cfg(target_os = "espidf")]
+#[no_mangle]
+fn __pender(_context: *mut ()) {}
 #[cfg(target_os = "espidf")]
 mod config;
 #[cfg(target_os = "espidf")]
@@ -10,7 +16,7 @@ mod web;
 mod matter;
 
 #[cfg(target_os = "espidf")]
-use esp_idf_svc::hal::prelude::Peripherals;
+use esp_idf_svc::hal::peripherals::Peripherals;
 #[cfg(target_os = "espidf")]
 use esp_idf_svc::log::EspLogger;
 #[cfg(target_os = "espidf")]

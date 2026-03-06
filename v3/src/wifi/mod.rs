@@ -8,7 +8,7 @@ use std::net::Ipv4Addr;
 use std::time::Duration;
 
 use esp_idf_svc::eventloop::EspSystemEventLoop;
-use esp_idf_svc::hal::modem::Modem;
+use esp_idf_svc::hal::modem::WifiModemPeripheral;
 use esp_idf_svc::nvs::EspNvsPartition;
 use esp_idf_svc::nvs::NvsDefault;
 use esp_idf_svc::wifi::{
@@ -34,12 +34,12 @@ pub struct WifiState {
 /// Takes ownership of the modem peripheral. The returned `WifiState`
 /// must be kept alive for the WiFi connection to persist.
 pub fn init(
-    modem: Modem,
+    modem: impl WifiModemPeripheral + 'static,
     sysloop: EspSystemEventLoop,
     nvs: EspNvsPartition<NvsDefault>,
     config: &Config,
 ) -> Result<WifiState, Box<dyn std::error::Error>> {
-    let esp_wifi = EspWifi::new(modem, sysloop.clone(), Some(nvs))?;
+    let esp_wifi = EspWifi::new(modem, sysloop.clone(), Some(nvs.clone()))?;
     let mut wifi = BlockingWifi::wrap(esp_wifi, sysloop)?;
 
     // Check for stored credentials
