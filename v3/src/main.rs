@@ -1,5 +1,11 @@
 mod s21;
 mod controller;
+#[cfg(target_os = "espidf")]
+mod config;
+#[cfg(target_os = "espidf")]
+mod wifi;
+#[cfg(target_os = "espidf")]
+mod web;
 
 #[cfg(target_os = "espidf")]
 use esp_idf_svc::hal::prelude::Peripherals;
@@ -25,7 +31,32 @@ fn main() {
             esp_idf_svc::sys::esp_get_free_heap_size()
         });
 
-        // Initialize S21 UART (ESP32-C3 SuperMini: TX=GPIO3, RX=GPIO4)
+        // 1. Initialize NVS config
+        let nvs_default = esp_idf_svc::nvs::EspDefaultNvsPartition::take()
+            .expect("Failed to take NVS partition");
+
+        let cfg = config::Config::new(nvs_default.clone())
+            .expect("Failed to init config");
+
+        // 2. Initialize WiFi (STA or AP fallback)
+        let sysloop = esp_idf_svc::eventloop::EspSystemEventLoop::take()
+            .expect("Failed to take system event loop");
+
+        let wifi_state = wifi::init(
+            peripherals.modem,
+            sysloop,
+            nvs_default,
+            &cfg,
+        )
+        .expect("Failed to init WiFi");
+
+        log::info!(
+            "WiFi: mode={}, ip={}",
+            if wifi_state.ap_mode { "AP" } else { "STA" },
+            wifi_state.ip
+        );
+
+        // 3. Initialize S21 UART and controller
         let uart = s21::S21Uart::new(
             peripherals.uart1,
             peripherals.pins.gpio3,
@@ -33,7 +64,6 @@ fn main() {
         )
         .expect("Failed to initialize S21 UART");
 
-        // Create shared state and controller
         let state = controller::SharedState::new();
         let (mut ctrl, _cmd_tx) = controller::Controller::new(uart, state.clone());
 
@@ -47,23 +77,30 @@ fn main() {
             })
             .expect("Failed to spawn controller thread");
 
+        // 4. Start web server
+        let config_arc = std::sync::Arc::new(std::sync::Mutex::new(cfg));
+        let _server = web::start(state.clone(), config_arc, wifi_state.ap_mode)
+            .expect("Failed to start web server");
+
         log::info!("DaiSpan v3 initialized");
 
-        // Main thread: future HomeKit/web server setup goes here
+        // Keep WiFi state alive and run main loop
+        let _wifi = wifi_state;
         loop {
-            std::thread::sleep(std::time::Duration::from_secs(5));
+            std::thread::sleep(std::time::Duration::from_secs(30));
             let status = state.read();
+            let heap = unsafe { esp_idf_svc::sys::esp_get_free_heap_size() };
             if status.valid {
                 log::info!(
-                    "Status: power={} mode={:?} target={:.1} current={:.1} fan={:?}",
+                    "heap={} power={} mode={:?} target={:.1} current={:.1}",
+                    heap,
                     status.power,
                     status.mode,
                     status.target_temp,
                     status.current_temp,
-                    status.fan_speed
                 );
             } else {
-                log::info!("heartbeat (no valid status yet)");
+                log::info!("heap={} (no valid status yet)", heap);
             }
         }
     }
