@@ -11,7 +11,7 @@ static const char *TAG = LOG_TAG_WIFI;
 
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1
-#define MAX_RETRY          25
+#define MAX_RETRY          15
 
 static EventGroupHandle_t wifi_event_group;
 static int retry_count = 0;
@@ -26,6 +26,9 @@ static void event_handler(void *arg, esp_event_base_t event_base,
         esp_wifi_connect();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         connected = false;
+        if (ap_mode) {
+            return;  /* Already switched to AP mode, ignore stale STA events */
+        }
         if (retry_count < MAX_RETRY) {
             retry_count++;
             /* Progressive delay: 500ms -> 1s -> 2s */
@@ -126,6 +129,7 @@ esp_err_t wifi_manager_init(void)
     }
 
     ESP_LOGW(TAG, "STA failed, falling back to AP mode");
+    ap_mode = true;  /* Prevent stale disconnect events from retrying */
     esp_wifi_stop();
     return start_ap();
 }
