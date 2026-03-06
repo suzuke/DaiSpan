@@ -101,10 +101,15 @@ fn run_ap_mode(
     );
 
     // Initialize S21 UART and controller
+    #[cfg(feature = "esp32c3")]
+    let (tx_pin, rx_pin) = (peripherals.pins.gpio3, peripherals.pins.gpio4);
+    #[cfg(feature = "esp32s3")]
+    let (tx_pin, rx_pin) = (peripherals.pins.gpio12, peripherals.pins.gpio13);
+
     let uart = s21::S21Uart::new(
         peripherals.uart1,
-        peripherals.pins.gpio3,
-        peripherals.pins.gpio4,
+        tx_pin,
+        rx_pin,
     )
     .expect("Failed to initialize S21 UART");
 
@@ -148,10 +153,15 @@ fn run_matter_mode(
     log::info!("Boot mode: Matter (WiFi credentials found)");
 
     // Initialize S21 UART and controller (independent of WiFi)
+    #[cfg(feature = "esp32c3")]
+    let (tx_pin, rx_pin) = (peripherals.pins.gpio3, peripherals.pins.gpio4);
+    #[cfg(feature = "esp32s3")]
+    let (tx_pin, rx_pin) = (peripherals.pins.gpio12, peripherals.pins.gpio13);
+
     let uart = s21::S21Uart::new(
         peripherals.uart1,
-        peripherals.pins.gpio3,
-        peripherals.pins.gpio4,
+        tx_pin,
+        rx_pin,
     )
     .expect("Failed to initialize S21 UART");
 

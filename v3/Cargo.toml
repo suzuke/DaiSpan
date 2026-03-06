@@ -4,7 +4,9 @@ version = "3.0.0"
 edition = "2021"
 
 [features]
-default = ["matter"]
+default = ["matter", "esp32c3"]
+esp32c3 = []
+esp32s3 = []
 matter = [
     "esp-idf-matter",
     "embassy-futures",
