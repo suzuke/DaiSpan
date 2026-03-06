@@ -10,6 +10,7 @@
 #include "freertos/task.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 static const char *TAG = LOG_TAG_WEB;
 static httpd_handle_t server = NULL;
@@ -77,6 +78,25 @@ static esp_err_t handler_wifi(httpd_req_t *req)
     return httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
 }
 
+/* URL-decode in place: %XX -> char, '+' -> ' ' */
+static void url_decode(char *dst, const char *src, size_t dst_size)
+{
+    size_t di = 0;
+    while (*src && di < dst_size - 1) {
+        if (*src == '%' && src[1] && src[2]) {
+            char hex[3] = { src[1], src[2], 0 };
+            dst[di++] = (char)strtol(hex, NULL, 16);
+            src += 3;
+        } else if (*src == '+') {
+            dst[di++] = ' ';
+            src++;
+        } else {
+            dst[di++] = *src++;
+        }
+    }
+    dst[di] = '\0';
+}
+
 static esp_err_t handler_wifi_save(httpd_req_t *req)
 {
     char content[256];
@@ -87,6 +107,7 @@ static esp_err_t handler_wifi_save(httpd_req_t *req)
     content[len] = '\0';
 
     /* Parse URL-encoded form data */
+    char raw[65] = {0};
     char ssid[33] = {0};
     char pass[65] = {0};
 
@@ -95,8 +116,10 @@ static esp_err_t handler_wifi_save(httpd_req_t *req)
         p += 5;
         char *end = strchr(p, '&');
         size_t slen = end ? (size_t)(end - p) : strlen(p);
-        if (slen >= sizeof(ssid)) slen = sizeof(ssid) - 1;
-        memcpy(ssid, p, slen);
+        if (slen >= sizeof(raw)) slen = sizeof(raw) - 1;
+        memcpy(raw, p, slen);
+        raw[slen] = '\0';
+        url_decode(ssid, raw, sizeof(ssid));
     }
 
     p = strstr(content, "password=");
@@ -104,14 +127,17 @@ static esp_err_t handler_wifi_save(httpd_req_t *req)
         p += 9;
         char *end = strchr(p, '&');
         size_t slen = end ? (size_t)(end - p) : strlen(p);
-        if (slen >= sizeof(pass)) slen = sizeof(pass) - 1;
-        memcpy(pass, p, slen);
+        if (slen >= sizeof(raw)) slen = sizeof(raw) - 1;
+        memcpy(raw, p, slen);
+        raw[slen] = '\0';
+        url_decode(pass, raw, sizeof(pass));
     }
 
     if (strlen(ssid) == 0) {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "SSID required");
     }
 
+    ESP_LOGI(TAG, "WiFi config: SSID='%s' pass_len=%d", ssid, (int)strlen(pass));
     config_set_wifi_credentials(ssid, pass);
 
     const char *html =
