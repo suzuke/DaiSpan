@@ -169,7 +169,7 @@ public:
     // IS21Protocol interface implementation
     bool begin() override;
     bool sendCommand(char cmd0, char cmd1, const uint8_t* payload = nullptr, size_t len = 0) override;
-    bool parseResponse(uint8_t& cmd0, uint8_t& cmd1, uint8_t* payload, size_t& payloadLen) override;
+    bool parseResponse(uint8_t& cmd0, uint8_t& cmd1, uint8_t* payload, size_t& payloadLen, size_t maxPayloadLen) override;
     S21ProtocolVersion getProtocolVersion() const override { return protocolVersion; }
     const S21Features& getFeatures() const override { return features; }
     bool isFeatureSupported(const S21Features& feature) const override;

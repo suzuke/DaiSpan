@@ -192,6 +192,7 @@ public:
         }
         
         if (!networkFound) {
+            connectionAttempts++;
             DEBUG_ERROR_PRINT("[WiFiManager] 錯誤：找不到網路 '%s'，可能信號太弱或名稱錯誤\n", ssid.c_str());
             WiFi.scanDelete(); // 清理掃描結果
             return false;
@@ -582,29 +583,19 @@ public:
         webServer->send(200, "text/html", html);
     }
     
-    // 簡化的日誌頁面
     String getSimpleLogHTML() {
-        auto stats = LOG_MANAGER.getStats();
+        WebUI::PageBuilder h(4096);
+        h.append("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>日誌</title>"
+                 "<style>%s</style></head><body>"
+                 "<div class='container'><h1>系統日誌</h1><pre>", WebUI::getCompactCSS());
         auto logs = LOG_MANAGER.getLogs();
-        
-        // 建構日誌內容
-        String logContent = "";
-        if (logs.size() > 0) {
-            // 顯示最新的10條日誌
-            size_t startIndex = logs.size() > 10 ? logs.size() - 10 : 0;
-            size_t shownEntries = logs.size() - startIndex;
-            for (size_t i = startIndex; i < logs.size(); i++) {
-                const auto& entry = logs[i];
-                String timeStr = String(entry.timestamp / 1000) + "." + String(entry.timestamp % 1000);
-                logContent += "<div class=\"log-entry\">";
-                logContent += "[" + timeStr + "] [" + String(LOG_MANAGER.getLevelString(entry.level)) + "] [" + entry.component + "] " + entry.message;
-                logContent += "</div>";
-            }
+        size_t start = logs.size() > 20 ? logs.size() - 20 : 0;
+        for (size_t i = start; i < logs.size(); i++) {
+            const auto& e = logs[i];
+            h.append("[%lus] [%s] %s\n", e.timestamp / 1000, LOG_MANAGER.getLevelString(e.level), e.message.c_str());
         }
-        
-        return WebUI::getLogPage(logContent, "/logs-clear", "/api/logs", 
-                                stats.totalEntries, stats.infoCount, stats.warningCount, 
-                                stats.errorCount, logs.size() > 10 ? 10 : logs.size());
+        h.append("</pre><div style='text-align:center'><a href='/' class='button secondary'>返回</a></div></div></body></html>");
+        return h.toString();
     }
     
     // 處理清除日誌請求
@@ -877,95 +868,38 @@ public:
     }
 
 private:
-    String cachedNetworksJSON; // 網路掃描緩存
-    // 生成主頁 HTML
+    String cachedNetworksJSON;
     String getMainPageHTML() {
-        String html = WebUI::getPageHeader("DaiSpan 配置");
-        html += "<div class=\"container\">";
-        html += "<h1>🌡️ DaiSpan 智能恆溫器</h1>";
-        
-        // 狀態資訊
-        html += "<div class=\"status\">";
+        String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>DaiSpan</title>"
+                      "<style>" + String(WebUI::getCompactCSS()) + "</style></head><body>"
+                      "<div class='container'><h1>DaiSpan</h1><div class='status'>";
         if (isAPMode) {
-            html += "<h3>📡 配置狀態</h3>";
-            html += "<p>設備已啟動 AP 配置模式</p>";
-            html += "<p>請連接此設備並配置 WiFi 設定</p>";
-            html += "<p><strong>AP SSID:</strong> " + String(AP_SSID) + "</p>";
-            html += "<p><strong>IP地址:</strong> " + WiFi.softAPIP().toString() + "</p>";
+            html += "<p>AP 配置模式</p><p>SSID: " + String(AP_SSID) + "</p>";
         } else {
-            html += "<h3>🌐 系統狀態</h3>";
-            html += "<p>設備已連接到 WiFi: <strong>" + WiFi.SSID() + "</strong></p>";
-            html += "<p>IP 地址: <strong>" + WiFi.localIP().toString() + "</strong></p>";
-            html += "<p>信號強度: " + String(WiFi.RSSI()) + " dBm</p>";
+            html += "<p>WiFi: " + WiFi.SSID() + " (" + String(WiFi.RSSI()) + " dBm)</p>"
+                    "<p>IP: " + WiFi.localIP().toString() + "</p>";
         }
-        html += "</div>";
-        
-        // 導航按鈕
-        html += "<div style=\"text-align: center;\">";
-        html += "<a href=\"/config\" class=\"button\">📡 WiFi 設定</a>";
-        html += "<a href=\"/ota-status\" class=\"button\">🔄 OTA 更新</a>";
-        html += "<a href=\"/logs\" class=\"button\">📊 系統日誌</a>";
-        html += "<a href=\"/restart\" class=\"button\">🔄 重新啟動</a>";
-        html += "</div>";
-        
-        html += "</div>";
-        html += WebUI::getPageFooter();
+        html += "</div><div style='text-align:center'>"
+                "<a href='/config' class='button'>WiFi 設定</a>"
+                "<a href='/restart' class='button'>重啟</a>"
+                "</div></div></body></html>";
         return html;
-    }
-    
-    // 生成配置頁面 HTML
-    String getConfigPageHTML() {
-        String html = WebUI::getPageHeader("WiFi 配置");
-        html += "<div class=\"container\">";
-        html += "<h1>📡 WiFi 配置</h1>";
-        
-        html += "<form action=\"/save\" method=\"post\">";
-        
-        // WiFi 網路列表和配置表單
-        html += WebUI::getWiFiNetworkList("networks");
-        html += WebUI::getWiFiConfigForm();
-        
-        // HomeKit 配置表單
-        html += WebUI::getHomeKitConfigForm();
-        
-        html += "<button type=\"submit\" class=\"button\">💾 保存配置</button>";
-        html += "</form>";
-        
-        // 返回按鈕
-        html += "<div style=\"text-align: center; margin-top: 20px;\">";
-        html += "<a href=\"/\" class=\"button secondary\">⬅️ 返回主頁</a>";
-        html += "</div>";
-        
-        html += "</div>";
-        
-        // 添加 WiFi 掃描腳本
-        html += WebUI::getWiFiScanScript();
-        
-        html += WebUI::getPageFooter();
-        return html;
-    }
-    
-    // 生成保存頁面 HTML
-    String getSavePageHTML(const String& ssid) {
-        String message = "WiFi 配置已成功保存！<br>";
-        message += "正在重新啟動並嘗試連接到: <strong>" + ssid + "</strong>";
-        return WebUI::getSuccessPage("配置已保存", message, 3);
-    }
-    
-    // 生成錯誤頁面 HTML
-    String getErrorPageHTML(const String& title, const String& message) {
-        return WebUI::getErrorPage(title, message, "/config");
     }
 
-    // 生成 OTA 頁面 HTML
+    String getConfigPageHTML() {
+        return WebUI::getSimpleWiFiConfigPage("/save", "/scan");
+    }
+
+    String getSavePageHTML(const String& ssid) {
+        return WebUI::getSuccessPage("配置已保存",
+            "正在重啟並連接到: <b>" + ssid + "</b>", 3);
+    }
+
+    String getErrorPageHTML(const String& title, const String& message) {
+        return WebUI::getSuccessPage(title, "<span style='color:red'>" + message + "</span><br><a href='/config'>返回</a>");
+    }
+
     String getOTAPageHTML() {
-        String otaStatus = "";
-        if (otaManager) {
-            otaStatus = otaManager->getStatusHTML();
-        } else {
-            otaStatus = "<p><span style=\"color: red;\">●</span> OTA 管理器未初始化</p>";
-        }
-        
-        return WebUI::getOTAPage(WiFi.localIP().toString(), "DaiSpan-Thermostat", otaStatus);
+        return WebUI::getOTAPage(WiFi.localIP().toString());
     }
 };

@@ -2,9 +2,6 @@
 #include "common/Debug.h"
 #include "common/RemoteDebugger.h"
 
-#include "architecture_v3/domain/ThermostatDomain.h"
-#include "architecture_v3/core/EventSystemSimple.h"
-extern DaiSpan::Core::EventPublisher* g_eventBus;
 
 // 靜態變量用於記錄上一次輸出的值
 static float lastOutputCurrentTemp = 0;
@@ -16,17 +13,6 @@ namespace {
     constexpr float TEMP_ADJUSTMENT_DELTA = 1.0f;
     constexpr float AUTO_MODE_TEMP_THRESHOLD = 0.5f;
     constexpr int FORCED_UPDATE_INTERVAL = 0; // 強制更新間隔
-}
-
-// 添加 HomeKit 模式文字轉換函數
-const char* getHomeKitModeText(int mode) {
-    switch (mode) {
-        case HAP_MODE_OFF: return "OFF";
-        case HAP_MODE_HEAT: return "HEAT";
-        case HAP_MODE_COOL: return "COOL";
-        case HAP_MODE_AUTO: return "AUTO";
-        default: return "UNKNOWN";
-    }
 }
 
 ThermostatDevice::ThermostatDevice(IThermostatControl& thermostatControl) 
@@ -177,36 +163,6 @@ void ThermostatDevice::handleSuccessfulUpdate() {
     // 立即觸發狀態同步，提供快速響應
     lastUpdateTime = FORCED_UPDATE_INTERVAL; // 重置更新時間，強制下次loop()立即執行同步
     
-    publishCoreEvents();
-}
-
-// 核心事件發布輔助方法
-void ThermostatDevice::publishCoreEvents() {
-    if (!g_eventBus) return;
-    
-    // 檢查是否有模式變更
-    if (targetMode->updated()) {
-        String modeDetails = String("模式變更: ") + getHomeKitModeText(targetMode->getNewVal());
-        auto event = std::make_unique<DaiSpan::Domain::Thermostat::Events::CommandReceived>(
-            DaiSpan::Domain::Thermostat::Events::CommandReceived::Type::Mode,
-            "homekit",
-            modeDetails.c_str()
-        );
-        g_eventBus->publish(std::move(event));
-        DEBUG_VERBOSE_PRINT("[Core] 發布 HomeKit 模式變更事件\n");
-    }
-    
-    // 檢查是否有溫度變更
-    if (targetTemp->updated()) {
-        String tempDetails = String("溫度變更: ") + String(targetTemp->getNewVal<float>(), 1) + "°C";
-        auto event = std::make_unique<DaiSpan::Domain::Thermostat::Events::CommandReceived>(
-            DaiSpan::Domain::Thermostat::Events::CommandReceived::Type::Temperature,
-            "homekit",
-            tempDetails.c_str()
-        );
-        g_eventBus->publish(std::move(event));
-        DEBUG_VERBOSE_PRINT("[Core] 發布 HomeKit 溫度變更事件\n");
-    }
 }
 
 // 同步目標模式的輔助方法
@@ -335,8 +291,10 @@ void ThermostatDevice::loop() {
         lastHeartbeatTime = currentTime;
     }
     
-    // 強制每次都執行狀態更新檢查 - 確保 HomeKit 狀態同步
-    // 移除間隔限制，讓 HomeKit 狀態同步更頻繁
+    // 根據 UPDATE_INTERVAL 限制同步頻率，避免 HomeKit 通知過於頻繁
+    if (currentTime - lastUpdateTime < UPDATE_INTERVAL) {
+        return;
+    }
     lastUpdateTime = currentTime;
     
     controller.update();

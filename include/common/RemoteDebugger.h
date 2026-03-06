@@ -14,7 +14,7 @@ private:
     
     // 日誌緩存
     std::vector<String> logBuffer;
-    static const size_t MAX_LOG_BUFFER = 100;
+    static const size_t MAX_LOG_BUFFER = 30;
     
     // HomeKit 狀態追蹤
     struct HomeKitOperation {
@@ -28,13 +28,13 @@ private:
     };
     
     std::vector<HomeKitOperation> operationHistory;
-    static const size_t MAX_OPERATION_HISTORY = 50;
+    static const size_t MAX_OPERATION_HISTORY = 20;
     
     // 串口日誌轉發
     bool serialLogEnabled;
     int serialLogLevel;
     std::vector<String> serialLogBuffer;
-    static const size_t MAX_SERIAL_LOG_BUFFER = 200;
+    static const size_t MAX_SERIAL_LOG_BUFFER = 50;
     
 public:
     // 單例模式

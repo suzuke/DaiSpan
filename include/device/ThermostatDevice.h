@@ -61,8 +61,6 @@ private:
     bool syncCurrentMode(unsigned long currentTime);
     uint8_t calculateAutoModeState();
     
-    void publishCoreEvents();
-    
 public:
     explicit ThermostatDevice(IThermostatControl& ctrl);
     void loop() override;

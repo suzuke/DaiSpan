@@ -4,225 +4,106 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-DaiSpan is an ESP32-based HomeKit smart thermostat that controls Daikin air conditioners via the S21 protocol. The project features a modern event-driven architecture with RTTI-free design, domain-driven patterns, and comprehensive monitoring capabilities. The system provides excellent performance and maintainability through clean abstractions and dependency injection.
+DaiSpan is an ESP32-based HomeKit smart thermostat that controls Daikin air conditioners via the S21 serial protocol. Built with PlatformIO, Arduino framework, C++17, and HomeSpan library. The codebase uses Traditional Chinese for comments and log messages.
 
-## Development Commands
+## Build and Deploy
 
-### Build and Deploy
 ```bash
-# Build firmware (default target: ESP32-C3 SuperMini)
+# Build (default: esp32-c3-supermini)
 pio run
 
-# Upload via USB (default method)
-pio run -t upload
+# Upload via USB (pick your board env)
+pio run -e esp32-c3-supermini-usb -t upload
+pio run -e esp32-s3-usb -t upload
+pio run -e esp32-s3-supermini-usb -t upload
 
-# Upload via OTA
+# Upload via OTA (set IP in platformio.ini first, auth: 12345678)
 pio run -e esp32-c3-supermini-ota -t upload
+
+# Production build (no simulation/mock, smaller binary)
+pio run -e esp32-c3-supermini-production -t upload
 
 # Monitor serial output
 pio device monitor
 
-# Clean build
+# Clean
 pio run -t clean
 ```
 
-### Environment Configuration
-The project supports flexible upload methods via different environments:
+**Environment naming pattern**: `esp32-{chip}-{board}-{method}` where method is `usb`, `ota`, or `production`.
 
-#### USB Upload (Default)
-```bash
-# Uses esp32-s3-usb environment (default)
-pio run -e esp32-s3-usb -t upload
+## Architecture
+
+The system follows a layered architecture:
+
+```
+Device Layer (HomeKit via HomeSpan)
+    |
+Controller Layer (IThermostatControl interface)
+    |--- ThermostatController (real hardware)
+    |--- MockThermostatController (simulation, compile-guarded)
+    |
+Protocol Layer (IACProtocol interface)
+    |--- S21Protocol -> S21ProtocolAdapter
+    |--- ACProtocolFactory (creates protocol by type)
+    |
+Common Layer
+    |--- ConfigManager (Preferences-backed with cache)
+    |--- WiFiManager, OTAManager, SystemManager
+    |--- WebUI + StreamingResponse (config/debug web interface)
+    |--- RemoteDebugger (WebSocket on port 8081)
+    |--- LogManager (level-based: ERROR/WARN/INFO/VERBOSE)
 ```
 
-#### OTA Upload
-```bash
-# Uses esp32-s3-ota environment
-pio run -e esp32-s3-ota -t upload
-```
+**Data flow**: HomeKit characteristic change -> ThermostatDevice -> IThermostatControl -> IACProtocol -> S21 serial (2400 baud) -> Daikin AC
 
-**Note**: For OTA uploads, ensure the device IP address is correctly set in `platformio.ini` under the respective OTA environment section. The default OTA authentication password is `12345678`.
+**Key entry point**: `src/main.cpp` contains `setup()` and `loop()`, all global state, and web route handlers (~1200 lines).
 
-### Multi-Board Support
+### Important Compile Guards
 
-#### ESP32-S3 DevKitC-1 (Primary Target)
-```bash
-# USB Upload
-pio run -e esp32-s3-usb -t upload
+Defined in platformio.ini build_flags per environment:
 
-# OTA Upload  
-pio run -e esp32-s3-ota -t upload
+- `PRODUCTION_BUILD` — enables production optimizations
+- `DISABLE_SIMULATION_MODE` — removes simulation mode code
+- `DISABLE_MOCK_CONTROLLER` — removes mock controller code
+- `ESP32C3_SUPER_MINI` / `ESP32S3_SUPER_MINI` — selects pin configuration
 
-# Legacy environment (build only)
-pio run -e esp32-s3-devkitc-1-n16r8v
-```
+### Hardware Pin Mapping
 
-#### ESP32-C3 SuperMini
-```bash
-# USB Upload
-pio run -e esp32-c3-supermini-usb -t upload
-
-# OTA Upload
-pio run -e esp32-c3-supermini-ota -t upload
-
-# Legacy environment (build only)
-pio run -e esp32-c3-supermini
-```
-
-#### ESP32-S3 SuperMini
-```bash
-# USB Upload
-pio run -e esp32-s3-supermini-usb -t upload
-
-# OTA Upload
-pio run -e esp32-s3-supermini-ota -t upload
-
-# Legacy environment (build only)
-pio run -e esp32-s3-supermini
-```
-
-## Architecture Overview
-
-### Architecture Structure
-The codebase follows a modern event-driven architecture:
-
-1. **Core Architecture** (`include/architecture_v3/core/`): Event-driven foundation
-   - `EventSystemSimple.h`: RTTI-free event system
-   - `ServiceContainerSimple.h`: Dependency injection container
-   - `Result.h`: Functional error handling
-
-2. **Domain Layer** (`include/architecture_v3/domain/`): Business logic
-   - `ThermostatDomain.h`: Domain aggregates and value objects
-   - `ConfigDomain.h`: Configuration domain logic
-
-3. **Protocol Layer** (`include/protocol/`): Hardware communication abstractions
-   - `IACProtocol.h`: Generic AC control interface
-   - `S21Protocol.h`: Daikin S21 implementation
-   - `ACProtocolFactory.h`: Protocol factory for extensibility
-
-4. **Controller Layer** (`include/controller/`): Business logic adapters
-   - `IThermostatControl.h`: Control interface
-   - `ThermostatController.h`: Main controller implementation
-   - `MockThermostatController.h`: Simulation mode
-
-5. **Device Layer** (`include/device/`): HomeKit integration
-   - `ThermostatDevice.h`: HomeSpan-based HomeKit thermostat
-
-6. **Common Layer** (`include/common/`): Shared utilities
-   - `Config.h`: Configuration management
-   - `WiFiManager.h`: Network handling
-   - `LogManager.h`: Logging system
-
-### Key Design Patterns
-- **Event-Driven Architecture**: Asynchronous event processing with RTTI-free implementation
-- **Dependency Injection**: Service container with factory pattern support
-- **Domain-Driven Design**: Aggregates, value objects, and domain events
-- **Functional Error Handling**: Result<T> pattern for error management
-- **Factory Pattern**: `ACProtocolFactory` creates protocol instances
-- **Adapter Pattern**: `S21ProtocolAdapter` bridges protocol specifics
-- **Interface Segregation**: Clean abstractions between layers
-
-## Configuration and Setup
-
-### Hardware Configuration
-The system supports multiple ESP32 variants with different pin assignments:
-- ESP32-C3 Super Mini: RX=4, TX=3
-- ESP32-S3 Super Mini: RX=13, TX=12
+Defined in `src/main.cpp`:
+- ESP32-C3 SuperMini: RX=4, TX=3
+- ESP32-S3 SuperMini: RX=13, TX=12
 - ESP32-S3 DevKitC-1: RX=14, TX=13
-
-Pin configurations are defined in `include/common/Config.h`.
-
-### Operating Modes
-1. **Real Hardware Mode**: Communicates with actual Daikin AC via S21 protocol
-2. **Simulation Mode**: Mock implementation for testing and development
-
-Mode selection is controlled via web interface. The system uses modern event-driven architecture for efficient processing.
-
-### Initial Setup Process
-1. Device creates "DaiSpan-Config" WiFi access point
-2. Connect to AP and navigate to web interface
-3. Configure WiFi credentials and HomeKit settings
-4. Device switches to operational mode with HomeKit pairing
 
 ## Adding New AC Protocols
 
-The architecture is designed for easy protocol extension:
-
-1. Create new protocol class implementing `IACProtocol` interface
-2. Add protocol type to `ACProtocolType` enum in `include/common/ThermostatMode.h`
+1. Implement `IACProtocol` interface (`include/protocol/IACProtocol.h`)
+2. Add type to `ACProtocolType` enum in `include/common/ThermostatMode.h`
 3. Register in `ACProtocolFactory::createProtocol()`
-4. Implement detection logic in factory
-5. No changes needed to controller or device layers
-
-## Web Interface Features
-
-The built-in web server provides:
-- System status monitoring with real-time metrics
-- Core architecture status and event system statistics
-- WiFi configuration and network management
-- HomeKit settings management
-- Simulation mode controls
-- Advanced API endpoints for monitoring and debugging
-- OTA update capability
-- Chinese language support
-
-### API Endpoints
-- `/api/health` - System health check with component status
-- `/api/metrics` - Comprehensive performance metrics including memory, CPU, network, and HomeKit status
-- `/api/logs` - System logs with component filtering and severity levels
-- `/api/core/stats` - Core architecture statistics with event system metrics
-- `/api/core/reset` - Reset event system statistics
-- `/core-test-event` - Manual event testing endpoint
+4. Controller and device layers need no changes
 
 ## Memory Constraints
 
-Current usage (ESP32-C3):
-- Flash: 92.4% (1.6MB/1.7MB)
-- RAM: 46.2% (151KB/327KB)
+ESP32-C3 has tight limits (~2MB flash, ~327KB RAM). Flash usage is ~80%, RAM ~47%. Avoid adding large features without checking `pio run` output for size. The custom partition table (`partitions_custom.csv`) reserves space for OTA.
 
-Keep these limits in mind when adding features. The custom partition table reserves space for OTA updates.
+## Web Interface and Debugging
 
-## HomeKit Integration
+- Web config UI: `http://device-ip:8080`
+- Remote debug dashboard: `http://device-ip:8080/debug`
+- WebSocket real-time logs: `ws://device-ip:8081`
+- API endpoints: `/api/health`, `/api/metrics`, `/api/memory/stats`
 
-Uses HomeSpan library for HomeKit compatibility:
-- Temperature range: 16°C - 30°C
-- Modes: Off, Heat, Cool, Auto
-- Default pairing code: 11122333
-- Configurable device name and manufacturer info
+## Testing
 
-## Logging System
+No unit test framework — testing is done via:
+- Simulation mode (mock controller) through web interface
+- Serial monitor (`pio device monitor`)
+- Python scripts in `scripts/` for device health checks and stability tests:
+  ```bash
+  python3 scripts/quick_check.py [device_ip]
+  python3 scripts/long_term_test.py 192.168.4.1 24 5
+  ```
 
-The project uses an optimized logging system with multiple levels:
-- `DEBUG_ERROR` - Critical errors only
-- `DEBUG_WARN` - Warning messages
-- `DEBUG_INFO` - Important status updates (default)
-- `DEBUG_VERBOSE` - Detailed communication traces
+## Configuration
 
-Features:
-- Static buffer allocation for memory efficiency
-- Remote web log integration
-- Production build optimization
-- Component-based filtering
-
-## Testing Strategy
-
-- Mock controller enables simulation mode testing
-- Protocol abstraction allows unit testing of business logic
-- Web interface provides manual testing capabilities
-- Serial monitor shows detailed debug logs with Chinese descriptions
-
-### Testing and Monitoring Scripts
-The `scripts/` directory contains Python and shell tools for device testing:
-
-```bash
-# Quick device status check
-python3 scripts/quick_check.py [device_ip]
-
-# Long-term stability testing (24 hours, check every 5 minutes)
-python3 scripts/long_term_test.py 192.168.4.1 24 5
-
-# Continuous background monitoring
-./scripts/resource_monitor.sh 192.168.4.1 [interval_seconds]
-```
-
-**Dependencies**: Install Python `requests` library and system tools (`bc`, `curl`)
+Stored in ESP32 NVR via `Preferences` library (namespace: `daispan`). `ConfigManager` in `include/common/Config.h` provides cached access. WiFi setup happens through AP mode ("DaiSpan-Config" network). Default HomeKit pairing code: `11122333`.

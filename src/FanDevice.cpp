@@ -75,21 +75,19 @@ boolean FanDevice::update() {
             }
         } else {
             // 關閉風扇 - 設置為自動模式但不強制關閉空調
+            // 保持 fanSpeed 顯示值不變，避免 0% → AUTO(20%) 的 round-trip 問題
             if (controller.setFanSpeed(FAN_AUTO)) {
-                fanSpeed->setVal(HOMEKIT_FAN_AUTO);
-                lastUserSetSpeed = HOMEKIT_FAN_AUTO;
+                lastUserSetSpeed = fanSpeed->getVal(); // 保留當前顯示速度
                 changed = true;
                 DEBUG_INFO_PRINT("[FanDevice] 風扇設置為自動模式\n");
-                DEBUG_INFO_PRINT("[FanDevice] 記錄用戶關閉互動 - 時間: %lu, 速度: %d%%\n", 
+                DEBUG_INFO_PRINT("[FanDevice] 記錄用戶關閉互動 - 時間: %lu, 速度: %d%%\n",
                                lastUserInteraction, lastUserSetSpeed);
-                // 記錄HomeKit操作到遠端調試器
-                REMOTE_LOG_HOMEKIT_OP("關閉風扇", "風扇", 
+                REMOTE_LOG_HOMEKIT_OP("關閉風扇", "風扇",
                                      "開啟",
                                      "關閉 (自動模式)",
                                      true, "");
             } else {
-                // 記錄失敗的HomeKit操作
-                REMOTE_LOG_HOMEKIT_OP("關閉風扇", "風扇", 
+                REMOTE_LOG_HOMEKIT_OP("關閉風扇", "風扇",
                                      "開啟",
                                      "關閉 (自動模式)",
                                      false, "控制器拒絕風扇關閉");
@@ -216,11 +214,12 @@ void FanDevice::loop() {
 }
 
 // 將HomeKit速度轉換為AC速度
+// 注意：0% 不應透過此函數處理，應由 fanOn 開關控制
 uint8_t FanDevice::homeKitSpeedToACSpeed(int homeKitSpeed) {
-    if (homeKitSpeed == 0) {
-        return FAN_AUTO;  // 0% = 自動
+    if (homeKitSpeed <= 5) {
+        return FAN_QUIET;   // 0-5% = 靜音模式
     } else if (homeKitSpeed <= 15) {
-        return FAN_SPEED_1; // 1-15% = 1檔 (真實AC最低速)
+        return FAN_SPEED_1; // 6-15% = 1檔 (真實AC最低速)
     } else if (homeKitSpeed <= 25) {
         return FAN_AUTO;  // 16-25% = 自動
     } else if (homeKitSpeed <= 45) {

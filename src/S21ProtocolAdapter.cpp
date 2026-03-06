@@ -183,7 +183,7 @@ bool S21ProtocolAdapter::queryStatus(ACStatus& status) {
     }
     
     // 解析回應
-    if (!s21Protocol->parseResponse(cmd0, cmd1, payload, payloadLen)) {
+    if (!s21Protocol->parseResponse(cmd0, cmd1, payload, payloadLen, sizeof(payload))) {
         setLastError("狀態回應解析失敗");
         return false;
     }
@@ -231,7 +231,7 @@ bool S21ProtocolAdapter::queryTemperature(float& temperature) {
     }
     
     // 解析回應
-    if (!s21Protocol->parseResponse(cmd0, cmd1, payload, payloadLen)) {
+    if (!s21Protocol->parseResponse(cmd0, cmd1, payload, payloadLen, sizeof(payload))) {
         setLastError("溫度回應解析失敗");
         return false;
     }

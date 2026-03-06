@@ -14,7 +14,8 @@ ThermostatController::ThermostatController(std::unique_ptr<IACProtocol> p)
       lastFanSpeedSetTime(0),
       lastUserFanSpeed(AC_FAN_AUTO),
       lastModeSetTime(0),
-      lastUserMode(AC_MODE_AUTO) {
+      lastUserMode(AC_MODE_AUTO),
+      targetHomeKitMode(HAP_MODE_AUTO) {
     
     if (!protocol) {
         DEBUG_ERROR_PRINT("[Controller] 錯誤：協議實例為空\n");
@@ -46,9 +47,16 @@ ThermostatController::ThermostatController(ThermostatController&& other) noexcep
       fanSpeed(other.fanSpeed),
       consecutiveErrors(other.consecutiveErrors),
       lastUpdateTime(other.lastUpdateTime),
-      lastSuccessfulUpdate(other.lastSuccessfulUpdate) {
-    
-    DEBUG_INFO_PRINT("[Controller] 移動構造函數執行\n");
+      lastSuccessfulUpdate(other.lastSuccessfulUpdate),
+      lastFanSpeedSetTime(other.lastFanSpeedSetTime),
+      lastUserFanSpeed(other.lastUserFanSpeed),
+      lastModeSetTime(other.lastModeSetTime),
+      lastUserMode(other.lastUserMode),
+      targetHomeKitMode(other.targetHomeKitMode),
+      dirtyPower(other.dirtyPower),
+      dirtyMode(other.dirtyMode),
+      dirtyTemp(other.dirtyTemp),
+      dirtyFan(other.dirtyFan) {
 }
 
 ThermostatController& ThermostatController::operator=(ThermostatController&& other) noexcept {
@@ -62,168 +70,180 @@ ThermostatController& ThermostatController::operator=(ThermostatController&& oth
         consecutiveErrors = other.consecutiveErrors;
         lastUpdateTime = other.lastUpdateTime;
         lastSuccessfulUpdate = other.lastSuccessfulUpdate;
-        
-        DEBUG_INFO_PRINT("[Controller] 移動賦值操作符執行\n");
+        lastFanSpeedSetTime = other.lastFanSpeedSetTime;
+        lastUserFanSpeed = other.lastUserFanSpeed;
+        lastModeSetTime = other.lastModeSetTime;
+        lastUserMode = other.lastUserMode;
+        targetHomeKitMode = other.targetHomeKitMode;
+        dirtyPower = other.dirtyPower;
+        dirtyMode = other.dirtyMode;
+        dirtyTemp = other.dirtyTemp;
+        dirtyFan = other.dirtyFan;
     }
     return *this;
 }
 
 bool ThermostatController::setPower(bool on) {
-    if (!protocol) {
-        DEBUG_ERROR_PRINT("[Controller] 錯誤：協議實例無效\n");
-        return false;
-    }
-    
-    // 允許 HomeKit 操作嘗試，即使在輕微錯誤狀態下
-    if (isInErrorRecoveryMode()) {
-        DEBUG_WARN_PRINT("[Controller] 警告：錯誤恢復模式中，嘗試執行電源操作\n");
-        // 不直接返回 false，而是嘗試操作，讓協議層決定是否成功
-    }
-    
+    if (!protocol) return false;
+
     DEBUG_INFO_PRINT("[Controller] 設置電源狀態：%s\n", on ? "開啟" : "關閉");
-    
-    // 使用抽象協議介面設置電源和模式
+    power = on;
+    dirtyPower = true;
+
+    if (isInErrorRecoveryMode()) {
+        DEBUG_WARN_PRINT("[Controller] 恢復模式中，已標記待同步\n");
+        return true;
+    }
+
     bool success = protocol->setPowerAndMode(on, mode, targetTemperature, fanSpeed);
-    
     if (success) {
-        power = on;
+        dirtyPower = false;
         resetErrorCount();
-        lastSuccessfulUpdate = millis(); // 記錄成功操作時間
-        DEBUG_INFO_PRINT("[Controller] 電源狀態設置成功\n");
+        lastSuccessfulUpdate = millis();
     } else {
         handleProtocolError("setPower");
     }
-    
     return success;
 }
 
 bool ThermostatController::setTargetMode(uint8_t newMode) {
-    if (!protocol) {
-        DEBUG_ERROR_PRINT("[Controller] 錯誤：協議實例無效\n");
-        return false;
-    }
-    
-    // 允許 HomeKit 操作嘗試，即使在輕微錯誤狀態下
-    if (isInErrorRecoveryMode()) {
-        DEBUG_WARN_PRINT("[Controller] 警告：錯誤恢復模式中，嘗試執行模式操作\n");
-        // 不直接返回 false，而是嘗試操作，讓協議層決定是否成功
-    }
-    
-    // 將 HomeKit 模式轉換為空調模式
+    if (!protocol) return false;
+
     uint8_t acMode = convertHomeKitToACMode(newMode);
-    
     DEBUG_INFO_PRINT("[Controller] 設置目標模式：HomeKit=%d -> AC=%d\n", newMode, acMode);
-    
-    // 檢查協議是否支持該模式
+
     if (!protocol->supportsMode(acMode)) {
-        DEBUG_ERROR_PRINT("[Controller] 錯誤：協議不支持模式 %d\n", acMode);
+        DEBUG_ERROR_PRINT("[Controller] 協議不支持模式 %d\n", acMode);
         return false;
     }
-    
-    // 如果是切換到關機模式，直接關閉電源
+
     if (newMode == HAP_MODE_OFF) {
         return setPower(false);
     }
-    
-    // 如果當前是關機狀態且不是切換到關機模式，需要先開機
-    if (!power && newMode != HAP_MODE_OFF) {
-        if (!setPower(true)) {
-            return false;
-        }
+
+    mode = acMode;
+    targetHomeKitMode = newMode;
+    lastModeSetTime = millis();
+    lastUserMode = acMode;
+    dirtyMode = true;
+
+    if (!power && !setPower(true)) {
+        return false;
     }
-    
-    // 使用抽象協議介面設置模式
+
+    if (isInErrorRecoveryMode()) {
+        DEBUG_WARN_PRINT("[Controller] 恢復模式中，已標記待同步\n");
+        return true;
+    }
+
     bool success = protocol->setPowerAndMode(power, acMode, targetTemperature, fanSpeed);
-    
     if (success) {
-        mode = acMode;
-        // 記錄用戶設定的模式，防止被queryStatus覆蓋
-        lastModeSetTime = millis();
-        lastUserMode = acMode;
+        dirtyMode = false;
+        dirtyPower = false; // setPowerAndMode 同時送出
         resetErrorCount();
-        lastSuccessfulUpdate = millis(); // 記錄成功操作時間
-        DEBUG_INFO_PRINT("[Controller] 模式設置成功：%d，啟用10秒保護期\n", newMode);
+        lastSuccessfulUpdate = millis();
+        DEBUG_INFO_PRINT("[Controller] 模式設置成功：%d\n", newMode);
     } else {
         handleProtocolError("setTargetMode");
     }
-    
     return success;
 }
 
 bool ThermostatController::setTargetTemperature(float temperature) {
-    if (!protocol) {
-        DEBUG_ERROR_PRINT("[Controller] 錯誤：協議實例無效\n");
-        return false;
-    }
-    
-    // 允許 HomeKit 操作嘗試，即使在輕微錯誤狀態下
-    if (isInErrorRecoveryMode()) {
-        DEBUG_WARN_PRINT("[Controller] 警告：錯誤恢復模式中，嘗試執行溫度操作\n");
-        // 不直接返回 false，而是嘗試操作，讓協議層決定是否成功
-    }
-    
-    // 檢查溫度範圍
+    if (!protocol) return false;
+
     auto tempRange = protocol->getTemperatureRange();
     if (temperature < tempRange.first || temperature > tempRange.second || isnan(temperature)) {
-        DEBUG_ERROR_PRINT("[Controller] 錯誤：無效的溫度值 %.1f°C (範圍: %.1f-%.1f°C)\n", 
+        DEBUG_ERROR_PRINT("[Controller] 無效溫度 %.1f°C (範圍: %.1f-%.1f°C)\n",
                           temperature, tempRange.first, tempRange.second);
         return false;
     }
-    
+
     DEBUG_INFO_PRINT("[Controller] 設置目標溫度：%.1f°C\n", temperature);
-    
-    // 使用抽象協議介面設置溫度
+    targetTemperature = temperature;
+    dirtyTemp = true;
+
+    if (isInErrorRecoveryMode()) {
+        DEBUG_WARN_PRINT("[Controller] 恢復模式中，已標記待同步\n");
+        return true;
+    }
+
     bool success = protocol->setTemperature(temperature);
-    
     if (success) {
-        targetTemperature = temperature;
+        dirtyTemp = false;
         resetErrorCount();
-        lastSuccessfulUpdate = millis(); // 記錄成功操作時間
-        DEBUG_INFO_PRINT("[Controller] 目標溫度設置成功\n");
+        lastSuccessfulUpdate = millis();
     } else {
         handleProtocolError("setTargetTemperature");
     }
-    
     return success;
 }
 
 bool ThermostatController::setFanSpeed(uint8_t speed) {
-    if (!protocol) {
-        DEBUG_ERROR_PRINT("[Controller] 錯誤：協議實例無效\n");
-        return false;
-    }
-    
-    // 允許 HomeKit 操作嘗試，即使在輕微錯誤狀態下
-    if (isInErrorRecoveryMode()) {
-        DEBUG_WARN_PRINT("[Controller] 警告：錯誤恢復模式中，嘗試執行風速操作\n");
-        // 不直接返回 false，而是嘗試操作，讓協議層決定是否成功
-    }
-    
-    // 檢查協議是否支持該風速
+    if (!protocol) return false;
+
     if (!protocol->supportsFanSpeed(speed)) {
-        DEBUG_ERROR_PRINT("[Controller] 錯誤：協議不支持風速 %d\n", speed);
+        DEBUG_ERROR_PRINT("[Controller] 協議不支持風速 %d\n", speed);
         return false;
     }
-    
+
     DEBUG_INFO_PRINT("[Controller] 設置風速：%d (%s)\n", speed, getFanSpeedText(speed));
-    
-    // 使用抽象協議介面設置風速
+    fanSpeed = speed;
+    lastFanSpeedSetTime = millis();
+    lastUserFanSpeed = speed;
+    dirtyFan = true;
+
+    if (isInErrorRecoveryMode()) {
+        DEBUG_WARN_PRINT("[Controller] 恢復模式中，已標記待同步\n");
+        return true;
+    }
+
     bool success = protocol->setPowerAndMode(power, mode, targetTemperature, speed);
-    
     if (success) {
-        fanSpeed = speed;
-        // 記錄用戶風速設置時間和值，防止被queryStatus覆蓋
-        lastFanSpeedSetTime = millis();
-        lastUserFanSpeed = speed;
+        dirtyFan = false;
         resetErrorCount();
-        lastSuccessfulUpdate = millis(); // 記錄成功操作時間
-        DEBUG_INFO_PRINT("[Controller] 風速設置成功：%s (記錄用戶設置時間: %lu)\n", 
-                        getFanSpeedText(speed), lastFanSpeedSetTime);
+        lastSuccessfulUpdate = millis();
     } else {
         handleProtocolError("setFanSpeed");
     }
-    
     return success;
+}
+
+void ThermostatController::syncDirtyState() {
+    if (!dirtyPower && !dirtyMode && !dirtyTemp && !dirtyFan) return;
+
+    DEBUG_INFO_PRINT("[Controller] 同步待發送狀態 (P:%d M:%d T:%d F:%d)\n",
+                     dirtyPower, dirtyMode, dirtyTemp, dirtyFan);
+
+    // 用一次 setPowerAndMode 送出電源+模式+溫度+風速
+    if (dirtyPower || dirtyMode || dirtyFan) {
+        if (protocol->setPowerAndMode(power, mode, targetTemperature, fanSpeed)) {
+            dirtyPower = false;
+            dirtyFan = false;
+            dirtyTemp = false; // setPowerAndMode 已包含溫度
+            if (dirtyMode) {
+                lastModeSetTime = millis(); // 只在模式變更時重啟保護期
+                lastUserMode = mode;
+                dirtyMode = false;
+            }
+            resetErrorCount();
+            lastSuccessfulUpdate = millis();
+            DEBUG_INFO_PRINT("[Controller] 狀態同步成功\n");
+        } else {
+            handleProtocolError("syncDirtyState");
+            return;
+        }
+    }
+
+    if (dirtyTemp) {
+        if (protocol->setTemperature(targetTemperature)) {
+            dirtyTemp = false;
+            resetErrorCount();
+            lastSuccessfulUpdate = millis();
+        } else {
+            handleProtocolError("syncDirtyTemp");
+        }
+    }
 }
 
 void ThermostatController::update() {
@@ -258,8 +278,12 @@ void ThermostatController::update() {
         }
     }
     
+    // 恢復後先同步待發送的狀態
+    syncDirtyState();
+    if (isInErrorRecoveryMode()) return; // 同步失敗，等下次恢復
+
     DEBUG_VERBOSE_PRINT("[Controller] 開始更新狀態\n");
-    
+
     // 計數本次更新的成功操作
     int successfulOperations = 0;
     int totalOperations = 0;
@@ -271,13 +295,12 @@ void ThermostatController::update() {
         if (status.isValid) {
             power = status.power;
             
-            // 用戶互動保護：如果用戶在10秒內設置過模式，不要被AC狀態覆蓋
-            const unsigned long MODE_PROTECTION_PERIOD = 10000; // 10秒保護期
-            unsigned long timeSinceLastModeSet = currentTime - lastModeSetTime;
-            
-            if (lastModeSetTime > 0 && timeSinceLastModeSet < MODE_PROTECTION_PERIOD) {
+            // 用戶互動保護：冷暖切換時 AC 需要較長時間切換模式
+            const unsigned long MODE_PROTECTION_PERIOD = 30000; // 30秒保護期
+
+            if (lastModeSetTime > 0 && (currentTime - lastModeSetTime) < MODE_PROTECTION_PERIOD) {
                 DEBUG_INFO_PRINT("[Controller] 用戶模式保護期內，跳過模式更新 (剩餘: %lu ms, 用戶設置: %d, AC回報: %d)\n",
-                                MODE_PROTECTION_PERIOD - timeSinceLastModeSet,
+                                MODE_PROTECTION_PERIOD - (currentTime - lastModeSetTime),
                                 lastUserMode, status.mode);
                 // 保持用戶設置的模式
                 mode = lastUserMode;
@@ -287,6 +310,16 @@ void ThermostatController::update() {
                     DEBUG_INFO_PRINT("[Controller] 模式從AC狀態更新：%d -> %d\n", mode, status.mode);
                 }
                 mode = status.mode;
+                // 只有在 AC mode 能無損轉換為 HomeKit mode 時才更新 targetHomeKitMode
+                // DRY/FAN 模式在 HomeKit 沒有對應，保留用戶原始設定
+                switch (status.mode) {
+                    case AC_MODE_HEAT: targetHomeKitMode = HAP_MODE_HEAT; break;
+                    case AC_MODE_COOL: targetHomeKitMode = HAP_MODE_COOL; break;
+                    case AC_MODE_AUTO:
+                    case AC_MODE_AUTO_2:
+                    case AC_MODE_AUTO_3: targetHomeKitMode = HAP_MODE_AUTO; break;
+                    // DRY, FAN: 不更新 targetHomeKitMode，保留用戶意圖
+                }
             }
             
             targetTemperature = status.targetTemperature;

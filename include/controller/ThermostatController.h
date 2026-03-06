@@ -25,16 +25,26 @@ private:
     uint8_t lastUserFanSpeed;
     unsigned long lastModeSetTime;
     uint8_t lastUserMode;
+
+    // HomeKit 目標模式（避免 DRY/FAN → AUTO 的有損轉換覆蓋用戶意圖）
+    uint8_t targetHomeKitMode;
     
-    // 高性能錯誤處理和重試邏輯
-    static constexpr unsigned long MAX_CONSECUTIVE_ERRORS = 10;     // 增加錯誤閾值，避免過早進入恢復模式
+    // 錯誤處理和重試邏輯
+    static constexpr unsigned long MAX_CONSECUTIVE_ERRORS = 10;     // 容許偶發通訊失敗
     static constexpr unsigned long ERROR_RECOVERY_INTERVAL = 30000; // 30秒恢復間隔
-    static constexpr unsigned long UPDATE_INTERVAL = 6000;         // 6秒（提高查詢頻率但保持合理）
-    
+    static constexpr unsigned long UPDATE_INTERVAL = 6000;         // 6秒查詢間隔
+
+    // Dirty flags: 恢復後需要重送的命令
+    bool dirtyPower = false;
+    bool dirtyMode = false;
+    bool dirtyTemp = false;
+    bool dirtyFan = false;
+
     // 內部輔助方法
     bool handleProtocolError(const char* operation);
     bool isInErrorRecoveryMode() const;
     void resetErrorCount();
+    void syncDirtyState();
     
 public:
     // 構造函數使用協議實例
@@ -56,7 +66,7 @@ public:
     bool getPower() const override { return power; }
     
     bool setTargetMode(uint8_t newMode) override;
-    uint8_t getTargetMode() const override { return convertACToHomeKitMode(mode, power); }
+    uint8_t getTargetMode() const override { return power ? targetHomeKitMode : HAP_MODE_OFF; }
     
     bool setTargetTemperature(float temperature) override;
     float getTargetTemperature() const override { return targetTemperature; }

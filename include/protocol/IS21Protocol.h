@@ -109,7 +109,8 @@ public:
     virtual bool sendCommand(char cmd0, char cmd1, const uint8_t* payload = nullptr, size_t len = 0) = 0;
     
     // 解析回應
-    virtual bool parseResponse(uint8_t& cmd0, uint8_t& cmd1, uint8_t* payload, size_t& payloadLen) = 0;
+    // payloadLen: 輸入時為 payload 緩衝區大小，輸出時為實際資料長度
+    virtual bool parseResponse(uint8_t& cmd0, uint8_t& cmd1, uint8_t* payload, size_t& payloadLen, size_t maxPayloadLen) = 0;
     
     // 獲取協議版本和功能支援信息
     virtual S21ProtocolVersion getProtocolVersion() const = 0;

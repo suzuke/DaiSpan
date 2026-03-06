@@ -68,8 +68,8 @@ private:
         }
     }
     
-    LogManager() : 
-        maxLogEntries(50),
+    LogManager() :
+        maxLogEntries(30),
         currentLogLevel(LogLevel::INFO),
         enableSerial(true),
         enableWebLog(true) {

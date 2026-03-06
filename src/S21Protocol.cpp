@@ -4,7 +4,7 @@
 
 // 高性能通訊常量 (基於 Faikin 規範優化)
 static constexpr uint32_t RESPONSE_TIMEOUT_MS = 500;    // 降低超時時間以提高響應性
-static constexpr uint32_t ACK_TIMEOUT_MS = 150;         // 優化 ACK 超時
+static constexpr uint32_t ACK_TIMEOUT_MS = 150;         // ACK 超時
 static constexpr uint32_t INTER_BYTE_TIMEOUT_MS = 30;   // 減少字節間超時
 static constexpr uint32_t COMMAND_DELAY_MS = 10;        // 減少命令間延遲
 static constexpr uint32_t POST_COMMAND_DELAY_MS = 5;    // 減少命令後延遲
@@ -83,7 +83,7 @@ bool S21Protocol::detectProtocolVersion() {
         uint8_t response[32];
         size_t responseLen;
         
-        if (parseResponse(cmd0, cmd1, response, responseLen)) {
+        if (parseResponse(cmd0, cmd1, response, responseLen, sizeof(response))) {
             if (cmd0 == 'G' && cmd1 == 'Y' && responseLen >= 4) {
                 // 解析版本號，格式為: "3.xx" 或 "4.xx"
                 if (response[0] >= '3' && response[0] <= '9' && response[1] == '.') {
@@ -143,7 +143,7 @@ bool S21Protocol::detectProtocolVersion() {
         uint8_t response[32];
         size_t responseLen;
         
-        if (parseResponse(cmd0, cmd1, response, responseLen)) {
+        if (parseResponse(cmd0, cmd1, response, responseLen, sizeof(response))) {
             if (cmd0 == 'G' && cmd1 == 'U') {
                 DEBUG_INFO_PRINT("[S21] 檢測到 V3 變體（通過 FU 命令）\n");
                 protocolVersion = S21ProtocolVersion::V3_00;
@@ -159,7 +159,7 @@ bool S21Protocol::detectProtocolVersion() {
         uint8_t response[32];
         size_t responseLen;
         
-        if (parseResponse(cmd0, cmd1, response, responseLen)) {
+        if (parseResponse(cmd0, cmd1, response, responseLen, sizeof(response))) {
             if (cmd0 == 'G' && cmd1 == '8') {
                 DEBUG_INFO_PRINT("[S21] 檢測到協議版本2\n");
                 protocolVersion = S21ProtocolVersion::V2;
@@ -175,7 +175,7 @@ bool S21Protocol::detectProtocolVersion() {
         uint8_t response[32];
         size_t responseLen;
         
-        if (parseResponse(cmd0, cmd1, response, responseLen)) {
+        if (parseResponse(cmd0, cmd1, response, responseLen, sizeof(response))) {
             if (cmd0 == 'G' && cmd1 == '1') {
                 DEBUG_INFO_PRINT("[S21] 檢測到協議版本1\n");
                 protocolVersion = S21ProtocolVersion::V1;
@@ -215,7 +215,7 @@ bool S21Protocol::detectFeatures() {
         uint8_t cmd0, cmd1;
         
         if (sendCommandInternal('F', '2')) {
-            if (parseResponse(cmd0, cmd1, payload, payloadLen)) {
+            if (parseResponse(cmd0, cmd1, payload, payloadLen, sizeof(payload))) {
                 if (cmd0 == 'G' && cmd1 == '2' && payloadLen >= 1) {
                     features.hasPowerfulMode = (payload[0] & 0x01) != 0;
                     features.hasEcoMode = (payload[0] & 0x02) != 0;
@@ -235,7 +235,7 @@ bool S21Protocol::detectFeatures() {
         // 使用 FK 命令檢測進階功能（某些 V3.1+ 版本）
         if (protocolVersion >= S21ProtocolVersion::V3_10) {
             if (sendCommandInternal('F', 'K')) {
-                if (parseResponse(cmd0, cmd1, payload, payloadLen)) {
+                if (parseResponse(cmd0, cmd1, payload, payloadLen, sizeof(payload))) {
                     if (cmd0 == 'G' && cmd1 == 'K' && payloadLen >= 1) {
                         features.hasMultiZone = (payload[0] & 0x01) != 0;
                         features.hasWiFiModule = (payload[0] & 0x02) != 0;
@@ -250,7 +250,7 @@ bool S21Protocol::detectFeatures() {
         if (protocolVersion >= S21ProtocolVersion::V3_20) {
             uint8_t fxPayload[] = {'0', '0'};
             if (sendCommandInternal('F', 'X', fxPayload, 2)) {
-                if (parseResponse(cmd0, cmd1, payload, payloadLen)) {
+                if (parseResponse(cmd0, cmd1, payload, payloadLen, sizeof(payload))) {
                     if (cmd0 == 'G' && cmd1 == 'X' && payloadLen >= 1) {
                         features.hasMaintenanceAlerts = (payload[0] & 0x01) != 0;
                         features.hasRemoteDiagnostics = (payload[0] & 0x02) != 0;
@@ -422,7 +422,7 @@ bool S21Protocol::sendCommand(char cmd0, char cmd1, const uint8_t* payload, size
                 // 根據錯誤類型調整重試策略
                 switch (lastError) {
                     case S21ErrorCode::TIMEOUT:
-                        delay(100 * retryCount);  // 逐漸增加延遲
+                        delay(50);  // 短延遲後重試
                         commQuality.timeoutCount++;
                         break;
                         
@@ -439,7 +439,7 @@ bool S21Protocol::sendCommand(char cmd0, char cmd1, const uint8_t* payload, size
                 break;  // 不應重試，退出循環
             }
         }
-    } while (retryCount <= 3);
+    } while (retryCount <= 1);
     
     // 如果連續錯誤過多，啟動恢復程序
     if (!success && errorRecovery.consecutiveErrors >= 3 && !errorRecovery.inRecoveryMode) {
@@ -547,7 +547,7 @@ bool S21Protocol::isFeatureSupported(const S21Features& feature) const {
     return memcmp(&features, &feature, sizeof(S21Features)) == 0;
 }
 
-bool S21Protocol::parseResponse(uint8_t& cmd0, uint8_t& cmd1, uint8_t* payload, size_t& payloadLen) {
+bool S21Protocol::parseResponse(uint8_t& cmd0, uint8_t& cmd1, uint8_t* payload, size_t& payloadLen, size_t maxPayloadLen) {
     static uint8_t rxBuffer[BUFFER_SIZE];
     size_t index = 0;
     
@@ -622,6 +622,11 @@ bool S21Protocol::parseResponse(uint8_t& cmd0, uint8_t& cmd1, uint8_t* payload, 
     cmd0 = rxBuffer[1];
     cmd1 = rxBuffer[2];
     payloadLen = index - 5;
+    // 防止緩衝區溢出：限制複製長度不超過 caller 提供的緩衝區大小
+    if (payloadLen > maxPayloadLen) {
+        DEBUG_WARN_PRINT("[S21] 警告：payload 長度 %d 超過緩衝區大小 %d，截斷\n", payloadLen, maxPayloadLen);
+        payloadLen = maxPayloadLen;
+    }
     if (payloadLen > 0) {
         memcpy(payload, &rxBuffer[3], payloadLen);
     }
@@ -779,7 +784,7 @@ bool S21Protocol::parseFXResponse(FXCommandType expectedType, FXResponse& respon
     uint8_t payload[32];
     size_t payloadLen;
     
-    if (!parseResponse(cmd0, cmd1, payload, payloadLen)) {
+    if (!parseResponse(cmd0, cmd1, payload, payloadLen, sizeof(payload))) {
         return false;
     }
     
@@ -930,7 +935,7 @@ bool S21Protocol::testCommandSupport(char cmd0, char cmd1, const uint8_t* testPa
         uint8_t payload[32];
         size_t payloadLen;
         
-        if (parseResponse(respCmd0, respCmd1, payload, payloadLen)) {
+        if (parseResponse(respCmd0, respCmd1, payload, payloadLen, sizeof(payload))) {
             // 檢查回應命令是否符合預期（通常是 F->G, D->H 的轉換）
             char expectedResp0 = (cmd0 == 'F') ? 'G' : ((cmd0 == 'D') ? 'H' : (cmd0 == 'R') ? 'S' : cmd0 + 1);
             if (respCmd0 == expectedResp0 && respCmd1 == cmd1) {
@@ -1052,7 +1057,7 @@ bool S21Protocol::detectProtocolVariant() {
         uint8_t response[32];
         size_t responseLen;
         
-        if (parseResponse(cmd0, cmd1, response, responseLen)) {
+        if (parseResponse(cmd0, cmd1, response, responseLen, sizeof(response))) {
             if (cmd0 == 'G' && cmd1 == 'I' && responseLen >= 2) {
                 // 使用檢測器識別變體
                 S21ProtocolVariant detected = variantDetector.detectVariant(response, responseLen);
@@ -1076,7 +1081,7 @@ bool S21Protocol::detectProtocolVariant() {
         uint8_t response[32];
         size_t responseLen;
         
-        if (parseResponse(cmd0, cmd1, response, responseLen)) {
+        if (parseResponse(cmd0, cmd1, response, responseLen, sizeof(response))) {
             if (cmd0 == 'G' && cmd1 == 'Y') {
                 // 基於回應格式推斷變體
                 if (responseLen >= 6 && response[4] == 'E') {
@@ -1139,7 +1144,7 @@ bool S21Protocol::attemptErrorRecovery() {
     }
     
     // 步驟2：等待短暫時間讓系統穩定
-    delay(100);
+    delay(50);
     
     // 步驟3：重置錯誤狀態
     clearErrors();
@@ -1187,7 +1192,7 @@ bool S21Protocol::performHealthCheck() {
     uint8_t payload[32];
     size_t payloadLen;
     
-    if (!parseResponse(cmd0, cmd1, payload, payloadLen)) {
+    if (!parseResponse(cmd0, cmd1, payload, payloadLen, sizeof(payload))) {
         DEBUG_ERROR_PRINT("[S21] 健康檢查失敗：無法解析回應\n");
         return false;
     }
