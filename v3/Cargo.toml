@@ -3,16 +3,45 @@ name = "daispan"
 version = "3.0.0"
 edition = "2021"
 
+[features]
+default = ["matter"]
+matter = [
+    "esp-idf-matter",
+    "embassy-futures",
+    "embassy-sync",
+    "embassy-time",
+    "static_cell",
+    "rand",
+]
+
 [dependencies]
 log = "0.4"
 heapless = "0.8"
 
+# Matter dependencies (optional, enabled by default)
+esp-idf-matter = { git = "https://github.com/sysgrok/esp-idf-matter", optional = true }
+embassy-futures = { version = "0.1", optional = true }
+embassy-sync = { version = "0.7", optional = true }
+embassy-time = { version = "0.5", optional = true }
+static_cell = { version = "2.1", optional = true }
+rand = { version = "0.8", optional = true }
+
 [target.'cfg(target_os = "espidf")'.dependencies]
-esp-idf-svc = { version = "0.50", features = ["binstart"] }
+esp-idf-svc = { version = "0.51", features = ["binstart", "critical-section", "embassy-time-driver", "experimental"] }
 esp-idf-hal = "0.45"
 
 [build-dependencies]
 embuild = { version = "0.33", features = ["espidf"] }
+
+# Patch crates-io with git versions for esp-idf-matter compatibility.
+# esp-idf-matter requires esp-idf-svc 0.51 and aligned rs-matter versions.
+[patch.crates-io]
+rs-matter = { git = "https://github.com/sysgrok/rs-matter", branch = "next" }
+rs-matter-stack = { git = "https://github.com/sysgrok/rs-matter-stack", branch = "next" }
+embedded-svc = { git = "https://github.com/esp-rs/embedded-svc" }
+esp-idf-svc = { git = "https://github.com/esp-rs/esp-idf-svc" }
+esp-idf-hal = { git = "https://github.com/esp-rs/esp-idf-hal" }
+esp-idf-sys = { git = "https://github.com/esp-rs/esp-idf-sys" }
 
 [profile.release]
 opt-level = "s"
