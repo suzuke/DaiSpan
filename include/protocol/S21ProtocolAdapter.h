@@ -40,6 +40,11 @@ public:
     bool queryStatus(ACStatus& status) override;
     bool queryTemperature(float& temperature) override;
     
+    // 擺風控制
+    bool supportsSwing(SwingAxis axis) const override;
+    bool setSwing(SwingAxis axis, bool enabled) override;
+    bool getSwing(SwingAxis axis) const override;
+
     // 協議能力查詢
     bool supportsMode(uint8_t mode) const override;
     bool supportsFanSpeed(uint8_t fanSpeed) const override;

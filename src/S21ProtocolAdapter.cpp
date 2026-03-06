@@ -206,14 +206,28 @@ bool S21ProtocolAdapter::queryStatus(ACStatus& status) {
     DEBUG_INFO_PRINT("[S21Adapter] 風速解析: 原始字符='%c' -> 數值=%d (%s)\n",
                       payload[3], status.fanSpeed, getFanSpeedText(status.fanSpeed));
     
+    // 查詢擺風狀態 (F5 -> G5)
+    if (s21Protocol->sendCommand('F', '5')) {
+        uint8_t swPayload[8];
+        size_t swLen;
+        uint8_t swCmd0, swCmd1;
+        if (s21Protocol->parseResponse(swCmd0, swCmd1, swPayload, swLen, sizeof(swPayload))) {
+            if (swCmd0 == 'G' && swCmd1 == '5' && swLen >= 2) {
+                status.swingVertical = (swPayload[0] != '0');
+                status.swingHorizontal = (swPayload[1] != '0');
+                DEBUG_VERBOSE_PRINT("[S21Adapter] 擺風狀態: V=%c H=%c\n", swPayload[0], swPayload[1]);
+            }
+        }
+    }
+
     // 更新內部緩存
     lastStatus = status;
     lastOperationSuccess = true;
     setLastError("");
-    
+
     DEBUG_INFO_PRINT("[S21Adapter] 狀態查詢成功: 電源=%s, 模式=%d, 目標溫度=%.1f°C\n",
                       status.power ? "開啟" : "關閉", status.mode, status.targetTemperature);
-    
+
     return true;
 }
 
@@ -272,6 +286,49 @@ bool S21ProtocolAdapter::queryTemperature(float& temperature) {
     DEBUG_VERBOSE_PRINT("[S21Adapter] 溫度查詢成功: %.1f°C\n", temperature);
     
     return true;
+}
+
+bool S21ProtocolAdapter::supportsSwing(SwingAxis axis) const {
+    // S21 協議支援垂直擺風，部分機型支援水平擺風
+    if (axis == SwingAxis::Vertical) return true;
+    // 水平擺風需要探測，暫時保守回報不支援
+    return false;
+}
+
+bool S21ProtocolAdapter::setSwing(SwingAxis axis, bool enabled) {
+    if (!s21Protocol) return false;
+
+    // 讀取當前狀態以保留另一軸的設定
+    bool curV = lastStatus.swingVertical;
+    bool curH = lastStatus.swingHorizontal;
+
+    if (axis == SwingAxis::Vertical) curV = enabled;
+    else curH = enabled;
+
+    uint8_t payload[4];
+    payload[0] = curV ? '?' : '0';  // '?' = 自動擺風, '0' = 停止
+    payload[1] = curH ? '?' : '0';
+    payload[2] = '0';
+    payload[3] = '0';
+
+    DEBUG_INFO_PRINT("[S21Adapter] 設置擺風: V=%c H=%c\n", payload[0], payload[1]);
+
+    bool success = s21Protocol->sendCommand('D', '5', payload, 4);
+    if (success) {
+        lastStatus.swingVertical = curV;
+        lastStatus.swingHorizontal = curH;
+        lastOperationSuccess = true;
+        setLastError("");
+    } else {
+        lastOperationSuccess = false;
+        setLastError("擺風命令發送失敗");
+    }
+    return success;
+}
+
+bool S21ProtocolAdapter::getSwing(SwingAxis axis) const {
+    if (axis == SwingAxis::Vertical) return lastStatus.swingVertical;
+    return lastStatus.swingHorizontal;
 }
 
 bool S21ProtocolAdapter::supportsMode(uint8_t mode) const {

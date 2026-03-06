@@ -372,6 +372,20 @@ void ThermostatController::update() {
     }
 }
 
+bool ThermostatController::supportsSwing(IACProtocol::SwingAxis axis) const {
+    return protocol ? protocol->supportsSwing(axis) : false;
+}
+
+bool ThermostatController::setSwing(IACProtocol::SwingAxis axis, bool enabled) {
+    if (!protocol) return false;
+    DEBUG_INFO_PRINT("[Controller] 設置擺風: axis=%d, enabled=%d\n", (int)axis, enabled);
+    return protocol->setSwing(axis, enabled);
+}
+
+bool ThermostatController::getSwing(IACProtocol::SwingAxis axis) const {
+    return protocol ? protocol->getSwing(axis) : false;
+}
+
 bool ThermostatController::supportsMode(uint8_t mode) const {
     return protocol ? protocol->supportsMode(mode) : false;
 }

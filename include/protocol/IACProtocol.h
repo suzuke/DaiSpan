@@ -12,10 +12,14 @@ struct ACStatus {
     float targetTemperature;
     float currentTemperature;
     uint8_t fanSpeed;
+    bool swingVertical;
+    bool swingHorizontal;
     bool isValid;           // 狀態是否有效
-    
-    ACStatus() : power(false), mode(0), targetTemperature(21.0f), 
-                 currentTemperature(21.0f), fanSpeed(0), isValid(false) {}
+
+    ACStatus() : power(false), mode(0), targetTemperature(21.0f),
+                 currentTemperature(21.0f), fanSpeed(0),
+                 swingVertical(false), swingHorizontal(false),
+                 isValid(false) {}
 };
 
 // 通用空調協議介面
@@ -34,6 +38,12 @@ public:
     virtual bool queryStatus(ACStatus& status) = 0;
     virtual bool queryTemperature(float& temperature) = 0;
     
+    // 擺風控制
+    enum class SwingAxis : uint8_t { Vertical = 0, Horizontal = 1 };
+    virtual bool supportsSwing(SwingAxis axis) const = 0;
+    virtual bool setSwing(SwingAxis axis, bool enabled) = 0;
+    virtual bool getSwing(SwingAxis axis) const = 0;
+
     // 協議能力查詢
     virtual bool supportsMode(uint8_t mode) const = 0;
     virtual bool supportsFanSpeed(uint8_t fanSpeed) const = 0;

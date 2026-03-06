@@ -39,7 +39,11 @@ public:
     
     bool setFanSpeed(uint8_t speed) override;
     uint8_t getFanSpeed() const override;
-    
+
+    bool supportsSwing(IACProtocol::SwingAxis) const override { return false; }
+    bool setSwing(IACProtocol::SwingAxis, bool) override { return false; }
+    bool getSwing(IACProtocol::SwingAxis) const override { return false; }
+
     void update() override;
     
     // 模擬專用方法

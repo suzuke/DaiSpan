@@ -7,6 +7,7 @@
 #endif
 #include "device/ThermostatDevice.h"
 #include "device/FanDevice.h"
+#include "device/SwingDevice.h"
 #include "protocol/S21Protocol.h"
 #include "protocol/IACProtocol.h"
 #include "protocol/ACProtocolFactory.h"
@@ -673,8 +674,12 @@ void initializeHomeKit() {
         } else {
             DEBUG_INFO_PRINT("[Main] FanDevice 創建成功並註冊到HomeKit\n");
         }
-        
-        // HomeKit 初始化完成後，設置核心事件監聽
+
+        // 擺風開關（作為獨立 Switch 服務掛在同一個 Accessory 上）
+        if (thermostatController->supportsSwing(IACProtocol::SwingAxis::Vertical)) {
+            new SwingSwitchService(*thermostatController, IACProtocol::SwingAxis::Vertical, "擺風");
+            DEBUG_INFO_PRINT("[Main] 垂直擺風開關已註冊到HomeKit\n");
+        }
     } else {
         DEBUG_ERROR_PRINT("[Main] 硬件未初始化，無法創建HomeKit設備\n");
     }
