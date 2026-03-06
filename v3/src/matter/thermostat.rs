@@ -58,7 +58,7 @@ const MAX_TEMP: i16 = 3200;  // 32.0 C
 pub const THERMOSTAT_CLUSTER: Cluster<'static> = Cluster::new(
     CLUSTER_THERMOSTAT,
     5, // revision
-    0, // feature map (Heating + Cooling)
+    0x03, // feature map: Heating (0x01) | Cooling (0x02)
     &[
         Attribute::new(ATTR_LOCAL_TEMPERATURE, Access::RV, Quality::X),
         Attribute::new(ATTR_OCCUPIED_COOLING_SETPOINT, Access::RWVM, Quality::SCENE),
@@ -203,7 +203,9 @@ impl ThermostatHandler {
                 }
 
                 // Send to controller
-                let _ = self.cmd_tx.try_send(ControllerCmd::SetTemp(temp));
+                if let Err(e) = self.cmd_tx.try_send(ControllerCmd::SetTemp(temp)) {
+                    log::warn!("Failed to send SetTemp: {}", e);
+                }
 
                 self.dataver.changed();
                 ctx.notify_changed();
@@ -220,7 +222,9 @@ impl ThermostatHandler {
                     _ => return Err(ErrorCode::ConstraintError.into()),
                 };
 
-                let _ = self.cmd_tx.try_send(ControllerCmd::SetMode(matter_mode));
+                if let Err(e) = self.cmd_tx.try_send(ControllerCmd::SetMode(matter_mode)) {
+                    log::warn!("Failed to send SetMode: {}", e);
+                }
 
                 self.dataver.changed();
                 ctx.notify_changed();

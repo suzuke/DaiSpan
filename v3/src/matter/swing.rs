@@ -63,9 +63,9 @@ impl OnOffHooks for SwingOnOffLogic {
 
     fn set_on_off(&self, on: bool) {
         self.on_off.set(on);
-        let _ = self
-            .cmd_tx
-            .try_send(ControllerCmd::SetSwing(SwingAxis::Vertical, on));
+        if let Err(e) = self.cmd_tx.try_send(ControllerCmd::SetSwing(SwingAxis::Vertical, on)) {
+            log::warn!("Failed to send SetSwing: {}", e);
+        }
         log::info!("Swing: vertical={}", on);
     }
 

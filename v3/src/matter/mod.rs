@@ -175,13 +175,27 @@ async fn run_matter(
         ));
 
     // Initialize async I/O subsystem
-    let mounted_event_fs = Arc::new(MountedEventfs::mount(3).unwrap());
-    init_async_io(mounted_event_fs.clone()).unwrap();
+    let mounted_event_fs = Arc::new(
+        MountedEventfs::mount(3).map_err(|e| {
+            log::error!("Failed to mount eventfs: {:?}", e);
+            esp_idf_matter::matter::error::ErrorCode::StdIoError
+        })?,
+    );
+    init_async_io(mounted_event_fs.clone()).map_err(|e| {
+        log::error!("Failed to init async I/O: {:?}", e);
+        esp_idf_matter::matter::error::ErrorCode::StdIoError
+    })?;
 
     // Reduce BT classic memory (we only need BLE)
-    reduce_bt_memory(unsafe { modem.reborrow() }).unwrap();
+    reduce_bt_memory(unsafe { modem.reborrow() }).map_err(|e| {
+        log::error!("Failed to reduce BT memory: {:?}", e);
+        esp_idf_matter::matter::error::ErrorCode::StdIoError
+    })?;
 
-    let timers = EspTaskTimerService::new().unwrap();
+    let timers = EspTaskTimerService::new().map_err(|e| {
+        log::error!("Failed to create timer service: {:?}", e);
+        esp_idf_matter::matter::error::ErrorCode::StdIoError
+    })?;
 
     // Create crypto provider
     let crypto = default_crypto::<NoopRawMutex, _>(rand::thread_rng(), DAC_PRIVKEY);

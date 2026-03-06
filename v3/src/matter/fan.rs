@@ -63,6 +63,19 @@ pub const FAN_CONTROL_CLUSTER: Cluster<'static> = Cluster::new(
     |_, _, _| true,
 );
 
+/// Convert FanSpeed to discrete 0-5 speed value for Matter SpeedSetting/SpeedCurrent.
+/// Note: Quiet maps to 1 (same as Speed1) since Matter has no "quiet" concept.
+fn fan_speed_to_discrete(speed: FanSpeed) -> u8 {
+    match speed {
+        FanSpeed::Auto => 0,
+        FanSpeed::Quiet | FanSpeed::Speed1 => 1,
+        FanSpeed::Speed2 => 2,
+        FanSpeed::Speed3 => 3,
+        FanSpeed::Speed4 => 4,
+        FanSpeed::Speed5 => 5,
+    }
+}
+
 /// Convert FanSpeed to Matter FanMode.
 fn fan_speed_to_mode(speed: FanSpeed) -> u8 {
     match speed {
@@ -142,35 +155,9 @@ impl FanHandler {
             ATTR_SPEED_MAX => {
                 reply.set(5u8)?; // 5 speeds
             }
-            ATTR_SPEED_SETTING => {
+            ATTR_SPEED_SETTING | ATTR_SPEED_CURRENT => {
                 if status.valid {
-                    // Map FanSpeed enum to 0-5 speed value
-                    let speed: u8 = match status.fan_speed {
-                        FanSpeed::Auto => 0,
-                        FanSpeed::Quiet => 1,
-                        FanSpeed::Speed1 => 1,
-                        FanSpeed::Speed2 => 2,
-                        FanSpeed::Speed3 => 3,
-                        FanSpeed::Speed4 => 4,
-                        FanSpeed::Speed5 => 5,
-                    };
-                    reply.set(speed)?;
-                } else {
-                    reply.set(0u8)?;
-                }
-            }
-            ATTR_SPEED_CURRENT => {
-                if status.valid {
-                    let speed: u8 = match status.fan_speed {
-                        FanSpeed::Auto => 0,
-                        FanSpeed::Quiet => 1,
-                        FanSpeed::Speed1 => 1,
-                        FanSpeed::Speed2 => 2,
-                        FanSpeed::Speed3 => 3,
-                        FanSpeed::Speed4 => 4,
-                        FanSpeed::Speed5 => 5,
-                    };
-                    reply.set(speed)?;
+                    reply.set(fan_speed_to_discrete(status.fan_speed))?;
                 } else {
                     reply.set(0u8)?;
                 }
@@ -196,7 +183,9 @@ impl FanHandler {
                 self.local_fan_mode.set(mode);
 
                 let fan_speed = mode_to_fan_speed(mode);
-                let _ = self.cmd_tx.try_send(ControllerCmd::SetFan(fan_speed));
+                if let Err(e) = self.cmd_tx.try_send(ControllerCmd::SetFan(fan_speed)) {
+                    log::warn!("Failed to send SetFan: {}", e);
+                }
 
                 self.dataver.changed();
                 ctx.notify_changed();
@@ -209,7 +198,9 @@ impl FanHandler {
                 self.local_percent.set(pct);
 
                 let fan_speed = FanSpeed::from_percent(pct);
-                let _ = self.cmd_tx.try_send(ControllerCmd::SetFan(fan_speed));
+                if let Err(e) = self.cmd_tx.try_send(ControllerCmd::SetFan(fan_speed)) {
+                    log::warn!("Failed to send SetFan: {}", e);
+                }
 
                 self.dataver.changed();
                 ctx.notify_changed();
@@ -229,7 +220,9 @@ impl FanHandler {
                     5 => FanSpeed::Speed5,
                     _ => FanSpeed::Auto,
                 };
-                let _ = self.cmd_tx.try_send(ControllerCmd::SetFan(fan_speed));
+                if let Err(e) = self.cmd_tx.try_send(ControllerCmd::SetFan(fan_speed)) {
+                    log::warn!("Failed to send SetFan: {}", e);
+                }
 
                 self.dataver.changed();
                 ctx.notify_changed();
