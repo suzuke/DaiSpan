@@ -1,0 +1,12 @@
+# Build
+build/
+sdkconfig
+sdkconfig.old
+
+# Managed components (downloaded by ESP-IDF)
+managed_components/
+dependencies.lock
+
+# IDE
+.vscode/
+.idea/
