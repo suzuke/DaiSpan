@@ -4,10 +4,12 @@ version = "3.0.0"
 edition = "2021"
 
 [dependencies]
-esp-idf-svc = { version = "0.50", features = ["binstart"] }
-esp-idf-hal = "0.45"
 log = "0.4"
 heapless = "0.8"
+
+[target.'cfg(target_os = "espidf")'.dependencies]
+esp-idf-svc = { version = "0.50", features = ["binstart"] }
+esp-idf-hal = "0.45"
 
 [build-dependencies]
 embuild = { version = "0.33", features = ["espidf"] }
