@@ -47,7 +47,7 @@ void app_main(void)
 
     if (!wifi_manager_is_connected()) {
         ESP_LOGW(TAG, "No WiFi connection, running in AP config mode");
-        web_server_start();
+        web_server_start(true);  /* port 80, captive portal */
         while (1) {
             vTaskDelay(pdMS_TO_TICKS(1000));
         }
@@ -87,7 +87,7 @@ void app_main(void)
     ESP_LOGI(TAG, "HomeKit started: %s (code: %s)", device_name, setup_code);
 
     /* 6. Web server */
-    web_server_start();
+    web_server_start(false);  /* port 8080, normal mode */
 
     ESP_LOGI(TAG, "System ready. Free heap: %lu bytes",
              (unsigned long)esp_get_free_heap_size());

@@ -4,9 +4,27 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-DaiSpan is an ESP32-based HomeKit smart thermostat that controls Daikin air conditioners via the S21 serial protocol. Built with PlatformIO, Arduino framework, C++17, and HomeSpan library. The codebase uses Traditional Chinese for comments and log messages.
+DaiSpan is an ESP32-based HomeKit smart thermostat that controls Daikin air conditioners via the S21 serial protocol. Two versions exist:
+
+- **v1** (root): PlatformIO + Arduino + C++17 + HomeSpan library
+- **v2** (`v2/`): ESP-IDF + esp-homekit-sdk + FreeRTOS (C, recommended for new development)
 
 ## Build and Deploy
+
+### v2 (ESP-IDF)
+
+```bash
+cd v2
+source ~/esp/esp-idf/export.sh
+idf.py build                    # Build
+idf.py flash                    # Flash via USB
+idf.py monitor                  # Serial monitor
+# Or OTA: upload .bin via http://device-ip:8080/ota
+```
+
+Requires ESP-IDF v5.3+ and esp-homekit-sdk at `~/esp/esp-homekit-sdk`.
+
+### v1 (PlatformIO)
 
 ```bash
 # Build (default: esp32-c3-supermini)
@@ -33,6 +51,20 @@ pio run -t clean
 **Environment naming pattern**: `esp32-{chip}-{board}-{method}` where method is `usb`, `ota`, or `production`.
 
 ## Architecture
+
+### v2 Architecture (ESP-IDF)
+
+```
+HomeKit (HAP) ──write──> FreeRTOS Queue ──> Controller Task ──> S21 UART
+HomeKit (HAP) <──read──  cached_status   <── Controller Task <── S21 UART
+Web Server (port 8080): status, WiFi config, OTA upload, health/metrics API
+```
+
+Key design: Controller task (priority 5) owns all UART I/O. HomeKit reads from lock-free cached state and sends commands via non-blocking queue. On single-core ESP32-C3, struct copy is atomic.
+
+Source files: `v2/main/` with subdirectories: `s21/`, `controller/`, `homekit/`, `wifi/`, `web/`, `config/`, `common/`.
+
+### v1 Architecture (PlatformIO)
 
 The system follows a layered architecture:
 

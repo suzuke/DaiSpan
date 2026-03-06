@@ -297,11 +297,27 @@ static esp_err_t handler_ota_upload(httpd_req_t *req)
     return ESP_OK;
 }
 
-esp_err_t web_server_start(void)
+/* Captive portal handler: redirect all unknown URLs to /wifi */
+static esp_err_t handler_captive_redirect(httpd_req_t *req)
+{
+    httpd_resp_set_status(req, "302 Found");
+    httpd_resp_set_hdr(req, "Location", "http://192.168.4.1/wifi");
+    return httpd_resp_send(req, NULL, 0);
+}
+
+/* Apple captive portal detection: return success so iPhone stays connected */
+static esp_err_t handler_hotspot_detect(httpd_req_t *req)
+{
+    const char *html = "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>";
+    httpd_resp_set_type(req, "text/html");
+    return httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
+}
+
+esp_err_t web_server_start(bool is_ap_mode)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.server_port = 8080;
-    config.max_uri_handlers = 12;
+    config.server_port = is_ap_mode ? 80 : 8080;
+    config.max_uri_handlers = 16;
     config.stack_size = 4096;
 
     esp_err_t err = httpd_start(&server, &config);
@@ -318,13 +334,17 @@ esp_err_t web_server_start(void)
         { .uri = "/api/metrics",.method = HTTP_GET,  .handler = handler_api_metrics,.user_ctx = NULL },
         { .uri = "/ota",       .method = HTTP_GET,  .handler = handler_ota_page,   .user_ctx = NULL },
         { .uri = "/ota",       .method = HTTP_POST, .handler = handler_ota_upload, .user_ctx = NULL },
+        /* Apple/Android captive portal detection endpoints */
+        { .uri = "/hotspot-detect.html",   .method = HTTP_GET, .handler = handler_hotspot_detect,  .user_ctx = NULL },
+        { .uri = "/generate_204",          .method = HTTP_GET, .handler = handler_captive_redirect, .user_ctx = NULL },
+        { .uri = "/connectivity-check.html", .method = HTTP_GET, .handler = handler_captive_redirect, .user_ctx = NULL },
     };
 
     for (int i = 0; i < (int)(sizeof(routes) / sizeof(routes[0])); i++) {
         httpd_register_uri_handler(server, &routes[i]);
     }
 
-    ESP_LOGI(TAG, "HTTP server started on port 8080");
+    ESP_LOGI(TAG, "HTTP server started on port %d", config.server_port);
     return ESP_OK;
 }
 

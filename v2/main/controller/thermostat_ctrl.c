@@ -342,6 +342,7 @@ static void controller_task(void *arg)
             /* In recovery: try to recover after interval */
             if (now_ms - last_successful_ms > ERROR_RECOVERY_MS) {
                 ESP_LOGI(TAG, "Attempting recovery...");
+                last_successful_ms = now_ms;  /* Reset timer regardless of outcome */
                 consecutive_errors = MAX_CONSECUTIVE_ERRORS - 1;  /* one chance */
                 sync_dirty_state();
                 if (!is_recovering()) {

@@ -5,6 +5,9 @@
 #include "esp_event.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "freertos/task.h"
+#include "lwip/sockets.h"
+#include "lwip/dns.h"
 #include <string.h>
 
 static const char *TAG = LOG_TAG_WIFI;
@@ -50,6 +53,73 @@ static void event_handler(void *arg, esp_event_base_t event_base,
     }
 }
 
+/*
+ * Minimal DNS server: responds to ALL queries with 192.168.4.1
+ * This is required for captive portal detection on iOS/Android.
+ */
+static void dns_server_task(void *arg)
+{
+    (void)arg;
+    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (sock < 0) {
+        ESP_LOGE(TAG, "DNS: socket failed");
+        vTaskDelete(NULL);
+        return;
+    }
+
+    struct sockaddr_in server_addr = {
+        .sin_family = AF_INET,
+        .sin_port = htons(53),
+        .sin_addr.s_addr = htonl(INADDR_ANY),
+    };
+
+    if (bind(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        ESP_LOGE(TAG, "DNS: bind failed");
+        close(sock);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    ESP_LOGI(TAG, "DNS server started");
+
+    uint8_t buf[512];
+    struct sockaddr_in client_addr;
+    socklen_t addr_len;
+
+    for (;;) {
+        addr_len = sizeof(client_addr);
+        int len = recvfrom(sock, buf, sizeof(buf), 0,
+                           (struct sockaddr *)&client_addr, &addr_len);
+        if (len < 12) continue;
+
+        /* Build DNS response: copy query, set response flags, add answer */
+        uint8_t resp[512];
+        memcpy(resp, buf, len);
+
+        /* Set QR=1 (response), AA=1 (authoritative), RA=1 */
+        resp[2] = 0x84;
+        resp[3] = 0x00;
+        /* Answer count = 1 */
+        resp[6] = 0x00;
+        resp[7] = 0x01;
+
+        /* Append answer: pointer to name in query + A record -> 192.168.4.1 */
+        int pos = len;
+        resp[pos++] = 0xC0;  /* name pointer */
+        resp[pos++] = 0x0C;  /* offset to name in query */
+        resp[pos++] = 0x00; resp[pos++] = 0x01;  /* type A */
+        resp[pos++] = 0x00; resp[pos++] = 0x01;  /* class IN */
+        resp[pos++] = 0x00; resp[pos++] = 0x00;
+        resp[pos++] = 0x00; resp[pos++] = 0x0A;  /* TTL 10s */
+        resp[pos++] = 0x00; resp[pos++] = 0x04;  /* data length 4 */
+        resp[pos++] = 192; resp[pos++] = 168;
+        resp[pos++] = 4;   resp[pos++] = 1;      /* 192.168.4.1 */
+
+        sendto(sock, resp, pos, 0,
+               (struct sockaddr *)&client_addr, addr_len);
+    }
+}
+
 static esp_err_t start_ap(void)
 {
     ESP_LOGI(TAG, "Starting AP mode: DaiSpan-Config");
@@ -58,15 +128,33 @@ static esp_err_t start_ap(void)
         .ap = {
             .ssid = "DaiSpan-Config",
             .ssid_len = 14,
+            .password = "12345678",
             .channel = 1,
             .max_connection = 4,
-            .authmode = WIFI_AUTH_OPEN,
+            .authmode = WIFI_AUTH_WPA_WPA2_PSK,
+            .ssid_hidden = 0,
+            .beacon_interval = 100,
+            .pmf_cfg = {
+                .required = false,
+            },
         },
     };
 
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
+
+    /* Force 802.11b/g/n and HT20 bandwidth for max compatibility */
+    esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
+    esp_wifi_set_bandwidth(WIFI_IF_AP, WIFI_BW_HT20);
+
     ESP_ERROR_CHECK(esp_wifi_start());
+
+    /* Conservative TX power - C3 SuperMini antenna is weak, too high causes issues */
+    esp_wifi_set_max_tx_power(52);  /* 13dBm */
+    ESP_LOGI(TAG, "AP started (APSTA mode, ch1, WPA/WPA2, 13dBm)");
+
+    /* Start captive portal DNS server */
+    xTaskCreate(dns_server_task, "dns_srv", 4096, NULL, 3, NULL);
 
     ap_mode = true;
     strcpy(ip_str, "192.168.4.1");
