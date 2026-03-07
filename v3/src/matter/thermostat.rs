@@ -17,11 +17,14 @@ use std::sync::mpsc::SyncSender;
 
 use crate::controller::state::{ControllerCmd, MatterMode, SharedState};
 use esp_idf_matter::matter::dm::{
-    Access, AsyncHandler, AttrId, Attribute, Cluster, ClusterId, Dataver,
+    Access, AsyncHandler, AttrId, Attribute, Cluster, ClusterId, Command, Dataver,
     InvokeContext, InvokeReply, Quality, ReadContext,
     ReadReply, Reply, WriteContext,
 };
 use esp_idf_matter::matter::error::{Error, ErrorCode};
+
+// SetpointRaiseLower command ID (mandatory per Matter spec)
+const CMD_SETPOINT_RAISE_LOWER: u32 = 0x00;
 
 /// Matter Thermostat cluster ID (0x0201)
 pub const CLUSTER_THERMOSTAT: ClusterId = 0x0201;
@@ -68,9 +71,9 @@ pub const THERMOSTAT_CLUSTER: Cluster<'static> = Cluster::new(
         Attribute::new(ATTR_MIN_COOL_SETPOINT_LIMIT, Access::RV, Quality::NONE),
         Attribute::new(ATTR_MAX_COOL_SETPOINT_LIMIT, Access::RV, Quality::NONE),
     ],
-    &[], // No commands for thermostat (setpoint changes via attribute writes)
-    |_, _, _| true,  // all attributes active
-    |_, _, _| true,  // all commands active
+    &[Command::new(CMD_SETPOINT_RAISE_LOWER, None, Access::WO)],
+    |_, _, _| true,
+    |_, _, _| true,
 );
 
 /// The custom thermostat handler. Reads from SharedState, sends commands via cmd_tx.
@@ -255,8 +258,13 @@ impl AsyncHandler for ThermostatHandler {
             return Err(ErrorCode::ClusterNotFound.into());
         }
 
+        log::info!("Thermostat read: ep={} attr=0x{:04X}", attr.endpoint_id, attr.attr_id);
+
         if let Some(writer) = reply.with_dataver(self.dataver.get())? {
-            self.handle_read(attr.attr_id, writer)?;
+            if let Err(e) = self.handle_read(attr.attr_id, writer) {
+                log::warn!("Thermostat read attr 0x{:04X} error: {:?}", attr.attr_id, e);
+                return Err(e);
+            }
         }
 
         Ok(())
@@ -273,10 +281,47 @@ impl AsyncHandler for ThermostatHandler {
 
     async fn invoke(
         &self,
-        _ctx: impl InvokeContext,
+        ctx: impl InvokeContext,
         _reply: impl InvokeReply,
     ) -> Result<(), Error> {
-        // No commands defined for our thermostat cluster
-        Err(ErrorCode::CommandNotFound.into())
+        let cmd = ctx.cmd();
+        if cmd.cmd_id != CMD_SETPOINT_RAISE_LOWER {
+            return Err(ErrorCode::CommandNotFound.into());
+        }
+
+        // SetpointRaiseLower: Mode (ctx 0, enum8), Amount (ctx 1, int8 in 0.1°C steps)
+        let data = ctx.data();
+        let fields = data.structure().map_err(|_| Error::from(ErrorCode::InvalidDataType))?;
+
+        let mode: u8 = fields.find_ctx(0)?.u8().map_err(|_| Error::from(ErrorCode::InvalidDataType))?;
+        let amount: i8 = fields.find_ctx(1)?.i8().map_err(|_| Error::from(ErrorCode::InvalidDataType))?;
+
+        // Amount is in 0.1°C steps, convert to 0.01°C (Matter units)
+        let delta: i16 = (amount as i16) * 10;
+
+        // Apply delta based on mode: 0=Heat, 1=Cool, 2=Both
+        match mode {
+            0 => {
+                let new_sp = Self::clamp_temp(self.local_heating_setpoint.get() + delta);
+                self.local_heating_setpoint.set(new_sp);
+                let _ = self.cmd_tx.try_send(ControllerCmd::SetTemp(Self::from_matter_temp(new_sp)));
+            }
+            1 => {
+                let new_sp = Self::clamp_temp(self.local_cooling_setpoint.get() + delta);
+                self.local_cooling_setpoint.set(new_sp);
+                let _ = self.cmd_tx.try_send(ControllerCmd::SetTemp(Self::from_matter_temp(new_sp)));
+            }
+            2 => {
+                let new_heat = Self::clamp_temp(self.local_heating_setpoint.get() + delta);
+                let new_cool = Self::clamp_temp(self.local_cooling_setpoint.get() + delta);
+                self.local_heating_setpoint.set(new_heat);
+                self.local_cooling_setpoint.set(new_cool);
+                let _ = self.cmd_tx.try_send(ControllerCmd::SetTemp(Self::from_matter_temp(new_cool)));
+            }
+            _ => return Err(ErrorCode::ConstraintError.into()),
+        }
+
+        self.dataver.changed();
+        Ok(())
     }
 }

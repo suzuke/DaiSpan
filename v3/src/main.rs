@@ -55,8 +55,11 @@ fn main() {
         // Determine boot mode:
         // - With WiFi creds + Matter feature: Matter mode (Matter owns WiFi+BLE)
         // - Without WiFi creds or without Matter: AP-only config mode (our wifi/ module)
+        // Matter mode is always used when the feature is enabled.
+        // Matter handles WiFi provisioning via BLE commissioning,
+        // so it doesn't need pre-stored WiFi credentials.
         #[cfg(feature = "matter")]
-        let use_matter = has_wifi_creds;
+        let use_matter = true;
         #[cfg(not(feature = "matter"))]
         let use_matter = false;
 

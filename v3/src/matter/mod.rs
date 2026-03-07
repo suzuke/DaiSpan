@@ -83,7 +83,7 @@ const DEV_TYPE_FAN: DeviceType = DeviceType {
 /// DaiSpan device info for Matter commissioning.
 const DAISPAN_DEV_DET: BasicInfoConfig = BasicInfoConfig {
     vid: 0xFFF1,   // Test vendor ID (use real VID for production)
-    pid: 0x8002,   // Test product ID
+    pid: 0x8001,   // Test product ID (must match TEST_DEV_ATT)
     hw_ver: 1,
     hw_ver_str: "3.0",
     sw_ver: 1,
