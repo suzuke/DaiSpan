@@ -58,10 +58,10 @@ use self::thermostat::{ThermostatHandler, CLUSTER_THERMOSTAT, THERMOSTAT_CLUSTER
 extern crate alloc;
 
 /// Matter stack thread stack size (20KB)
-const MATTER_STACK_SIZE: usize = 20 * 1024;
+const MATTER_STACK_SIZE: usize = 16 * 1024;
 
 /// Bump allocator size for the Matter stack futures
-const BUMP_SIZE: usize = 20000;
+const BUMP_SIZE: usize = 15000;
 
 /// Endpoint IDs (0 is root, reserved by Matter)
 const THERMOSTAT_ENDPOINT_ID: u16 = 1;
