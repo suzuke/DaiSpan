@@ -61,7 +61,7 @@ extern crate alloc;
 const MATTER_STACK_SIZE: usize = 20 * 1024;
 
 /// Bump allocator size for the Matter stack futures
-const BUMP_SIZE: usize = 13500;
+const BUMP_SIZE: usize = 20000;
 
 /// Endpoint IDs (0 is root, reserved by Matter)
 const THERMOSTAT_ENDPOINT_ID: u16 = 1;

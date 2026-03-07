@@ -63,7 +63,7 @@ pub fn init(
                 Err(e) => {
                     log::warn!("WiFi: STA failed ({}), falling back to AP", e);
                     start_ap(&mut wifi)?;
-                    let ip = Ipv4Addr::new(192, 168, 4, 1);
+                    let ip = get_ap_ip(&wifi);
                     ap::start_dns_server();
                     Ok(WifiState {
                         ap_mode: true,
@@ -76,7 +76,7 @@ pub fn init(
         _ => {
             log::info!("WiFi: no credentials, starting AP mode");
             start_ap(&mut wifi)?;
-            let ip = Ipv4Addr::new(192, 168, 4, 1);
+            let ip = get_ap_ip(&wifi);
             ap::start_dns_server();
             Ok(WifiState {
                 ap_mode: true,
@@ -147,6 +147,15 @@ fn try_sta(
     // Stop STA before switching to AP
     let _ = wifi.stop();
     Err(format!("STA failed after {} retries: {}", MAX_RETRIES, last_err).into())
+}
+
+/// Get the AP interface IP address.
+fn get_ap_ip(wifi: &BlockingWifi<EspWifi<'static>>) -> Ipv4Addr {
+    wifi.wifi()
+        .ap_netif()
+        .get_ip_info()
+        .map(|info| info.ip)
+        .unwrap_or(Ipv4Addr::new(192, 168, 4, 1))
 }
 
 /// Start AP mode (APSTA for iPhone compatibility).
