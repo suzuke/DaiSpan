@@ -7,6 +7,10 @@
 
 static const char *TAG = LOG_TAG_S21;
 
+/* Debug: last raw G1 payload bytes */
+static uint8_t last_g1_raw[8] = {0};
+static int last_g1_len = 0;
+
 esp_err_t s21_init(void)
 {
     uart_config_t uart_config = {
@@ -175,8 +179,9 @@ float s21_decode_target_temp(uint8_t encoded)
 
 int s21_decode_int_sensor(const uint8_t *payload)
 {
-    /* payload[0..2] = ASCII digits, payload[3] = '+' or '-' */
-    int val = (payload[0] - '0') * 100 + (payload[1] - '0') * 10 + (payload[2] - '0');
+    /* payload[0..2] = ASCII digits (little-endian: ones, tens, hundreds)
+     * payload[3] = '+' or '-' */
+    int val = (payload[0] - '0') + (payload[1] - '0') * 10 + (payload[2] - '0') * 100;
     if (payload[3] == '-') {
         val = -val;
     }
@@ -246,6 +251,14 @@ bool s21_query_status(ac_status_t *status)
         return false;
     }
 
+    ESP_LOGD(TAG, "G1 raw: [0x%02X 0x%02X 0x%02X 0x%02X] '%c%c%c%c' len=%d",
+             payload[0], payload[1], payload[2], payload[3],
+             payload[0], payload[1], payload[2], payload[3], len);
+
+    /* Store raw for debug API */
+    memcpy(last_g1_raw, payload, len < 8 ? len : 8);
+    last_g1_len = len;
+
     status->power = (payload[0] == '1');
     status->mode = payload[1] - '0';
     status->target_temp = s21_decode_target_temp(payload[2]);
@@ -269,6 +282,10 @@ bool s21_query_temperature(float *temperature)
     if (len < 4 || cmd0 != 'S' || cmd1 != 'H') {
         return false;
     }
+
+    ESP_LOGD(TAG, "SH raw: [0x%02X 0x%02X 0x%02X 0x%02X] '%c%c%c%c'",
+             payload[0], payload[1], payload[2], payload[3],
+             payload[0], payload[1], payload[2], payload[3]);
 
     /* Validate digits */
     for (int i = 0; i < 3; i++) {
@@ -300,25 +317,49 @@ bool s21_query_swing(bool *vertical, bool *horizontal)
     uint8_t cmd0, cmd1, payload[8];
     int len = s21_read_response(&cmd0, &cmd1, payload, sizeof(payload));
 
-    if (len < 2 || cmd0 != 'G' || cmd1 != '5') {
+    if (len < 1 || cmd0 != 'G' || cmd1 != '5') {
         return false;
     }
 
-    *vertical = (payload[0] != '0');
-    *horizontal = (payload[1] != '0');
+    ESP_LOGD(TAG, "G5 raw: [0x%02X 0x%02X 0x%02X 0x%02X] len=%d",
+             payload[0], len > 1 ? payload[1] : 0,
+             len > 2 ? payload[2] : 0, len > 3 ? payload[3] : 0, len);
+
+    /* G5 byte[0]: swing flags as ASCII digit (bit0=V, bit1=H) */
+    uint8_t flags = payload[0] - '0';
+    *vertical = (flags & 1) != 0;
+    *horizontal = (flags & 2) != 0;
 
     ESP_LOGD(TAG, "Swing: V=%d H=%d", *vertical, *horizontal);
     return true;
 }
 
+int s21_get_last_g1_raw(uint8_t *out, size_t max_len)
+{
+    int n = last_g1_len < (int)max_len ? last_g1_len : (int)max_len;
+    memcpy(out, last_g1_raw, n);
+    return n;
+}
+
 bool s21_set_swing(bool vertical, bool horizontal)
 {
+    /*
+     * D5 payload byte[0]: swing flags as ASCII digit
+     *   bit 0 = vertical, bit 1 = horizontal
+     *   '0'=off, '1'=V, '2'=H, '3'=V+H
+     * Byte[1]: '?' when swing active, '0' when off
+     * Bytes[2-3]: reserved ('0')
+     */
+    uint8_t flags = (vertical ? 1 : 0) | (horizontal ? 2 : 0);
     uint8_t payload[4];
-    payload[0] = vertical ? '?' : '0';    /* '?' = auto swing */
-    payload[1] = horizontal ? '?' : '0';
+    payload[0] = '0' + flags;
+    payload[1] = flags ? '?' : '0';
     payload[2] = '0';
     payload[3] = '0';
 
-    ESP_LOGI(TAG, "D5: V=%c H=%c", payload[0], payload[1]);
-    return s21_send_command('D', '5', payload, 4);
+    ESP_LOGI(TAG, "D5: flags=%d [0x%02X 0x%02X 0x%02X 0x%02X]",
+             flags, payload[0], payload[1], payload[2], payload[3]);
+    bool ok = s21_send_command('D', '5', payload, 4);
+    ESP_LOGI(TAG, "D5 result: %s", ok ? "ACK" : "FAIL");
+    return ok;
 }

@@ -1,6 +1,7 @@
 #include "web/web_server.h"
 #include "config/config_manager.h"
 #include "controller/thermostat_ctrl.h"
+#include "s21/s21_protocol.h"
 #include "wifi/wifi_manager.h"
 #include "common/debug.h"
 #include <esp_http_server.h>
@@ -323,6 +324,27 @@ static esp_err_t handler_ota_upload(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t handler_api_debug(httpd_req_t *req)
+{
+    uint8_t g1[8] = {0};
+    int g1_len = s21_get_last_g1_raw(g1, sizeof(g1));
+
+    char buf[256];
+    int len = snprintf(buf, sizeof(buf),
+        "{\"g1_len\":%d,"
+        "\"g1_hex\":\"0x%02X 0x%02X 0x%02X 0x%02X\","
+        "\"targetTemp\":%.1f,"
+        "\"swingV\":%s,"
+        "\"swingH\":%s}",
+        g1_len,
+        g1[0], g1[1], g1[2], g1[3],
+        thermostat_ctrl_get_target_temp(),
+        thermostat_ctrl_get_swing(SWING_VERTICAL) ? "true" : "false",
+        thermostat_ctrl_get_swing(SWING_HORIZONTAL) ? "true" : "false");
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, buf, len);
+}
+
 /* Captive portal handler: redirect all unknown URLs to /wifi */
 static esp_err_t handler_captive_redirect(httpd_req_t *req)
 {
@@ -358,6 +380,7 @@ esp_err_t web_server_start(bool is_ap_mode)
         { .uri = "/wifi-save",  .method = HTTP_POST, .handler = handler_wifi_save, .user_ctx = NULL },
         { .uri = "/api/health", .method = HTTP_GET,  .handler = handler_api_health,.user_ctx = NULL },
         { .uri = "/api/metrics",.method = HTTP_GET,  .handler = handler_api_metrics,.user_ctx = NULL },
+        { .uri = "/api/debug", .method = HTTP_GET,  .handler = handler_api_debug,  .user_ctx = NULL },
         { .uri = "/ota",       .method = HTTP_GET,  .handler = handler_ota_page,   .user_ctx = NULL },
         { .uri = "/ota",       .method = HTTP_POST, .handler = handler_ota_upload, .user_ctx = NULL },
         /* Apple/Android captive portal detection endpoints */
