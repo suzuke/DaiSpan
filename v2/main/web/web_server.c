@@ -397,6 +397,41 @@ static esp_err_t handler_api_debug(httpd_req_t *req)
     return httpd_resp_send(req, buf, len);
 }
 
+static esp_err_t handler_settings(httpd_req_t *req)
+{
+    char name[33] = {0};
+    char code[12] = {0};
+    config_get_hk_name(name, sizeof(name));
+    config_get_hk_setup_code(code, sizeof(code));
+
+    char buf[1024];
+    int len = snprintf(buf, sizeof(buf),
+        "<!DOCTYPE html><html><head><meta charset='UTF-8'>"
+        "<title>Settings</title>"
+        "<style>body{font-family:sans-serif;max-width:400px;margin:0 auto;padding:20px}"
+        "input{width:100%%;padding:10px;margin:5px 0;box-sizing:border-box;"
+        "border:1px solid #ccc;border-radius:4px}"
+        "button{width:100%%;padding:12px;background:#007aff;color:#fff;"
+        "border:none;border-radius:6px;font-size:16px;margin:10px 0}"
+        ".btn{display:inline-block;padding:10px 20px;background:#007aff;color:#fff;"
+        "text-decoration:none;border-radius:6px}</style></head>"
+        "<body><h1>Settings</h1>"
+        "<form method='POST' action='/settings-save'>"
+        "<label>Device Name</label>"
+        "<input name='name' value='%s' maxlength='32' required>"
+        "<label>HomeKit Pairing Code</label>"
+        "<input name='code' value='%s' maxlength='10' placeholder='XXX-XX-XXX' required>"
+        "<button type='submit'>Save</button>"
+        "</form>"
+        "<a class='btn' href='/'>Back</a>"
+        "</body></html>",
+        name, code
+    );
+
+    httpd_resp_set_type(req, "text/html");
+    return httpd_resp_send(req, buf, len);
+}
+
 /* Captive portal handler: redirect all unknown URLs to /wifi */
 static esp_err_t handler_captive_redirect(httpd_req_t *req)
 {
@@ -487,6 +522,7 @@ esp_err_t web_server_start(bool is_ap_mode)
         { .uri = "/api/health", .method = HTTP_GET,  .handler = handler_api_health,.user_ctx = NULL },
         { .uri = "/api/metrics",.method = HTTP_GET,  .handler = handler_api_metrics,.user_ctx = NULL },
         { .uri = "/api/debug", .method = HTTP_GET,  .handler = handler_api_debug,  .user_ctx = NULL },
+        { .uri = "/settings",  .method = HTTP_GET,  .handler = handler_settings,   .user_ctx = NULL },
         { .uri = "/ota",       .method = HTTP_GET,  .handler = handler_ota_page,   .user_ctx = NULL },
         { .uri = "/ota",       .method = HTTP_POST, .handler = handler_ota_upload, .user_ctx = NULL },
         /* Apple/Android captive portal detection endpoints */
