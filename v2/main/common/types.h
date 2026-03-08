@@ -51,6 +51,7 @@ typedef enum {
     CMD_SET_TEMP,
     CMD_SET_FAN,
     CMD_SET_SWING,
+    CMD_SET_AC_MODE,
     CMD_QUERY_STATUS,
     CMD_QUERY_TEMP,
 } ctrl_cmd_type_t;

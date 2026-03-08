@@ -42,7 +42,7 @@ static esp_err_t handler_root(httpd_req_t *req)
     uint32_t sec = uptime % 60;
 
     bool power = thermostat_ctrl_get_power();
-    uint8_t mode = thermostat_ctrl_get_mode();
+    uint8_t mode = thermostat_ctrl_get_ac_mode();
     uint8_t fan = thermostat_ctrl_get_fan_speed();
     bool swing_v = thermostat_ctrl_get_swing(SWING_VERTICAL);
 
@@ -74,9 +74,11 @@ static esp_err_t handler_root(httpd_req_t *req)
         "<button name='power' value='off' class='off'%s>OFF</button></div>"
         "<div class='ctrl'><label>Mode</label>"
         "<select name='mode'>"
-        "<option value='1'%s>Heat</option>"
-        "<option value='2'%s>Cool</option>"
-        "<option value='3'%s>Auto</option>"
+        "<option value='1'%s>Auto</option>"
+        "<option value='2'%s>Dry</option>"
+        "<option value='3'%s>Cool</option>"
+        "<option value='4'%s>Heat</option>"
+        "<option value='6'%s>Fan</option>"
         "</select></div>"
         "<div class='ctrl'><label>Temp</label>"
         "<input type='number' name='temp' min='16' max='30' step='0.5' value='%.1f'></div>"
@@ -110,9 +112,11 @@ static esp_err_t handler_root(httpd_req_t *req)
         (unsigned long)thermostat_ctrl_get_error_count(),
         power ? " style='font-weight:bold'" : "",
         !power ? " style='font-weight:bold'" : "",
-        mode == 1 ? " selected" : "",
-        mode == 2 ? " selected" : "",
-        mode == 3 ? " selected" : "",
+        (mode == AC_MODE_AUTO || mode == AC_MODE_AUTO_2 || mode == AC_MODE_AUTO_3) ? " selected" : "",
+        mode == AC_MODE_DRY  ? " selected" : "",
+        mode == AC_MODE_COOL ? " selected" : "",
+        mode == AC_MODE_HEAT ? " selected" : "",
+        mode == AC_MODE_FAN  ? " selected" : "",
         thermostat_ctrl_get_target_temp(),
         fan == 0 ? " selected" : "",
         fan == 1 ? " selected" : "",
@@ -481,12 +485,12 @@ static esp_err_t handler_control(httpd_req_t *req)
         thermostat_ctrl_set_power(on);
     }
 
-    /* Mode */
+    /* Mode (AC mode values: 1=auto, 2=dry, 3=cool, 4=heat, 6=fan) */
     p = strstr(content, "mode=");
     if (p) {
         int mode = atoi(p + 5);
-        if (mode >= 1 && mode <= 3) {
-            thermostat_ctrl_set_mode((uint8_t)mode);
+        if (mode >= 0 && mode <= 7) {
+            thermostat_ctrl_set_ac_mode((uint8_t)mode);
         }
     }
 

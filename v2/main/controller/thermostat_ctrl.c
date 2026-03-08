@@ -248,6 +248,25 @@ static void process_command(const ctrl_cmd_t *cmd)
         break;
     }
 
+    case CMD_SET_AC_MODE: {
+        uint8_t ac_mode = cmd->data.mode;
+        ESP_LOGI(TAG, "Set AC mode direct: %d", ac_mode);
+        local_status.mode = ac_mode;
+        last_mode_set_ms  = xTaskGetTickCount() * portTICK_PERIOD_MS;
+        last_user_mode    = ac_mode;
+        target_homekit_mode = ac_to_homekit_mode(ac_mode);
+        dirty_mode = true;
+        if (!local_status.power) {
+            local_status.power = true;
+            dirty_power = true;
+        }
+        if (!is_recovering()) {
+            try_send_d1();
+        }
+        publish_status();
+        break;
+    }
+
     default:
         break;
     }
@@ -424,6 +443,12 @@ bool thermostat_ctrl_set_mode(uint8_t homekit_mode)
     return send_cmd(&cmd);
 }
 
+bool thermostat_ctrl_set_ac_mode(uint8_t ac_mode)
+{
+    ctrl_cmd_t cmd = { .type = CMD_SET_AC_MODE, .data.mode = ac_mode };
+    return send_cmd(&cmd);
+}
+
 bool thermostat_ctrl_set_temperature(float temp)
 {
     if (temp < 16.0f || temp > 30.0f) {
@@ -456,6 +481,11 @@ bool thermostat_ctrl_get_power(void)
 uint8_t thermostat_ctrl_get_mode(void)
 {
     return cached_status.power ? target_homekit_mode : HAP_MODE_OFF;
+}
+
+uint8_t thermostat_ctrl_get_ac_mode(void)
+{
+    return cached_status.mode;
 }
 
 float thermostat_ctrl_get_target_temp(void)

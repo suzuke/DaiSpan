@@ -15,6 +15,7 @@ esp_err_t thermostat_ctrl_init(void);
  */
 bool thermostat_ctrl_set_power(bool on);
 bool thermostat_ctrl_set_mode(uint8_t homekit_mode);
+bool thermostat_ctrl_set_ac_mode(uint8_t ac_mode);  /* direct AC mode (for web UI) */
 bool thermostat_ctrl_set_temperature(float temp);
 bool thermostat_ctrl_set_fan_speed(uint8_t speed);
 bool thermostat_ctrl_set_swing(swing_axis_t axis, bool enabled);
@@ -25,6 +26,7 @@ bool thermostat_ctrl_set_swing(swing_axis_t axis, bool enabled);
  */
 bool     thermostat_ctrl_get_power(void);
 uint8_t  thermostat_ctrl_get_mode(void);         /* returns HomeKit mode */
+uint8_t  thermostat_ctrl_get_ac_mode(void);      /* returns raw AC mode */
 float    thermostat_ctrl_get_target_temp(void);
 float    thermostat_ctrl_get_current_temp(void);
 uint8_t  thermostat_ctrl_get_fan_speed(void);
