@@ -18,11 +18,16 @@ static httpd_handle_t server = NULL;
 
 static esp_err_t handler_root(httpd_req_t *req)
 {
-    char buf[1024];
+    char buf[3072];
     uint32_t uptime = xTaskGetTickCount() * portTICK_PERIOD_MS / 1000;
     uint32_t hr = uptime / 3600;
     uint32_t min = (uptime % 3600) / 60;
     uint32_t sec = uptime % 60;
+
+    bool power = thermostat_ctrl_get_power();
+    uint8_t mode = thermostat_ctrl_get_mode();
+    uint8_t fan = thermostat_ctrl_get_fan_speed();
+    bool swing_v = thermostat_ctrl_get_swing(SWING_VERTICAL);
 
     int len = snprintf(buf, sizeof(buf),
         "<!DOCTYPE html><html><head><meta charset='UTF-8'>"
@@ -31,7 +36,12 @@ static esp_err_t handler_root(httpd_req_t *req)
         "<style>body{font-family:sans-serif;max-width:600px;margin:0 auto;padding:20px}"
         ".card{background:#f5f5f5;border-radius:8px;padding:15px;margin:10px 0}"
         ".btn{display:inline-block;padding:10px 20px;background:#007aff;color:#fff;"
-        "text-decoration:none;border-radius:6px;margin:5px}</style></head><body>"
+        "text-decoration:none;border-radius:6px;margin:5px}"
+        "select,input[type=number]{padding:8px;border:1px solid #ccc;border-radius:4px;margin:4px 0}"
+        ".ctrl{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}"
+        ".ctrl label{min-width:60px}"
+        "button{padding:10px 20px;background:#007aff;color:#fff;border:none;border-radius:6px}"
+        "button.off{background:#999}</style></head><body>"
         "<h1>DaiSpan v2</h1>"
         "<div class='card'>"
         "<p>Memory: %lu bytes free</p>"
@@ -40,7 +50,35 @@ static esp_err_t handler_root(httpd_req_t *req)
         "<p>Power: %s | Temp: %.1f / %.1f C</p>"
         "<p>Controller: %s (errors: %lu)</p>"
         "</div>"
+        "<div class='card'><h3>Control</h3>"
+        "<form method='POST' action='/control'>"
+        "<div class='ctrl'><label>Power</label>"
+        "<button name='power' value='on'%s>ON</button>"
+        "<button name='power' value='off' class='off'%s>OFF</button></div>"
+        "<div class='ctrl'><label>Mode</label>"
+        "<select name='mode'>"
+        "<option value='1'%s>Heat</option>"
+        "<option value='2'%s>Cool</option>"
+        "<option value='3'%s>Auto</option>"
+        "</select></div>"
+        "<div class='ctrl'><label>Temp</label>"
+        "<input type='number' name='temp' min='16' max='30' step='0.5' value='%.1f'></div>"
+        "<div class='ctrl'><label>Fan</label>"
+        "<select name='fan'>"
+        "<option value='0'%s>Auto</option>"
+        "<option value='1'%s>Quiet</option>"
+        "<option value='3'%s>1</option>"
+        "<option value='4'%s>2</option>"
+        "<option value='5'%s>3</option>"
+        "<option value='6'%s>4</option>"
+        "<option value='7'%s>5</option>"
+        "</select></div>"
+        "<div class='ctrl'><label>Swing V</label>"
+        "<input type='checkbox' name='swing_v' value='1'%s></div>"
+        "<div class='ctrl'><button type='submit'>Apply</button></div>"
+        "</form></div>"
         "<div><a class='btn' href='/wifi'>WiFi</a>"
+        "<a class='btn' href='/settings'>Settings</a>"
         "<a class='btn' href='/ota'>OTA</a>"
         "<a class='btn' href='/api/health'>Health</a>"
         "<a class='btn' href='/api/metrics'>Metrics</a></div>"
@@ -48,11 +86,25 @@ static esp_err_t handler_root(httpd_req_t *req)
         (unsigned long)esp_get_free_heap_size(),
         (unsigned long)hr, (unsigned long)min, (unsigned long)sec,
         wifi_manager_get_ip(), wifi_manager_get_rssi(),
-        thermostat_ctrl_get_power() ? "ON" : "OFF",
+        power ? "ON" : "OFF",
         thermostat_ctrl_get_current_temp(),
         thermostat_ctrl_get_target_temp(),
         thermostat_ctrl_is_healthy() ? "Healthy" : "Error",
-        (unsigned long)thermostat_ctrl_get_error_count()
+        (unsigned long)thermostat_ctrl_get_error_count(),
+        power ? " style='font-weight:bold'" : "",
+        !power ? " style='font-weight:bold'" : "",
+        mode == 1 ? " selected" : "",
+        mode == 2 ? " selected" : "",
+        mode == 3 ? " selected" : "",
+        thermostat_ctrl_get_target_temp(),
+        fan == 0 ? " selected" : "",
+        fan == 1 ? " selected" : "",
+        fan == 3 ? " selected" : "",
+        fan == 4 ? " selected" : "",
+        fan == 5 ? " selected" : "",
+        fan == 6 ? " selected" : "",
+        fan == 7 ? " selected" : "",
+        swing_v ? " checked" : ""
     );
 
     httpd_resp_set_type(req, "text/html");
