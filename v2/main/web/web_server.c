@@ -501,6 +501,60 @@ static esp_err_t handler_control(httpd_req_t *req)
     return httpd_resp_send(req, NULL, 0);
 }
 
+static esp_err_t handler_settings_save(httpd_req_t *req)
+{
+    char content[256];
+    int len = httpd_req_recv(req, content, sizeof(content) - 1);
+    if (len <= 0) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No data");
+    }
+    content[len] = '\0';
+
+    char raw[65] = {0};
+    char name[33] = {0};
+    char code[12] = {0};
+
+    char *p = strstr(content, "name=");
+    if (p) {
+        p += 5;
+        char *end = strchr(p, '&');
+        size_t slen = end ? (size_t)(end - p) : strlen(p);
+        if (slen >= sizeof(raw)) slen = sizeof(raw) - 1;
+        memcpy(raw, p, slen);
+        raw[slen] = '\0';
+        url_decode(name, raw, sizeof(name));
+    }
+
+    p = strstr(content, "code=");
+    if (p) {
+        p += 5;
+        char *end = strchr(p, '&');
+        size_t slen = end ? (size_t)(end - p) : strlen(p);
+        if (slen >= sizeof(raw)) slen = sizeof(raw) - 1;
+        memcpy(raw, p, slen);
+        raw[slen] = '\0';
+        url_decode(code, raw, sizeof(code));
+    }
+
+    if (strlen(name) > 0) config_set_hk_name(name);
+    if (strlen(code) > 0) config_set_hk_setup_code(code);
+
+    ESP_LOGI(TAG, "Settings saved: name='%s' code='%s'", name, code);
+
+    const char *html =
+        "<!DOCTYPE html><html><head><meta charset='UTF-8'>"
+        "<title>Saved</title>"
+        "<style>body{font-family:sans-serif;max-width:400px;margin:0 auto;padding:20px}"
+        ".btn{display:inline-block;padding:10px 20px;background:#007aff;color:#fff;"
+        "text-decoration:none;border-radius:6px}</style></head>"
+        "<body><h1>Settings saved</h1>"
+        "<p>Restart device to apply changes.</p>"
+        "<a class='btn' href='/'>Back</a>"
+        "</body></html>";
+    httpd_resp_set_type(req, "text/html");
+    return httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
+}
+
 esp_err_t web_server_start(bool is_ap_mode)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
@@ -522,7 +576,8 @@ esp_err_t web_server_start(bool is_ap_mode)
         { .uri = "/api/health", .method = HTTP_GET,  .handler = handler_api_health,.user_ctx = NULL },
         { .uri = "/api/metrics",.method = HTTP_GET,  .handler = handler_api_metrics,.user_ctx = NULL },
         { .uri = "/api/debug", .method = HTTP_GET,  .handler = handler_api_debug,  .user_ctx = NULL },
-        { .uri = "/settings",  .method = HTTP_GET,  .handler = handler_settings,   .user_ctx = NULL },
+        { .uri = "/settings",       .method = HTTP_GET,  .handler = handler_settings,      .user_ctx = NULL },
+        { .uri = "/settings-save",  .method = HTTP_POST, .handler = handler_settings_save, .user_ctx = NULL },
         { .uri = "/ota",       .method = HTTP_GET,  .handler = handler_ota_page,   .user_ctx = NULL },
         { .uri = "/ota",       .method = HTTP_POST, .handler = handler_ota_upload, .user_ctx = NULL },
         /* Apple/Android captive portal detection endpoints */
