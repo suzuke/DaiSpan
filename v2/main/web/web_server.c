@@ -413,6 +413,59 @@ static esp_err_t handler_hotspot_detect(httpd_req_t *req)
     return httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
 }
 
+static esp_err_t handler_control(httpd_req_t *req)
+{
+    char content[256];
+    int len = httpd_req_recv(req, content, sizeof(content) - 1);
+    if (len <= 0) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No data");
+    }
+    content[len] = '\0';
+
+    /* Power: form has two submit buttons, only clicked one is sent */
+    char *p = strstr(content, "power=");
+    if (p) {
+        bool on = (strncmp(p + 6, "on", 2) == 0);
+        thermostat_ctrl_set_power(on);
+    }
+
+    /* Mode */
+    p = strstr(content, "mode=");
+    if (p) {
+        int mode = atoi(p + 5);
+        if (mode >= 1 && mode <= 3) {
+            thermostat_ctrl_set_mode((uint8_t)mode);
+        }
+    }
+
+    /* Temperature */
+    p = strstr(content, "temp=");
+    if (p) {
+        float temp = strtof(p + 5, NULL);
+        if (temp >= 16.0f && temp <= 30.0f) {
+            thermostat_ctrl_set_temperature(temp);
+        }
+    }
+
+    /* Fan speed */
+    p = strstr(content, "fan=");
+    if (p) {
+        int fan = atoi(p + 4);
+        if (fan >= 0 && fan <= 7) {
+            thermostat_ctrl_set_fan_speed((uint8_t)fan);
+        }
+    }
+
+    /* Swing vertical: checkbox - present means on, absent means off */
+    p = strstr(content, "swing_v=");
+    thermostat_ctrl_set_swing(SWING_VERTICAL, p != NULL);
+
+    /* 302 redirect back to root */
+    httpd_resp_set_status(req, "302 Found");
+    httpd_resp_set_hdr(req, "Location", "/");
+    return httpd_resp_send(req, NULL, 0);
+}
+
 esp_err_t web_server_start(bool is_ap_mode)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
@@ -428,6 +481,7 @@ esp_err_t web_server_start(bool is_ap_mode)
 
     const httpd_uri_t routes[] = {
         { .uri = "/",           .method = HTTP_GET,  .handler = handler_root,      .user_ctx = NULL },
+        { .uri = "/control",    .method = HTTP_POST, .handler = handler_control,   .user_ctx = NULL },
         { .uri = "/wifi",       .method = HTTP_GET,  .handler = handler_wifi,      .user_ctx = NULL },
         { .uri = "/wifi-save",  .method = HTTP_POST, .handler = handler_wifi_save, .user_ctx = NULL },
         { .uri = "/api/health", .method = HTTP_GET,  .handler = handler_api_health,.user_ctx = NULL },
