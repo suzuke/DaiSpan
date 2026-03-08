@@ -14,4 +14,5 @@ idf_component_register(
         esp_hap_core
         esp_hap_apple_profiles
         esp_hap_platform
+        espressif__mdns
 )

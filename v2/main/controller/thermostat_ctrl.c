@@ -38,6 +38,9 @@ static uint32_t last_mode_set_ms = 0;
 static uint8_t  last_user_mode   = AC_MODE_AUTO;
 static uint32_t last_fan_set_ms  = 0;
 static uint8_t  last_user_fan    = AC_FAN_AUTO;
+static uint32_t last_swing_set_ms = 0;
+static bool     last_user_swing_v = false;
+static bool     last_user_swing_h = false;
 
 /* HomeKit target mode (preserved across lossy AC mode conversions) */
 static uint8_t target_homekit_mode = HAP_MODE_AUTO;
@@ -55,6 +58,7 @@ static bool dirty_swing = false;
 #define MAX_CONSECUTIVE_ERRORS 10
 #define MODE_PROTECT_MS        30000
 #define FAN_PROTECT_MS         10000
+#define SWING_PROTECT_MS       15000
 #define CTRL_TASK_STACK        4096
 #define CTRL_TASK_PRIORITY     5
 
@@ -224,9 +228,12 @@ static void process_command(const ctrl_cmd_t *cmd)
         ESP_LOGI(TAG, "Set swing: axis=%d enabled=%d", axis, enabled);
         if (axis == SWING_VERTICAL) {
             local_status.swing_vertical = enabled;
+            last_user_swing_v = enabled;
         } else {
             local_status.swing_horizontal = enabled;
+            last_user_swing_h = enabled;
         }
+        last_swing_set_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
         dirty_swing = true;
         if (!is_recovering()) {
             if (s21_set_swing(local_status.swing_vertical,
@@ -269,13 +276,17 @@ static void poll_status(void)
             case AC_MODE_HEAT:   target_homekit_mode = HAP_MODE_HEAT; break;
             case AC_MODE_COOL:   target_homekit_mode = HAP_MODE_COOL; break;
             case AC_MODE_AUTO:
-            case AC_MODE_AUTO_2: target_homekit_mode = HAP_MODE_AUTO; break;
+            case AC_MODE_AUTO_2:
+            case AC_MODE_AUTO_3: target_homekit_mode = HAP_MODE_AUTO; break;
             /* DRY/FAN: preserve target_homekit_mode */
             default: break;
             }
         }
 
-        local_status.target_temp = new_status.target_temp;
+        /* Only update target temp if valid (off state returns invalid 0x80) */
+        if (new_status.target_temp >= 16.0f && new_status.target_temp <= 32.0f) {
+            local_status.target_temp = new_status.target_temp;
+        }
 
         /* Fan speed protection */
         if (last_fan_set_ms > 0 && (now - last_fan_set_ms) < FAN_PROTECT_MS) {
@@ -302,8 +313,14 @@ static void poll_status(void)
     if (any_success) {
         bool sv, sh;
         if (s21_query_swing(&sv, &sh)) {
-            local_status.swing_vertical   = sv;
-            local_status.swing_horizontal = sh;
+            /* Swing protection period: keep user-set value until AC settles */
+            if (last_swing_set_ms > 0 && (now - last_swing_set_ms) < SWING_PROTECT_MS) {
+                local_status.swing_vertical   = last_user_swing_v;
+                local_status.swing_horizontal = last_user_swing_h;
+            } else {
+                local_status.swing_vertical   = sv;
+                local_status.swing_horizontal = sh;
+            }
         }
         /* Don't count swing query failure as error - some ACs don't support F5 */
     }

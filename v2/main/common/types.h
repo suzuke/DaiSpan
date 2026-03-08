@@ -2,13 +2,14 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-/* AC modes (internal S21 protocol values) */
-#define AC_MODE_AUTO   0
-#define AC_MODE_DRY    1
-#define AC_MODE_COOL   2
-#define AC_MODE_HEAT   3
+/* AC modes (S21 protocol values - must match Daikin S21 spec) */
+#define AC_MODE_AUTO_2 0
+#define AC_MODE_AUTO   1
+#define AC_MODE_DRY    2
+#define AC_MODE_COOL   3
+#define AC_MODE_HEAT   4
 #define AC_MODE_FAN    6
-#define AC_MODE_AUTO_2 7
+#define AC_MODE_AUTO_3 7
 
 /* HomeKit thermostat modes */
 #define HAP_MODE_OFF   0
@@ -94,7 +95,8 @@ static inline uint8_t ac_to_homekit_mode(uint8_t ac_mode)
         case AC_MODE_HEAT:   return HAP_MODE_HEAT;
         case AC_MODE_COOL:   return HAP_MODE_COOL;
         case AC_MODE_AUTO:
-        case AC_MODE_AUTO_2: return HAP_MODE_AUTO;
+        case AC_MODE_AUTO_2:
+        case AC_MODE_AUTO_3: return HAP_MODE_AUTO;
         default:             return HAP_MODE_AUTO;  /* DRY/FAN map to AUTO */
     }
 }

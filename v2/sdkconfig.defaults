@@ -3,8 +3,9 @@
 # Target
 CONFIG_IDF_TARGET="esp32c3"
 
-# Flash size
+# Flash - reduce SPI speed to lower boot power consumption
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHFREQ_40M=y
 
 # Partition table
 CONFIG_PARTITION_TABLE_CUSTOM=y
@@ -47,6 +48,9 @@ CONFIG_COMPILER_OPTIMIZATION_SIZE=y
 
 # Watchdog
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+
+# Brownout detector - disabled (false triggers on C3 SuperMini)
+CONFIG_ESP_BROWNOUT_DET=n
 
 # Log level
 CONFIG_LOG_DEFAULT_LEVEL=3

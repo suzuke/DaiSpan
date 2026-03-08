@@ -57,6 +57,9 @@ bool s21_query_swing(bool *vertical, bool *horizontal);
  */
 bool s21_set_swing(bool vertical, bool horizontal);
 
+/* Debug: get last raw G1 payload */
+int s21_get_last_g1_raw(uint8_t *out, size_t max_len);
+
 /* Encoding helpers */
 uint8_t s21_encode_target_temp(float temp);
 float s21_decode_target_temp(uint8_t encoded);

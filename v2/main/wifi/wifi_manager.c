@@ -197,10 +197,14 @@ esp_err_t wifi_manager_init(void)
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_config));
+
+    /* Delay before WiFi start to let S21 power supply stabilize */
+    vTaskDelay(pdMS_TO_TICKS(500));
+
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    /* Set TX power for C3 */
-    esp_wifi_set_max_tx_power(44);  /* 11dBm */
+    /* Use moderate TX power - not too high (brownout) nor too low (unreliable) */
+    esp_wifi_set_max_tx_power(52);  /* 13dBm */
 
     ESP_LOGI(TAG, "Connecting to: %s", ssid);
 
@@ -210,9 +214,7 @@ esp_err_t wifi_manager_init(void)
         pdFALSE, pdFALSE, pdMS_TO_TICKS(60000));
 
     if (bits & WIFI_CONNECTED_BIT) {
-        /* Lower TX power after connect to save power */
-        esp_wifi_set_max_tx_power(34);  /* ~8.5dBm */
-        ESP_LOGI(TAG, "WiFi connected, switched to low power TX");
+        ESP_LOGI(TAG, "WiFi connected");
         return ESP_OK;
     }
 
