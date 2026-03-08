@@ -15,6 +15,23 @@
 
 static const char *TAG = LOG_TAG_WEB;
 static httpd_handle_t server = NULL;
+static bool server_ap_mode = false;
+
+static esp_err_t handler_root_ap(httpd_req_t *req)
+{
+    const char *html =
+        "<!DOCTYPE html><html><head><meta charset='UTF-8'>"
+        "<title>DaiSpan Setup</title>"
+        "<style>body{font-family:sans-serif;max-width:400px;margin:0 auto;padding:20px}"
+        ".btn{display:inline-block;padding:12px 24px;background:#007aff;color:#fff;"
+        "text-decoration:none;border-radius:6px;font-size:16px}</style></head>"
+        "<body><h1>DaiSpan Setup</h1>"
+        "<p>Connect to your WiFi network to get started.</p>"
+        "<a class='btn' href='/wifi'>Configure WiFi</a>"
+        "</body></html>";
+    httpd_resp_set_type(req, "text/html");
+    return httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
+}
 
 static esp_err_t handler_root(httpd_req_t *req)
 {
@@ -557,10 +574,12 @@ static esp_err_t handler_settings_save(httpd_req_t *req)
 
 esp_err_t web_server_start(bool is_ap_mode)
 {
+    server_ap_mode = is_ap_mode;
+
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = is_ap_mode ? 80 : 8080;
     config.max_uri_handlers = 16;
-    config.stack_size = 4096;
+    config.stack_size = is_ap_mode ? 4096 : 6144;
 
     esp_err_t err = httpd_start(&server, &config);
     if (err != ESP_OK) {
@@ -568,26 +587,39 @@ esp_err_t web_server_start(bool is_ap_mode)
         return err;
     }
 
-    const httpd_uri_t routes[] = {
-        { .uri = "/",           .method = HTTP_GET,  .handler = handler_root,      .user_ctx = NULL },
-        { .uri = "/control",    .method = HTTP_POST, .handler = handler_control,   .user_ctx = NULL },
-        { .uri = "/wifi",       .method = HTTP_GET,  .handler = handler_wifi,      .user_ctx = NULL },
-        { .uri = "/wifi-save",  .method = HTTP_POST, .handler = handler_wifi_save, .user_ctx = NULL },
-        { .uri = "/api/health", .method = HTTP_GET,  .handler = handler_api_health,.user_ctx = NULL },
-        { .uri = "/api/metrics",.method = HTTP_GET,  .handler = handler_api_metrics,.user_ctx = NULL },
-        { .uri = "/api/debug", .method = HTTP_GET,  .handler = handler_api_debug,  .user_ctx = NULL },
-        { .uri = "/settings",       .method = HTTP_GET,  .handler = handler_settings,      .user_ctx = NULL },
-        { .uri = "/settings-save",  .method = HTTP_POST, .handler = handler_settings_save, .user_ctx = NULL },
-        { .uri = "/ota",       .method = HTTP_GET,  .handler = handler_ota_page,   .user_ctx = NULL },
-        { .uri = "/ota",       .method = HTTP_POST, .handler = handler_ota_upload, .user_ctx = NULL },
-        /* Apple/Android captive portal detection endpoints */
-        { .uri = "/hotspot-detect.html",   .method = HTTP_GET, .handler = handler_hotspot_detect,  .user_ctx = NULL },
-        { .uri = "/generate_204",          .method = HTTP_GET, .handler = handler_captive_redirect, .user_ctx = NULL },
-        { .uri = "/connectivity-check.html", .method = HTTP_GET, .handler = handler_captive_redirect, .user_ctx = NULL },
-    };
-
-    for (int i = 0; i < (int)(sizeof(routes) / sizeof(routes[0])); i++) {
-        httpd_register_uri_handler(server, &routes[i]);
+    if (is_ap_mode) {
+        /* AP mode: minimal routes for WiFi config only */
+        const httpd_uri_t routes[] = {
+            { .uri = "/",          .method = HTTP_GET,  .handler = handler_root_ap,        .user_ctx = NULL },
+            { .uri = "/wifi",      .method = HTTP_GET,  .handler = handler_wifi,            .user_ctx = NULL },
+            { .uri = "/wifi-save", .method = HTTP_POST, .handler = handler_wifi_save,       .user_ctx = NULL },
+            { .uri = "/ota",       .method = HTTP_GET,  .handler = handler_ota_page,        .user_ctx = NULL },
+            { .uri = "/ota",       .method = HTTP_POST, .handler = handler_ota_upload,      .user_ctx = NULL },
+            { .uri = "/hotspot-detect.html",     .method = HTTP_GET, .handler = handler_hotspot_detect,   .user_ctx = NULL },
+            { .uri = "/generate_204",            .method = HTTP_GET, .handler = handler_captive_redirect, .user_ctx = NULL },
+            { .uri = "/connectivity-check.html", .method = HTTP_GET, .handler = handler_captive_redirect, .user_ctx = NULL },
+        };
+        for (int i = 0; i < (int)(sizeof(routes) / sizeof(routes[0])); i++) {
+            httpd_register_uri_handler(server, &routes[i]);
+        }
+    } else {
+        /* STA mode: full control panel */
+        const httpd_uri_t routes[] = {
+            { .uri = "/",           .method = HTTP_GET,  .handler = handler_root,      .user_ctx = NULL },
+            { .uri = "/control",    .method = HTTP_POST, .handler = handler_control,   .user_ctx = NULL },
+            { .uri = "/wifi",       .method = HTTP_GET,  .handler = handler_wifi,      .user_ctx = NULL },
+            { .uri = "/wifi-save",  .method = HTTP_POST, .handler = handler_wifi_save, .user_ctx = NULL },
+            { .uri = "/api/health", .method = HTTP_GET,  .handler = handler_api_health,.user_ctx = NULL },
+            { .uri = "/api/metrics",.method = HTTP_GET,  .handler = handler_api_metrics,.user_ctx = NULL },
+            { .uri = "/api/debug",  .method = HTTP_GET,  .handler = handler_api_debug,  .user_ctx = NULL },
+            { .uri = "/settings",       .method = HTTP_GET,  .handler = handler_settings,      .user_ctx = NULL },
+            { .uri = "/settings-save",  .method = HTTP_POST, .handler = handler_settings_save, .user_ctx = NULL },
+            { .uri = "/ota",       .method = HTTP_GET,  .handler = handler_ota_page,   .user_ctx = NULL },
+            { .uri = "/ota",       .method = HTTP_POST, .handler = handler_ota_upload, .user_ctx = NULL },
+        };
+        for (int i = 0; i < (int)(sizeof(routes) / sizeof(routes[0])); i++) {
+            httpd_register_uri_handler(server, &routes[i]);
+        }
     }
 
     ESP_LOGI(TAG, "HTTP server started on port %d", config.server_port);

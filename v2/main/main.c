@@ -8,8 +8,6 @@
 
 #include <hap.h>
 #include <esp_system.h>
-#include <esp_mac.h>
-#include <mdns.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
@@ -108,38 +106,11 @@ void app_main(void)
     }
     hap_add_accessory(accessory);
 
-    /* Add Wi-Fi Transport service (HAP Spec R16) */
-    hap_acc_add_wifi_transport_service(accessory, 0);
-
     esp_event_handler_register(HAP_EVENT, ESP_EVENT_ANY_ID,
                                 &hap_event_handler, NULL);
 
     hap_start();
     ESP_LOGI(TAG, "HomeKit started: %s (code: %s)", device_name, setup_code);
-
-    /* Give HAP framework time to register mDNS, then force-register as fallback */
-    vTaskDelay(pdMS_TO_TICKS(3000));
-    {
-        uint8_t mac[6];
-        esp_read_mac(mac, ESP_MAC_WIFI_STA);
-        char mac_str[18];
-        snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X",
-                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-
-        mdns_txt_item_t txt[] = {
-            {"id", mac_str},
-            {"md", device_name},
-            {"pv", "1.1"},
-            {"s#", "1"},
-            {"c#", "1"},
-            {"ci", "9"},       /* category: thermostat */
-            {"ff", "0"},
-            {"sf", "1"},
-        };
-        esp_err_t add_err = mdns_service_add(device_name, "_hap", "_tcp", 80, txt, 8);
-        ESP_LOGI(TAG, "mDNS _hap._tcp register: %s (may be ESP_ERR_INVALID_ARG if already exists)",
-                 esp_err_to_name(add_err));
-    }
 
     /* 6. Web server */
     web_server_start(false);  /* port 8080, normal mode */

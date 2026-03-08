@@ -26,19 +26,18 @@ static void event_handler(void *arg, esp_event_base_t event_base,
                            int32_t event_id, void *event_data)
 {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
+        if (!ap_mode) {
+            esp_wifi_connect();
+        }
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         connected = false;
         if (ap_mode) {
-            return;  /* Already switched to AP mode, ignore stale STA events */
+            return;  /* In AP mode, ignore STA disconnect events */
         }
         if (retry_count < MAX_RETRY) {
             retry_count++;
-            /* Progressive delay: 500ms -> 1s -> 2s */
-            int delay_ms = (retry_count < 10) ? 500 : (retry_count < 20) ? 1000 : 2000;
-            vTaskDelay(pdMS_TO_TICKS(delay_ms));
-            esp_wifi_connect();
             ESP_LOGI(TAG, "Retry %d/%d", retry_count, MAX_RETRY);
+            esp_wifi_connect();
         } else {
             xEventGroupSetBits(wifi_event_group, WIFI_FAIL_BIT);
             ESP_LOGE(TAG, "Connection failed after %d retries", MAX_RETRY);
@@ -140,7 +139,9 @@ static esp_err_t start_ap(void)
         },
     };
 
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
+    ap_mode = true;  /* Set BEFORE wifi_start to prevent STA events */
+
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
 
     /* Force 802.11b/g/n and HT20 bandwidth for max compatibility */
@@ -151,12 +152,11 @@ static esp_err_t start_ap(void)
 
     /* Conservative TX power - C3 SuperMini antenna is weak, too high causes issues */
     esp_wifi_set_max_tx_power(52);  /* 13dBm */
-    ESP_LOGI(TAG, "AP started (APSTA mode, ch1, WPA/WPA2, 13dBm)");
+    ESP_LOGI(TAG, "AP started (AP mode, ch1, WPA/WPA2, 13dBm)");
 
     /* Start captive portal DNS server */
     xTaskCreate(dns_server_task, "dns_srv", 4096, NULL, 3, NULL);
 
-    ap_mode = true;
     strcpy(ip_str, "192.168.4.1");
     return ESP_OK;
 }
