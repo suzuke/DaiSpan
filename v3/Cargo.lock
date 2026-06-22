@@ -1171,7 +1171,6 @@ dependencies = [
 [[package]]
 name = "esp-idf-matter"
 version = "0.1.0"
-source = "git+https://github.com/sysgrok/esp-idf-matter#248bf2113ac325c10cd2d555e9742ec1c87b731d"
 dependencies = [
  "async-io",
  "edge-nal",

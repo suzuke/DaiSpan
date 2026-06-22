@@ -33,6 +33,14 @@ CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=6
 # LWIP
 CONFIG_LWIP_MAX_SOCKETS=16
 
+# IPv6 SLAAC — accept the router's Router Advertisement to auto-configure a
+# routable ULA/global address. Matter operational traffic needs routable IPv6;
+# without this the device only gets link-local fe80:: and Apple cannot reach it
+# during CASE → "cannot connect to network" even though WiFi joined. (The Mac on
+# the same LAN already gets a ULA fd6d::/64 via SLAAC, proving the router sends RA.)
+CONFIG_LWIP_IPV6=y
+CONFIG_LWIP_IPV6_AUTOCONFIG=y
+
 # mDNS
 CONFIG_MDNS_MAX_SERVICES=5
 

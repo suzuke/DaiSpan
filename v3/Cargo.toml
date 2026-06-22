@@ -21,7 +21,10 @@ log = "0.4"
 heapless = "0.8"
 
 # Matter dependencies (optional, enabled by default)
-esp-idf-matter = { git = "https://github.com/sysgrok/esp-idf-matter", optional = true }
+# Local patched copy: backported a8a1b989 "Fix a bug in the netif (#31)" (#22 IPv6
+# HostUnreachable fix) onto 248bf21, keeping esp-idf-svc 0.51 to avoid the 0.52
+# ecosystem upgrade. Source: ../../esp-idf-matter-patched
+esp-idf-matter = { path = "../../esp-idf-matter-patched", optional = true }
 embassy-futures = { version = "0.1", optional = true }
 embassy-sync = { version = "0.7", optional = true }
 embassy-time = { version = "0.5", optional = true }

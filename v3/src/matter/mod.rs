@@ -14,6 +14,7 @@
 //! with 20KB stack.
 
 pub mod fan;
+pub mod identify;
 pub mod swing;
 pub mod thermostat;
 
@@ -29,9 +30,8 @@ use esp_idf_matter::init_async_io;
 use esp_idf_matter::matter::crypto::{default_crypto, Crypto};
 use esp_idf_matter::matter::dm::clusters::desc::{self, ClusterHandler as _, DescHandler};
 use esp_idf_matter::matter::dm::clusters::on_off::{self, OnOffHandler, OnOffHooks};
-use esp_idf_matter::matter::dm::devices::test::{
-    DAC_PRIVKEY, TEST_DEV_ATT, TEST_DEV_COMM,
-};
+use esp_idf_matter::matter::dm::devices::test::{DAC_PRIVKEY, TEST_DEV_ATT};
+use esp_idf_matter::matter::BasicCommData;
 use esp_idf_matter::matter::dm::clusters::basic_info::BasicInfoConfig;
 use esp_idf_matter::matter::dm::{
     Async, Dataver, EmptyHandler, Endpoint, EpClMatcher, Node,
@@ -52,16 +52,24 @@ use esp_idf_svc::timer::EspTaskTimerService;
 use crate::controller::state::{ControllerCmd, SharedState};
 
 use self::fan::{FanHandler, CLUSTER_FAN_CONTROL, FAN_CONTROL_CLUSTER};
+use self::identify::{IdentifyHandler, CLUSTER_IDENTIFY, IDENTIFY_CLUSTER};
 use self::swing::SwingOnOffLogic;
 use self::thermostat::{ThermostatHandler, CLUSTER_THERMOSTAT, THERMOSTAT_CLUSTER};
 
 extern crate alloc;
 
-/// Matter stack thread stack size (20KB)
-const MATTER_STACK_SIZE: usize = 16 * 1024;
+/// Matter stack thread stack size. C3 (concurrent) fits in 20K; S3 (non-concurrent)
+/// builds a larger future needing a big stack — fine on S3's ample 512KB RAM.
+#[cfg(feature = "esp32c3")]
+const MATTER_STACK_SIZE: usize = 20 * 1024;
+#[cfg(feature = "esp32s3")]
+const MATTER_STACK_SIZE: usize = 64 * 1024;
 
-/// Bump allocator size for the Matter stack futures
-const BUMP_SIZE: usize = 15000;
+/// Bump allocator size for the Matter stack futures (non-concurrent needs more).
+#[cfg(feature = "esp32c3")]
+const BUMP_SIZE: usize = 17000;
+#[cfg(feature = "esp32s3")]
+const BUMP_SIZE: usize = 32000;
 
 /// Endpoint IDs (0 is root, reserved by Matter)
 const THERMOSTAT_ENDPOINT_ID: u16 = 1;
@@ -83,7 +91,9 @@ const DEV_TYPE_FAN: DeviceType = DeviceType {
 /// DaiSpan device info for Matter commissioning.
 const DAISPAN_DEV_DET: BasicInfoConfig = BasicInfoConfig {
     vid: 0xFFF1,   // Test vendor ID (use real VID for production)
-    pid: 0x8001,   // Test product ID (must match TEST_DEV_ATT)
+    pid: 0x8001,   // Must match TEST_DEV_ATT's Certification Declaration. 0x800E was
+                   // rejected by Apple ("unsupported"). New device identity comes from
+                   // the changed discriminator (2748) instead, which is enough.
     hw_ver: 1,
     hw_ver_str: "3.0",
     sw_ver: 1,
@@ -95,6 +105,9 @@ const DAISPAN_DEV_DET: BasicInfoConfig = BasicInfoConfig {
     ..BasicInfoConfig::new()
 };
 
+// NOTE: commissioning data (DAISPAN_DEV_COMM) is built at runtime inside run_matter —
+// Spake2pVerifierPassword has a destructor so it can't be assigned in a const.
+
 /// Static allocation for the Matter stack (mandatory for WifiBle variant).
 static MATTER_STACK: StaticCell<EspWifiMatterStack<'static, BUMP_SIZE, ()>> = StaticCell::new();
 
@@ -104,24 +117,18 @@ const NODE: Node = Node {
     endpoints: &[
         // Endpoint 0: Root (system clusters, handled by Matter stack)
         EspWifiMatterStack::<0, ()>::root_endpoint(),
-        // Endpoint 1: Thermostat
+        // Endpoint 1: Thermostat (PURE thermostat — no Fan Control here. Mixing Fan
+        // Control onto the thermostat endpoint makes Apple/HomeKit map this endpoint
+        // to a Fan service instead of a Thermostat service, so the thermostat tile
+        // never appears. Fan lives on its own endpoint 2.)
         Endpoint {
             id: THERMOSTAT_ENDPOINT_ID,
             device_types: devices!(DEV_TYPE_THERMOSTAT),
-            clusters: clusters!(DescHandler::CLUSTER, THERMOSTAT_CLUSTER, FAN_CONTROL_CLUSTER),
+            clusters: clusters!(DescHandler::CLUSTER, IDENTIFY_CLUSTER, THERMOSTAT_CLUSTER),
         },
-        // Endpoint 2: Fan (separate endpoint for controllers that want fan-only control)
-        Endpoint {
-            id: FAN_ENDPOINT_ID,
-            device_types: devices!(DEV_TYPE_FAN),
-            clusters: clusters!(DescHandler::CLUSTER, FAN_CONTROL_CLUSTER),
-        },
-        // Endpoint 3: Swing (On/Off switch for vertical swing)
-        Endpoint {
-            id: SWING_ENDPOINT_ID,
-            device_types: devices!(esp_idf_matter::matter::dm::devices::DEV_TYPE_ON_OFF_LIGHT),
-            clusters: clusters!(DescHandler::CLUSTER, SwingOnOffLogic::CLUSTER),
-        },
+        // DIAGNOSTIC: Fan (ep2) + Swing/Light (ep3) endpoints temporarily removed to
+        // test whether Apple Home renders the thermostat as the ONLY application
+        // endpoint (the working reference impl is single-endpoint). Restore after.
     ],
 };
 
@@ -166,12 +173,20 @@ async fn run_matter(
 ) -> Result<(), esp_idf_matter::matter::error::Error> {
     log::info!("Matter: initializing stack...");
 
+    // Custom commissioning data — built at runtime (Spake2pVerifierPassword has a
+    // destructor, so it can't be a const). Fresh discriminator + passcode so Apple
+    // Home sees a brand-new device and rebuilds the accessory from scratch.
+    let dev_comm = BasicCommData {
+        password: 13572468_u32.to_le_bytes().into(),
+        discriminator: 2748, // 0xABC (was 3840)
+    };
+
     // Initialize the Matter stack (can only be done once)
     let stack = MATTER_STACK
         .uninit()
         .init_with(EspWifiMatterStack::init_default(
             &DAISPAN_DEV_DET,
-            TEST_DEV_COMM,
+            dev_comm,
             &TEST_DEV_ATT,
         ));
 
@@ -211,12 +226,8 @@ async fn run_matter(
         Dataver::new_rand(&mut weak_rand),
     );
 
-    // Fan handler on thermostat endpoint (endpoint 1)
-    let fan_ep1 = FanHandler::new(
-        state.clone(),
-        cmd_tx.clone(),
-        Dataver::new_rand(&mut weak_rand),
-    );
+    // Identify handler (endpoint 1 — mandatory cluster for the Thermostat device type)
+    let identify = IdentifyHandler::new(Dataver::new_rand(&mut weak_rand));
 
     // Fan handler on dedicated fan endpoint (endpoint 2)
     let fan_ep2 = FanHandler::new(
@@ -240,15 +251,15 @@ async fn run_matter(
     // specific (endpoint, cluster) pair.
 
     let handler = EmptyHandler
+        // Endpoint 1: Identify cluster (mandatory for Thermostat device type)
+        .chain(
+            EpClMatcher::new(Some(THERMOSTAT_ENDPOINT_ID), Some(CLUSTER_IDENTIFY)),
+            &identify,
+        )
         // Endpoint 1: Thermostat cluster (custom AsyncHandler)
         .chain(
             EpClMatcher::new(Some(THERMOSTAT_ENDPOINT_ID), Some(CLUSTER_THERMOSTAT)),
             &thermostat,
-        )
-        // Endpoint 1: Fan Control cluster (custom AsyncHandler)
-        .chain(
-            EpClMatcher::new(Some(THERMOSTAT_ENDPOINT_ID), Some(CLUSTER_FAN_CONTROL)),
-            &fan_ep1,
         )
         // Endpoint 1: Descriptor cluster
         .chain(
@@ -287,10 +298,28 @@ async fn run_matter(
         )
         .await?;
 
-    log::info!("Matter: starting stack with WiFi+BLE coexistence...");
+    // Commissioning mode is chip-specific:
+    // - C3 (concurrent / run_coex): only memory-viable mode there, but its BLE→WiFi
+    //   transition stalls commissioning (NoNetworkInterface) — a C3 dead end.
+    // - S3 (non-concurrent / run): ample RAM; commission over BLE, stop BLE, then
+    //   bring up WiFi for CASE — avoids the transition. esp-idf-matter #2 proven mode.
+    // Both rely on the backported netif #22 fix so the netif reports IPv6 and CASE
+    // can complete.
+    #[cfg(feature = "esp32c3")]
+    log::info!("Matter: starting stack with WiFi+BLE coexistence (concurrent)...");
+    #[cfg(feature = "esp32s3")]
+    log::info!("Matter: starting stack (non-concurrent: BLE first, then WiFi)...");
 
-    // Run the Matter stack
+    #[cfg(feature = "esp32c3")]
     let matter = pin!(stack.run_coex(
+        EspMatterWifi::new_with_builtin_mdns(modem, sysloop, timers, nvs, stack),
+        &persist,
+        &crypto,
+        (NODE, handler),
+        (), // No user future
+    ));
+    #[cfg(feature = "esp32s3")]
+    let matter = pin!(stack.run(
         EspMatterWifi::new_with_builtin_mdns(modem, sysloop, timers, nvs, stack),
         &persist,
         &crypto,

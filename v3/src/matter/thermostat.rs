@@ -39,6 +39,16 @@ const ATTR_MIN_HEAT_SETPOINT_LIMIT: AttrId = 0x0015;
 const ATTR_MAX_HEAT_SETPOINT_LIMIT: AttrId = 0x0016;
 const ATTR_MIN_COOL_SETPOINT_LIMIT: AttrId = 0x0017;
 const ATTR_MAX_COOL_SETPOINT_LIMIT: AttrId = 0x0018;
+// Absolute setpoint limits: Apple Home uses these to bound the slider; with only
+// the Min/Max limits present (no Abs limits) the slider can clamp to null/NaN.
+const ATTR_ABS_MIN_HEAT_SETPOINT_LIMIT: AttrId = 0x0003;
+const ATTR_ABS_MAX_HEAT_SETPOINT_LIMIT: AttrId = 0x0004;
+const ATTR_ABS_MIN_COOL_SETPOINT_LIMIT: AttrId = 0x0005;
+const ATTR_ABS_MAX_COOL_SETPOINT_LIMIT: AttrId = 0x0006;
+// Running mode/state (present in the known-working reference implementation).
+const ATTR_THERMOSTAT_RUNNING_MODE: AttrId = 0x001E;
+const ATTR_THERMOSTAT_RUNNING_STATE: AttrId = 0x0029;
+const ATTR_MIN_SETPOINT_DEAD_BAND: AttrId = 0x0019;
 
 // SystemMode values
 const SYSTEM_MODE_OFF: u8 = 0;
@@ -58,18 +68,23 @@ const MAX_TEMP: i16 = 3200;  // 32.0 C
 /// Minimal attributes needed for a basic Thermostat device.
 pub const THERMOSTAT_CLUSTER: Cluster<'static> = Cluster::new(
     CLUSTER_THERMOSTAT,
-    5, // revision
-    0x03, // feature map: Heating (0x01) | Cooling (0x02)
+    7, // revision (aligned with connectedhomeip thermostat.matter / working reference)
+    // DIAGNOSTIC: exact copy of the Apple-confirmed-rendering heat-only thermostat from
+    // home-assistant-matter-hub #497. feature 0x01 (Heating only), minimal attribute set,
+    // ControlSeq=HeatingOnly(2), SystemMode=Heat(4). If THIS renders in Apple Home then
+    // rs-matter CAN render a thermostat and our cool/auto combo was the trigger; if not,
+    // rs-matter's raw thermostat can't render in Apple at all. Cooling/RunningMode removed.
+    0x01,
     &[
-        Attribute::new(ATTR_LOCAL_TEMPERATURE, Access::RV, Quality::X),
-        Attribute::new(ATTR_OCCUPIED_COOLING_SETPOINT, Access::RWVM, Quality::SCENE),
-        Attribute::new(ATTR_OCCUPIED_HEATING_SETPOINT, Access::RWVM, Quality::SCENE),
-        Attribute::new(ATTR_SYSTEM_MODE, Access::RWVM, Quality::SCENE),
-        Attribute::new(ATTR_CONTROL_SEQUENCE, Access::RV, Quality::NONE),
-        Attribute::new(ATTR_MIN_HEAT_SETPOINT_LIMIT, Access::RV, Quality::NONE),
-        Attribute::new(ATTR_MAX_HEAT_SETPOINT_LIMIT, Access::RV, Quality::NONE),
-        Attribute::new(ATTR_MIN_COOL_SETPOINT_LIMIT, Access::RV, Quality::NONE),
-        Attribute::new(ATTR_MAX_COOL_SETPOINT_LIMIT, Access::RV, Quality::NONE),
+        Attribute::new(ATTR_LOCAL_TEMPERATURE, Access::RV, Quality::N),
+        Attribute::new(ATTR_OCCUPIED_HEATING_SETPOINT, Access::RA, Quality::N),
+        Attribute::new(ATTR_SYSTEM_MODE, Access::RA, Quality::N),
+        Attribute::new(ATTR_CONTROL_SEQUENCE, Access::RA, Quality::N),
+        Attribute::new(ATTR_THERMOSTAT_RUNNING_STATE, Access::RV, Quality::N),
+        Attribute::new(ATTR_ABS_MIN_HEAT_SETPOINT_LIMIT, Access::RV, Quality::N),
+        Attribute::new(ATTR_ABS_MAX_HEAT_SETPOINT_LIMIT, Access::RV, Quality::N),
+        Attribute::new(ATTR_MIN_HEAT_SETPOINT_LIMIT, Access::RA, Quality::N),
+        Attribute::new(ATTR_MAX_HEAT_SETPOINT_LIMIT, Access::RA, Quality::N),
     ],
     &[Command::new(CMD_SETPOINT_RAISE_LOWER, None, Access::WO)],
     |_, _, _| true,
@@ -98,9 +113,9 @@ impl ThermostatHandler {
             state,
             cmd_tx,
             dataver,
-            local_system_mode: Cell::new(SYSTEM_MODE_AUTO),
-            local_cooling_setpoint: Cell::new(2100), // 21.0C default
-            local_heating_setpoint: Cell::new(2100),
+            local_system_mode: Cell::new(SYSTEM_MODE_HEAT),
+            local_cooling_setpoint: Cell::new(2400), // 24.0C (matches working reference)
+            local_heating_setpoint: Cell::new(2200), // 22.0C (matches working reference)
         }
     }
 
@@ -127,8 +142,9 @@ impl ThermostatHandler {
         } else {
             match MatterMode::from_ac_mode(status.mode) {
                 MatterMode::Off => SYSTEM_MODE_OFF,
-                MatterMode::Auto => SYSTEM_MODE_AUTO,
-                MatterMode::Cool => SYSTEM_MODE_COOL,
+                // heat-only diagnostic (feature 0x01) → everything non-off maps to Heat.
+                MatterMode::Auto => SYSTEM_MODE_HEAT,
+                MatterMode::Cool => SYSTEM_MODE_HEAT,
                 MatterMode::Heat => SYSTEM_MODE_HEAT,
             }
         }
@@ -140,12 +156,15 @@ impl ThermostatHandler {
 
         match attr_id {
             ATTR_LOCAL_TEMPERATURE => {
-                // Matter uses Nullable<i16> in 0.01 degC
+                // Matter uses Nullable<i16> in 0.01 degC. Apple Home renders a
+                // blank / NaN gauge for a null LocalTemperature, so fall back to a
+                // sane default (20.0C) when there is no live reading yet (no AC
+                // connected / S21 poll failing) instead of reporting null. This
+                // matches the working reference, whose LocalTemperature is never null.
                 if status.valid {
                     reply.set(Self::to_matter_temp(status.current_temp))?;
                 } else {
-                    // Null = sensor not available
-                    reply.set(esp_idf_matter::matter::tlv::Nullable::<i16>::none())?;
+                    reply.set(2000i16)?; // 20.00 C placeholder until real data arrives
                 }
             }
             ATTR_OCCUPIED_COOLING_SETPOINT => {
@@ -170,12 +189,37 @@ impl ThermostatHandler {
                 }
             }
             ATTR_CONTROL_SEQUENCE => {
-                reply.set(CONTROL_SEQ_COOLING_AND_HEATING)?;
+                reply.set(2u8)?; // HeatingOnly (matches #497 heat-only diagnostic config)
             }
-            ATTR_MIN_HEAT_SETPOINT_LIMIT | ATTR_MIN_COOL_SETPOINT_LIMIT => {
+            ATTR_THERMOSTAT_RUNNING_MODE => {
+                // Actual running mode derived from power + room vs setpoint.
+                // Enum: 0=Off, 3=Cool, 4=Heat.
+                let mode: u8 = if !status.valid || !status.power {
+                    0
+                } else if status.current_temp < status.target_temp {
+                    SYSTEM_MODE_HEAT
+                } else {
+                    SYSTEM_MODE_COOL
+                };
+                reply.set(mode)?;
+            }
+            ATTR_THERMOSTAT_RUNNING_STATE => {
+                // RelayState bitmap16: bit0 = Heat on, bit1 = Cool on.
+                let running_state: u16 = if !status.valid || !status.power {
+                    0
+                } else if status.current_temp < status.target_temp {
+                    0x0001
+                } else {
+                    0x0002
+                };
+                reply.set(running_state)?;
+            }
+            ATTR_MIN_HEAT_SETPOINT_LIMIT | ATTR_MIN_COOL_SETPOINT_LIMIT
+            | ATTR_ABS_MIN_HEAT_SETPOINT_LIMIT | ATTR_ABS_MIN_COOL_SETPOINT_LIMIT => {
                 reply.set(MIN_TEMP)?;
             }
-            ATTR_MAX_HEAT_SETPOINT_LIMIT | ATTR_MAX_COOL_SETPOINT_LIMIT => {
+            ATTR_MAX_HEAT_SETPOINT_LIMIT | ATTR_MAX_COOL_SETPOINT_LIMIT
+            | ATTR_ABS_MAX_HEAT_SETPOINT_LIMIT | ATTR_ABS_MAX_COOL_SETPOINT_LIMIT => {
                 reply.set(MAX_TEMP)?;
             }
             _ => {

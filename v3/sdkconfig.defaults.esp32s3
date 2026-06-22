@@ -1,7 +1,67 @@
-# ESP32-S3 specific config
+# ESP32-S3 — self-contained config (selected via ESP_IDF_SDKCONFIG_DEFAULTS in
+# .cargo/config-s3.toml so the C3 base defaults are NOT mixed in). Mirrors the
+# C3 sdkconfig.defaults BLE/coexist/IPv6/WiFi config, with the S3 target.
 CONFIG_IDF_TARGET="esp32s3"
-CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# Partition table
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
-CONFIG_LWIP_MAX_SOCKETS=16
+
+# Bluetooth (required for Matter BLE commissioning)
+CONFIG_BT_ENABLED=y
+CONFIG_BT_BLUEDROID_ENABLED=y
+CONFIG_BT_BLE_ENABLED=y
+CONFIG_BT_CLASSIC_ENABLED=n
+CONFIG_BT_A2DP_ENABLE=n
+CONFIG_BT_BLE_42_FEATURES_SUPPORTED=y
+CONFIG_BT_BLE_50_FEATURES_SUPPORTED=n
+CONFIG_BT_BLE_DYNAMIC_ENV_MEMORY=y
+CONFIG_BT_BTC_TASK_STACK_SIZE=15000
+
+# WiFi/BLE coexistence
+CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y
+
+# WiFi softAP
 CONFIG_ESP_WIFI_SOFTAP_SUPPORT=y
+
+# WiFi
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=12
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=6
+
+# LWIP
+CONFIG_LWIP_MAX_SOCKETS=16
+
+# IPv6 SLAAC — routable ULA for Matter operational
+CONFIG_LWIP_IPV6=y
+CONFIG_LWIP_IPV6_AUTOCONFIG=y
+
+# mDNS
+CONFIG_MDNS_MAX_SERVICES=5
+
+# Flash size (S3 boards are often 8/16MB; 4MB matches partitions.csv and the
+# bootloader will use the first 4MB — bump if you repartition for more OTA room)
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# Log level
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# Make USB-Serial-JTAG the PRIMARY console. The default S3 sdkconfig leaves it
+# as only a SECONDARY console (primary = UART0); the secondary path stops
+# emitting once WiFi/BLE start, which is why all commissioning logs vanished
+# over USB. Primary USB-JTAG keeps logging through BLE commissioning.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# Coredump to flash: on a crash, write a full ELF coredump (backtrace + task
+# stacks + memory) to the dedicated `coredump` partition. S3's USB-Serial-JTAG
+# drops during BLE/crash so live serial can't capture the panic; instead the
+# device reboots and we read the coredump back from flash with esp-coredump.
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
+CONFIG_ESP_COREDUMP_STACK_SIZE=1024
+
+# FreeRTOS
+CONFIG_FREERTOS_HZ=1000
+CONFIG_FREERTOS_IDLE_TASK_STACKSIZE=4096
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
