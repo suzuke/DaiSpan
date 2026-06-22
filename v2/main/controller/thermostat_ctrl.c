@@ -387,9 +387,12 @@ static void controller_task(void *arg)
     TickType_t last_poll = xTaskGetTickCount();
 
     for (;;) {
-        /* Process queued commands (non-blocking peek with short timeout) */
+        /* Drain queued commands. The 1s timeout only sets how often we wake to
+         * check the poll schedule — a queued command wakes this task immediately
+         * (the queue is event-driven), so command latency is unaffected while
+         * idle wakeups drop from 10/s to 1/s. */
         ctrl_cmd_t cmd;
-        while (xQueueReceive(cmd_queue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+        while (xQueueReceive(cmd_queue, &cmd, pdMS_TO_TICKS(1000)) == pdTRUE) {
             process_command(&cmd);
         }
 

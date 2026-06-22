@@ -5,8 +5,14 @@
 #include <hap.h>
 #include <hap_apple_servs.h>
 #include <hap_apple_chars.h>
+#include <math.h>
 
 static const char *TAG = LOG_TAG_HK;
+
+/* CurrentTemperature hysteresis: skip the periodic HomeKit notify when the
+ * reading drifts less than this, so sub-0.2°C jitter doesn't push an update
+ * every 2s. Reads (thermostat_read) still return the live value. */
+#define CURRENT_TEMP_HYSTERESIS 0.2f
 
 /* Thermostat service characteristics */
 static hap_char_t *ch_current_state = NULL;
@@ -240,10 +246,19 @@ void hk_thermostat_sync(void)
         ch_current_temp, ch_current_state, ch_target_state,
         ch_target_temp, ch_fan_active, ch_fan_speed, ch_swing_on,
     };
+    static float last_pushed_temp = -1000.0f; /* force first push */
     hap_val_t val;
     for (int i = 0; i < (int)(sizeof(chars) / sizeof(chars[0])); i++) {
-        if (chars[i] && compute_char_val(chars[i], &val)) {
-            hap_char_update_val(chars[i], &val);
+        if (!chars[i] || !compute_char_val(chars[i], &val)) {
+            continue;
         }
+        /* Hysteresis: don't notify CurrentTemperature for sub-threshold drift. */
+        if (chars[i] == ch_current_temp) {
+            if (fabsf(val.f - last_pushed_temp) < CURRENT_TEMP_HYSTERESIS) {
+                continue;
+            }
+            last_pushed_temp = val.f;
+        }
+        hap_char_update_val(chars[i], &val);
     }
 }

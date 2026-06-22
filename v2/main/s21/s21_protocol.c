@@ -115,8 +115,14 @@ int s21_read_response(uint8_t *cmd0, uint8_t *cmd1, uint8_t *payload, size_t max
     TickType_t start = xTaskGetTickCount();
     TickType_t timeout = pdMS_TO_TICKS(500);
 
-    while (total < (int)sizeof(buf)) {
-        int len = uart_read_bytes(S21_UART_NUM, &buf[total], 1, pdMS_TO_TICKS(100));
+    /* Read in chunks (not one syscall per byte) and scan each chunk for ETX.
+     * The uart_flush_input() before each send already prevents stale/glued
+     * frames, so anything past ETX is unexpected and trimmed. This cuts the
+     * UART syscalls + task wakeups per response from ~8-10 down to 1-2. */
+    bool found_etx = false;
+    while (!found_etx && total < (int)sizeof(buf)) {
+        int len = uart_read_bytes(S21_UART_NUM, &buf[total],
+                                  (int)sizeof(buf) - total, pdMS_TO_TICKS(100));
         if (len <= 0) {
             if ((xTaskGetTickCount() - start) > timeout) {
                 ESP_LOGW(TAG, "Response timeout after %d bytes", total);
@@ -124,9 +130,14 @@ int s21_read_response(uint8_t *cmd0, uint8_t *cmd1, uint8_t *payload, size_t max
             }
             continue;
         }
-        total++;
-        if (buf[total - 1] == S21_FRAME_ETX) {
-            break;
+        int chunk_start = total;
+        total += len;
+        for (int i = chunk_start; i < total; i++) {
+            if (buf[i] == S21_FRAME_ETX) {
+                total = i + 1;  /* trim any bytes past ETX */
+                found_etx = true;
+                break;
+            }
         }
     }
 
