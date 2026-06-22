@@ -42,8 +42,16 @@ static uint32_t last_swing_set_ms = 0;
 static bool     last_user_swing_v = false;
 static bool     last_user_swing_h = false;
 
-/* HomeKit target mode (preserved across lossy AC mode conversions) */
-static uint8_t target_homekit_mode = HAP_MODE_AUTO;
+/* HomeKit target mode: controller-task-local working copy (local_homekit_mode)
+ * is published to cached_homekit_mode under status_mux together with
+ * cached_status, so HomeKit readers always see a matching power/mode pair. */
+static uint8_t local_homekit_mode = HAP_MODE_AUTO;
+static volatile uint8_t cached_homekit_mode = HAP_MODE_AUTO;
+
+/* Serializes the multi-field publish of cached_status + cached_homekit_mode
+ * against readers on the HomeKit / web tasks (a struct copy is several stores,
+ * not an atomic operation). */
+static portMUX_TYPE status_mux = portMUX_INITIALIZER_UNLOCKED;
 
 /* Dirty flags for commands pending S21 sync */
 static bool dirty_power = false;
@@ -52,7 +60,7 @@ static bool dirty_temp  = false;
 static bool dirty_fan   = false;
 static bool dirty_swing = false;
 
-#define CMD_QUEUE_SIZE         8
+#define CMD_QUEUE_SIZE         16
 #define POLL_INTERVAL_MS       6000
 #define ERROR_RECOVERY_MS      30000
 #define MAX_CONSECUTIVE_ERRORS 10
@@ -70,11 +78,13 @@ static bool is_recovering(void)
 /* Publish local_status to cached_status (read by HomeKit) */
 static void publish_status(void)
 {
-    /*
-     * On single-core ESP32-C3, struct copy is safe as long as readers
-     * tolerate slight inconsistency between individual fields.
-     */
+    /* Publish the full snapshot atomically w.r.t. readers: the struct copy is
+     * several stores, so a reader on another task could otherwise observe a
+     * half-updated mix of old and new fields. Critical section is ~20 bytes. */
+    taskENTER_CRITICAL(&status_mux);
     cached_status = local_status;
+    cached_homekit_mode = local_homekit_mode;
+    taskEXIT_CRITICAL(&status_mux);
 }
 
 static void handle_error(const char *op)
@@ -183,7 +193,7 @@ static void process_command(const ctrl_cmd_t *cmd)
         } else {
             uint8_t ac_mode  = homekit_to_ac_mode(hk_mode);
             local_status.mode = ac_mode;
-            target_homekit_mode = hk_mode;
+            local_homekit_mode = hk_mode;
             last_mode_set_ms    = xTaskGetTickCount() * portTICK_PERIOD_MS;
             last_user_mode      = ac_mode;
             dirty_mode = true;
@@ -254,7 +264,7 @@ static void process_command(const ctrl_cmd_t *cmd)
         local_status.mode = ac_mode;
         last_mode_set_ms  = xTaskGetTickCount() * portTICK_PERIOD_MS;
         last_user_mode    = ac_mode;
-        target_homekit_mode = ac_to_homekit_mode(ac_mode);
+        local_homekit_mode = ac_to_homekit_mode(ac_mode);
         dirty_mode = true;
         if (!local_status.power) {
             local_status.power = true;
@@ -269,6 +279,17 @@ static void process_command(const ctrl_cmd_t *cmd)
 
     default:
         break;
+    }
+}
+
+/* Drain and process any queued user commands without blocking. Called between
+ * the blocking S21 round-trips of a poll so a HomeKit tap or web command is not
+ * stuck waiting for the entire poll sequence (F1+RH+F5) to finish. */
+static void drain_commands(void)
+{
+    ctrl_cmd_t cmd;
+    while (xQueueReceive(cmd_queue, &cmd, 0) == pdTRUE) {
+        process_command(&cmd);
     }
 }
 
@@ -292,12 +313,12 @@ static void poll_status(void)
             local_status.mode = new_status.mode;
             /* Update HomeKit mode only for lossless conversions */
             switch (new_status.mode) {
-            case AC_MODE_HEAT:   target_homekit_mode = HAP_MODE_HEAT; break;
-            case AC_MODE_COOL:   target_homekit_mode = HAP_MODE_COOL; break;
+            case AC_MODE_HEAT:   local_homekit_mode = HAP_MODE_HEAT; break;
+            case AC_MODE_COOL:   local_homekit_mode = HAP_MODE_COOL; break;
             case AC_MODE_AUTO:
             case AC_MODE_AUTO_2:
-            case AC_MODE_AUTO_3: target_homekit_mode = HAP_MODE_AUTO; break;
-            /* DRY/FAN: preserve target_homekit_mode */
+            case AC_MODE_AUTO_3: local_homekit_mode = HAP_MODE_AUTO; break;
+            /* DRY/FAN: preserve local_homekit_mode */
             default: break;
             }
         }
@@ -319,6 +340,7 @@ static void poll_status(void)
 
     /* Query temperature (RH -> SH), only if status succeeded */
     if (any_success) {
+        drain_commands();  /* let a pending user command preempt the rest of the poll */
         float temp;
         if (s21_query_temperature(&temp)) {
             local_status.current_temp = temp;
@@ -330,6 +352,7 @@ static void poll_status(void)
 
     /* Query swing (F5 -> G5), less frequently, only if status ok */
     if (any_success) {
+        drain_commands();  /* and again before the swing round-trip */
         bool sv, sh;
         if (s21_query_swing(&sv, &sh)) {
             /* Swing protection period: keep user-set value until AC settles */
@@ -375,16 +398,17 @@ static void controller_task(void *arg)
         uint32_t last_poll_ms = last_poll * portTICK_PERIOD_MS;
 
         if (is_recovering()) {
-            /* In recovery: try to recover after interval */
+            /* In recovery: periodically attempt one full recovery cycle. Call
+             * the S21 ops directly instead of forcing consecutive_errors to
+             * MAX-1: a successful op clears the counter via reset_errors(), so
+             * is_healthy() never reports Healthy until something actually
+             * succeeds (the old MAX-1 hack briefly flipped health to true). */
             if (now_ms - last_successful_ms > ERROR_RECOVERY_MS) {
                 ESP_LOGI(TAG, "Attempting recovery...");
                 last_successful_ms = now_ms;  /* Reset timer regardless of outcome */
-                consecutive_errors = MAX_CONSECUTIVE_ERRORS - 1;  /* one chance */
                 sync_dirty_state();
-                if (!is_recovering()) {
-                    poll_status();
-                    last_poll = xTaskGetTickCount();
-                }
+                poll_status();
+                last_poll = xTaskGetTickCount();
             }
         } else if (now_ms - last_poll_ms >= POLL_INTERVAL_MS) {
             /* Normal polling: sync dirty state first, then poll */
@@ -480,7 +504,13 @@ bool thermostat_ctrl_get_power(void)
 
 uint8_t thermostat_ctrl_get_mode(void)
 {
-    return cached_status.power ? target_homekit_mode : HAP_MODE_OFF;
+    /* Snapshot power + mode together so a caller never pairs a fresh mode with a
+     * stale power (or vice-versa) across a concurrent publish. */
+    taskENTER_CRITICAL(&status_mux);
+    bool power      = cached_status.power;
+    uint8_t hk_mode = cached_homekit_mode;
+    taskEXIT_CRITICAL(&status_mux);
+    return power ? hk_mode : HAP_MODE_OFF;
 }
 
 uint8_t thermostat_ctrl_get_ac_mode(void)

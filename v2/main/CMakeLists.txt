@@ -9,6 +9,7 @@ idf_component_register(
         esp_wifi
         esp_http_server
         esp_event
+        esp_timer
         json
         app_update
         esp_hap_core

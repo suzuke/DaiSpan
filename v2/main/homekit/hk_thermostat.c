@@ -58,7 +58,12 @@ static int derive_current_state(void)
     uint8_t mode = thermostat_ctrl_get_mode();
     if (mode == HAP_MODE_HEAT) return 1;  /* HEATING */
     if (mode == HAP_MODE_COOL) return 2;  /* COOLING */
-    return 0;  /* IDLE for AUTO (simplified) */
+    /* AUTO (also DRY/FAN, which collapse to HAP_MODE_AUTO): the HAP current
+     * state has no AUTO value, so derive HEATING vs COOLING from room temp vs
+     * setpoint so the Home app shows activity while the unit runs in AUTO
+     * (was previously hard-coded to OFF, hiding all AUTO-mode activity). */
+    return (thermostat_ctrl_get_current_temp() < thermostat_ctrl_get_target_temp())
+        ? 1 /* HEATING */ : 2 /* COOLING */;
 }
 
 /* HAP write callback: HomeKit -> Controller (non-blocking) */
@@ -67,48 +72,65 @@ static int thermostat_write(hap_write_data_t write_data[], int count,
 {
     for (int i = 0; i < count; i++) {
         hap_write_data_t *w = &write_data[i];
+        bool ok;
 
         if (w->hc == ch_target_state) {
-            uint8_t mode = w->val.i;
-            ESP_LOGI(TAG, "HomeKit set mode: %d", mode);
-            thermostat_ctrl_set_mode(mode);
-            hap_char_update_val(w->hc, &w->val);
-            *(w->status) = HAP_STATUS_SUCCESS;
+            ESP_LOGI(TAG, "HomeKit set mode: %d", (int)w->val.i);
+            ok = thermostat_ctrl_set_mode(w->val.i);
         }
         else if (w->hc == ch_target_temp) {
-            float temp = w->val.f;
-            ESP_LOGI(TAG, "HomeKit set temp: %.1f", temp);
-            thermostat_ctrl_set_temperature(temp);
-            hap_char_update_val(w->hc, &w->val);
-            *(w->status) = HAP_STATUS_SUCCESS;
+            ESP_LOGI(TAG, "HomeKit set temp: %.1f", w->val.f);
+            ok = thermostat_ctrl_set_temperature(w->val.f);
         }
         else if (w->hc == ch_fan_active) {
-            bool on = (w->val.i == 1);
-            ESP_LOGI(TAG, "HomeKit set fan active: %d", on);
-            thermostat_ctrl_set_power(on);
-            hap_char_update_val(w->hc, &w->val);
-            *(w->status) = HAP_STATUS_SUCCESS;
+            ESP_LOGI(TAG, "HomeKit set fan active: %d", (int)w->val.i);
+            ok = thermostat_ctrl_set_power(w->val.i == 1);
         }
         else if (w->hc == ch_fan_speed) {
-            float pct = w->val.f;
-            uint8_t speed = percent_to_fan_speed(pct);
-            ESP_LOGI(TAG, "HomeKit set fan speed: %.0f%% -> %d", pct, speed);
-            thermostat_ctrl_set_fan_speed(speed);
-            hap_char_update_val(w->hc, &w->val);
-            *(w->status) = HAP_STATUS_SUCCESS;
+            uint8_t speed = percent_to_fan_speed(w->val.f);
+            ESP_LOGI(TAG, "HomeKit set fan speed: %.0f%% -> %d", w->val.f, speed);
+            ok = thermostat_ctrl_set_fan_speed(speed);
         }
         else if (w->hc == ch_swing_on) {
-            bool on = w->val.u;
-            ESP_LOGI(TAG, "HomeKit set swing: %d", on);
-            thermostat_ctrl_set_swing(SWING_VERTICAL, on);
-            hap_char_update_val(w->hc, &w->val);
-            *(w->status) = HAP_STATUS_SUCCESS;
+            ESP_LOGI(TAG, "HomeKit set swing: %d", (int)w->val.u);
+            ok = thermostat_ctrl_set_swing(SWING_VERTICAL, w->val.u);
         }
         else {
             *(w->status) = HAP_STATUS_RES_ABSENT;
+            continue;
+        }
+
+        if (ok) {
+            /* Reflect the requested value now; the controller reconciles it with
+             * the AC on the next sync. */
+            hap_char_update_val(w->hc, &w->val);
+            *(w->status) = HAP_STATUS_SUCCESS;
+        } else {
+            /* Command queue full or value rejected: report the failure instead
+             * of acking, so HomeKit does not display a value that never took
+             * effect (it reverts to the cached value on the next read). */
+            ESP_LOGW(TAG, "Command not accepted; reporting COMM_ERR");
+            *(w->status) = HAP_STATUS_COMM_ERR;
         }
     }
     return HAP_SUCCESS;
+}
+
+/* Compute the current HomeKit value for a managed characteristic from the
+ * controller cache. Returns false if hc is not one we own. Shared by the read
+ * callback and the periodic sync so the two lists can never drift apart (sync
+ * previously omitted the fan-speed characteristic). */
+static bool compute_char_val(hap_char_t *hc, hap_val_t *val)
+{
+    if (hc == ch_current_temp)       val->f = thermostat_ctrl_get_current_temp();
+    else if (hc == ch_target_temp)   val->f = thermostat_ctrl_get_target_temp();
+    else if (hc == ch_current_state) val->i = derive_current_state();
+    else if (hc == ch_target_state)  val->i = thermostat_ctrl_get_mode();
+    else if (hc == ch_fan_active)    val->i = thermostat_ctrl_get_power() ? 1 : 0;
+    else if (hc == ch_fan_speed)     val->f = fan_speed_to_percent(thermostat_ctrl_get_fan_speed());
+    else if (hc == ch_swing_on)      val->u = thermostat_ctrl_get_swing(SWING_VERTICAL);
+    else return false;
+    return true;
 }
 
 /* HAP read callback: Controller cache -> HomeKit (instant, never blocks) */
@@ -116,36 +138,9 @@ static int thermostat_read(hap_char_t *hc, hap_status_t *status,
                            void *serv_priv, void *read_priv)
 {
     hap_val_t val;
-
-    if (hc == ch_current_temp) {
-        val.f = thermostat_ctrl_get_current_temp();
+    if (compute_char_val(hc, &val)) {
         hap_char_update_val(hc, &val);
     }
-    else if (hc == ch_target_temp) {
-        val.f = thermostat_ctrl_get_target_temp();
-        hap_char_update_val(hc, &val);
-    }
-    else if (hc == ch_current_state) {
-        val.i = derive_current_state();
-        hap_char_update_val(hc, &val);
-    }
-    else if (hc == ch_target_state) {
-        val.i = thermostat_ctrl_get_mode();
-        hap_char_update_val(hc, &val);
-    }
-    else if (hc == ch_fan_active) {
-        val.i = thermostat_ctrl_get_power() ? 1 : 0;
-        hap_char_update_val(hc, &val);
-    }
-    else if (hc == ch_fan_speed) {
-        val.f = fan_speed_to_percent(thermostat_ctrl_get_fan_speed());
-        hap_char_update_val(hc, &val);
-    }
-    else if (hc == ch_swing_on) {
-        val.u = thermostat_ctrl_get_swing(SWING_VERTICAL);
-        hap_char_update_val(hc, &val);
-    }
-
     *status = HAP_STATUS_SUCCESS;
     return HAP_SUCCESS;
 }
@@ -238,35 +233,17 @@ hap_acc_t *hk_thermostat_create(void)
 
 void hk_thermostat_sync(void)
 {
+    /* Push every managed characteristic via the same value source as the read
+     * callback, so external changes (e.g. IR remote) are proactively notified.
+     * Includes ch_fan_speed, which the old hand-written list omitted. */
+    hap_char_t *chars[] = {
+        ch_current_temp, ch_current_state, ch_target_state,
+        ch_target_temp, ch_fan_active, ch_fan_speed, ch_swing_on,
+    };
     hap_val_t val;
-
-    if (ch_current_temp) {
-        val.f = thermostat_ctrl_get_current_temp();
-        hap_char_update_val(ch_current_temp, &val);
-    }
-
-    if (ch_current_state) {
-        val.i = derive_current_state();
-        hap_char_update_val(ch_current_state, &val);
-    }
-
-    if (ch_target_state) {
-        val.i = thermostat_ctrl_get_mode();
-        hap_char_update_val(ch_target_state, &val);
-    }
-
-    if (ch_target_temp) {
-        val.f = thermostat_ctrl_get_target_temp();
-        hap_char_update_val(ch_target_temp, &val);
-    }
-
-    if (ch_fan_active) {
-        val.i = thermostat_ctrl_get_power() ? 1 : 0;
-        hap_char_update_val(ch_fan_active, &val);
-    }
-
-    if (ch_swing_on) {
-        val.u = thermostat_ctrl_get_swing(SWING_VERTICAL);
-        hap_char_update_val(ch_swing_on, &val);
+    for (int i = 0; i < (int)(sizeof(chars) / sizeof(chars[0])); i++) {
+        if (chars[i] && compute_char_val(chars[i], &val)) {
+            hap_char_update_val(chars[i], &val);
+        }
     }
 }

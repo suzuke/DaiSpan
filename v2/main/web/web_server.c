@@ -7,15 +7,79 @@
 #include <esp_http_server.h>
 #include <esp_system.h>
 #include <esp_ota_ops.h>
+#include <esp_timer.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <ctype.h>
 
 static const char *TAG = LOG_TAG_WEB;
 static httpd_handle_t server = NULL;
 static bool server_ap_mode = false;
+
+/* Uptime from a 64-bit microsecond source so it never wraps at ~49.7 days like
+ * the raw 32-bit tick count would. */
+static uint32_t uptime_seconds(void)
+{
+    return (uint32_t)(esp_timer_get_time() / 1000000LL);
+}
+
+/* Constant-time string compare to avoid leaking the key via response timing. */
+static bool ct_equal(const char *a, const char *b)
+{
+    size_t la = strlen(a), lb = strlen(b);
+    size_t n = la > lb ? la : lb;
+    unsigned char diff = (unsigned char)(la ^ lb);
+    for (size_t i = 0; i < n; i++) {
+        char ca = i < la ? a[i] : 0;
+        char cb = i < lb ? b[i] : 0;
+        diff |= (unsigned char)(ca ^ cb);
+    }
+    return diff == 0;
+}
+
+/* Authorize a firmware/config-mutating request via the ?key=... query param,
+ * compared against the stored OTA key. A hostile LAN node must not be able to
+ * flash firmware or rewrite credentials. */
+static bool check_auth(httpd_req_t *req)
+{
+    char query[160];
+    char key[33] = {0};
+    char expected[33] = {0};
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK) return false;
+    if (httpd_query_key_value(query, "key", key, sizeof(key)) != ESP_OK) return false;
+    config_get_ota_key(expected, sizeof(expected));
+    return ct_equal(key, expected);
+}
+
+/* HTML-escape src into dst for safe interpolation into an attribute/body. */
+static void html_escape(char *dst, size_t dst_size, const char *src)
+{
+    size_t di = 0;
+    for (; *src; src++) {
+        const char *rep = NULL;
+        switch (*src) {
+        case '&':  rep = "&amp;";  break;
+        case '<':  rep = "&lt;";   break;
+        case '>':  rep = "&gt;";   break;
+        case '"':  rep = "&quot;"; break;
+        case '\'': rep = "&#39;";  break;
+        default: break;
+        }
+        if (rep) {
+            size_t rl = strlen(rep);
+            if (di + rl >= dst_size) break;
+            memcpy(dst + di, rep, rl);
+            di += rl;
+        } else {
+            if (di + 1 >= dst_size) break;
+            dst[di++] = *src;
+        }
+    }
+    dst[di] = '\0';
+}
 
 static esp_err_t handler_root_ap(httpd_req_t *req)
 {
@@ -36,7 +100,7 @@ static esp_err_t handler_root_ap(httpd_req_t *req)
 static esp_err_t handler_root(httpd_req_t *req)
 {
     char buf[3072];
-    uint32_t uptime = xTaskGetTickCount() * portTICK_PERIOD_MS / 1000;
+    uint32_t uptime = uptime_seconds();
     uint32_t hr = uptime / 3600;
     uint32_t min = (uptime % 3600) / 60;
     uint32_t sec = uptime % 60;
@@ -143,11 +207,16 @@ static esp_err_t handler_wifi(httpd_req_t *req)
         "button{width:100%%;padding:12px;background:#007aff;color:#fff;"
         "border:none;border-radius:6px;font-size:16px}</style></head>"
         "<body><h1>WiFi Config</h1>"
-        "<form method='POST' action='/wifi-save'>"
+        "<form id='f' method='POST' action='/wifi-save'>"
         "<label>SSID</label><input name='ssid' required>"
         "<label>Password</label><input name='password' type='password'>"
+        "<label>Auth Key (blank in setup mode)</label><input id='k' type='password'>"
         "<br><button type='submit'>Save &amp; Restart</button>"
-        "</form></body></html>";
+        "</form>"
+        "<script>document.getElementById('f').onsubmit=function(){"
+        "var k=document.getElementById('k').value;"
+        "if(k)this.action='/wifi-save?key='+encodeURIComponent(k)}</script>"
+        "</body></html>";
     httpd_resp_set_type(req, "text/html");
     return httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
 }
@@ -157,7 +226,7 @@ static void url_decode(char *dst, const char *src, size_t dst_size)
 {
     size_t di = 0;
     while (*src && di < dst_size - 1) {
-        if (*src == '%' && src[1] && src[2]) {
+        if (*src == '%' && isxdigit((unsigned char)src[1]) && isxdigit((unsigned char)src[2])) {
             char hex[3] = { src[1], src[2], 0 };
             dst[di++] = (char)strtol(hex, NULL, 16);
             src += 3;
@@ -173,6 +242,11 @@ static void url_decode(char *dst, const char *src, size_t dst_size)
 
 static esp_err_t handler_wifi_save(httpd_req_t *req)
 {
+    /* AP/setup mode has no key yet (first-time config), so only gate in STA. */
+    if (!server_ap_mode && !check_auth(req)) {
+        return httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Invalid auth key");
+    }
+
     char content[256];
     int len = httpd_req_recv(req, content, sizeof(content) - 1);
     if (len <= 0) {
@@ -234,7 +308,7 @@ static esp_err_t handler_api_health(httpd_req_t *req)
     int len = snprintf(buf, sizeof(buf),
         "{\"status\":\"ok\",\"freeHeap\":%lu,\"uptime\":%lu}",
         (unsigned long)esp_get_free_heap_size(),
-        (unsigned long)(xTaskGetTickCount() * portTICK_PERIOD_MS / 1000));
+        (unsigned long)uptime_seconds());
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, buf, len);
 }
@@ -260,7 +334,7 @@ static esp_err_t handler_api_metrics(httpd_req_t *req)
         "}",
         (unsigned long)esp_get_free_heap_size(),
         (unsigned long)esp_get_minimum_free_heap_size(),
-        (unsigned long)(xTaskGetTickCount() * portTICK_PERIOD_MS / 1000),
+        (unsigned long)uptime_seconds(),
         wifi_manager_get_rssi(),
         wifi_manager_get_ip(),
         thermostat_ctrl_get_power() ? "true" : "false",
@@ -289,10 +363,12 @@ static esp_err_t handler_ota_page(httpd_req_t *req)
         "</style></head><body><h1>OTA Update</h1>"
         "<form id='f' method='POST' action='/ota' enctype='multipart/form-data'>"
         "<input type='file' name='firmware' accept='.bin' required>"
+        "<input id='k' type='password' placeholder='Auth key' required>"
         "<br><button type='submit'>Upload</button>"
         "</form>"
         "<div id='progress'><p>Uploading... please wait</p></div>"
         "<script>document.getElementById('f').onsubmit=function(){"
+        "this.action='/ota?key='+encodeURIComponent(document.getElementById('k').value);"
         "document.getElementById('progress').style.display='block'}</script>"
         "</body></html>";
     httpd_resp_set_type(req, "text/html");
@@ -301,6 +377,10 @@ static esp_err_t handler_ota_page(httpd_req_t *req)
 
 static esp_err_t handler_ota_upload(httpd_req_t *req)
 {
+    if (!check_auth(req)) {
+        return httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Invalid auth key");
+    }
+
     esp_ota_handle_t ota_handle = 0;
     const esp_partition_t *update_partition = esp_ota_get_next_update_partition(NULL);
 
@@ -323,7 +403,9 @@ static esp_err_t handler_ota_upload(httpd_req_t *req)
     char buf[1024];
     int remaining = req->content_len;
     bool header_skipped = false;
+    int sep_match = 0;              /* progress matching "\r\n\r\n" across chunks */
     int total_written = 0;
+    static const char SEP[4] = { '\r', '\n', '\r', '\n' };
 
     while (remaining > 0) {
         int recv_len = httpd_req_recv(req, buf, sizeof(buf) < (size_t)remaining ? sizeof(buf) : (size_t)remaining);
@@ -337,36 +419,36 @@ static esp_err_t handler_ota_upload(httpd_req_t *req)
         char *data = buf;
         int data_len = recv_len;
 
-        /* Skip multipart header on first chunk (find \r\n\r\n boundary) */
+        /* Skip the multipart header, matching the \r\n\r\n separator with state
+         * carried across chunks so a separator split between two recv() calls is
+         * handled (the old single-buffer scan discarded the whole chunk and then
+         * every following chunk, breaking the upload). */
         if (!header_skipped) {
-            char *body = NULL;
-            for (int i = 0; i < recv_len - 3; i++) {
-                if (buf[i] == '\r' && buf[i+1] == '\n' && buf[i+2] == '\r' && buf[i+3] == '\n') {
-                    body = &buf[i + 4];
-                    break;
+            int i = 0;
+            for (; i < recv_len; i++) {
+                if (buf[i] == SEP[sep_match]) {
+                    if (++sep_match == 4) { i++; header_skipped = true; break; }
+                } else {
+                    sep_match = (buf[i] == '\r') ? 1 : 0;
                 }
             }
-            if (body) {
-                data = body;
-                data_len = recv_len - (int)(body - buf);
-                header_skipped = true;
-            } else {
-                remaining -= recv_len;
+            if (!header_skipped) {
+                remaining -= recv_len;  /* whole chunk was header; keep sep_match */
                 continue;
             }
+            data = &buf[i];
+            data_len = recv_len - i;
         }
 
-        /* Strip trailing multipart boundary if present at end */
-        /* (simplified: we rely on esp_ota_end to validate the image) */
-
-        err = esp_ota_write(ota_handle, data, data_len);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "OTA write failed: %s", esp_err_to_name(err));
-            esp_ota_abort(ota_handle);
-            return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Write failed");
+        if (data_len > 0) {
+            err = esp_ota_write(ota_handle, data, data_len);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "OTA write failed: %s", esp_err_to_name(err));
+                esp_ota_abort(ota_handle);
+                return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Write failed");
+            }
+            total_written += data_len;
         }
-
-        total_written += data_len;
         remaining -= recv_len;
     }
 
@@ -425,7 +507,14 @@ static esp_err_t handler_settings(httpd_req_t *req)
     config_get_hk_name(name, sizeof(name));
     config_get_hk_setup_code(code, sizeof(code));
 
-    char buf[1024];
+    /* Escape persisted values before reflecting them into HTML attributes; the
+     * device name is attacker-controllable via /settings-save (stored XSS). */
+    char name_esc[200] = {0};
+    char code_esc[80] = {0};
+    html_escape(name_esc, sizeof(name_esc), name);
+    html_escape(code_esc, sizeof(code_esc), code);
+
+    char buf[1536];
     int len = snprintf(buf, sizeof(buf),
         "<!DOCTYPE html><html><head><meta charset='UTF-8'>"
         "<title>Settings</title>"
@@ -437,16 +526,20 @@ static esp_err_t handler_settings(httpd_req_t *req)
         ".btn{display:inline-block;padding:10px 20px;background:#007aff;color:#fff;"
         "text-decoration:none;border-radius:6px}</style></head>"
         "<body><h1>Settings</h1>"
-        "<form method='POST' action='/settings-save'>"
+        "<form id='f' method='POST' action='/settings-save'>"
         "<label>Device Name</label>"
         "<input name='name' value='%s' maxlength='32' required>"
         "<label>HomeKit Pairing Code</label>"
         "<input name='code' value='%s' maxlength='10' placeholder='XXX-XX-XXX' required>"
+        "<label>Auth Key</label>"
+        "<input id='k' type='password' placeholder='Auth key' required>"
         "<button type='submit'>Save</button>"
         "</form>"
+        "<script>document.getElementById('f').onsubmit=function(){"
+        "this.action='/settings-save?key='+encodeURIComponent(document.getElementById('k').value)}</script>"
         "<a class='btn' href='/'>Back</a>"
         "</body></html>",
-        name, code
+        name_esc, code_esc
     );
 
     httpd_resp_set_type(req, "text/html");
@@ -524,6 +617,10 @@ static esp_err_t handler_control(httpd_req_t *req)
 
 static esp_err_t handler_settings_save(httpd_req_t *req)
 {
+    if (!check_auth(req)) {
+        return httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Invalid auth key");
+    }
+
     char content[256];
     int len = httpd_req_recv(req, content, sizeof(content) - 1);
     if (len <= 0) {
@@ -592,13 +689,13 @@ esp_err_t web_server_start(bool is_ap_mode)
     }
 
     if (is_ap_mode) {
-        /* AP mode: minimal routes for WiFi config only */
+        /* AP mode: minimal routes for WiFi config only. OTA is deliberately NOT
+         * exposed here - the setup AP uses a well-known password, so an
+         * unauthenticated flash endpoint on it would be trivially abusable. */
         const httpd_uri_t routes[] = {
             { .uri = "/",          .method = HTTP_GET,  .handler = handler_root_ap,        .user_ctx = NULL },
             { .uri = "/wifi",      .method = HTTP_GET,  .handler = handler_wifi,            .user_ctx = NULL },
             { .uri = "/wifi-save", .method = HTTP_POST, .handler = handler_wifi_save,       .user_ctx = NULL },
-            { .uri = "/ota",       .method = HTTP_GET,  .handler = handler_ota_page,        .user_ctx = NULL },
-            { .uri = "/ota",       .method = HTTP_POST, .handler = handler_ota_upload,      .user_ctx = NULL },
             { .uri = "/hotspot-detect.html",     .method = HTTP_GET, .handler = handler_hotspot_detect,   .user_ctx = NULL },
             { .uri = "/generate_204",            .method = HTTP_GET, .handler = handler_captive_redirect, .user_ctx = NULL },
             { .uri = "/connectivity-check.html", .method = HTTP_GET, .handler = handler_captive_redirect, .user_ctx = NULL },

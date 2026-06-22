@@ -8,6 +8,7 @@
 
 #include <hap.h>
 #include <esp_system.h>
+#include <esp_ota_ops.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
@@ -109,7 +110,11 @@ void app_main(void)
     esp_event_handler_register(HAP_EVENT, ESP_EVENT_ANY_ID,
                                 &hap_event_handler, NULL);
 
-    hap_start();
+    int hap_ret = hap_start();
+    if (hap_ret != HAP_SUCCESS) {
+        ESP_LOGE(TAG, "hap_start failed (%d); restarting", hap_ret);
+        esp_restart();
+    }
     ESP_LOGI(TAG, "HomeKit started: %s (code: %s)", device_name, setup_code);
 
     /* 6. Web server */
@@ -119,8 +124,30 @@ void app_main(void)
              (unsigned long)esp_get_free_heap_size());
 
     /* Main loop: sync HomeKit state periodically */
+    int healthy_ticks = 0;
+    bool ota_validated = false;
     while (1) {
         hk_thermostat_sync();
+
+        /* OTA rollback validation: once the system has stayed up and connected
+         * for a while, mark the running image valid so the bootloader stops
+         * holding a rollback. If a future bad OTA crashes before this point, the
+         * bootloader auto-reverts to the previous image. Not gated on S21, since
+         * a unit may legitimately be flashed with no AC attached. */
+        if (!ota_validated) {
+            healthy_ticks = wifi_manager_is_connected() ? healthy_ticks + 1 : 0;
+            if (healthy_ticks >= 5) {  /* ~10s stable */
+                const esp_partition_t *running = esp_ota_get_running_partition();
+                esp_ota_img_states_t state;
+                if (esp_ota_get_state_partition(running, &state) == ESP_OK &&
+                    state == ESP_OTA_IMG_PENDING_VERIFY) {
+                    esp_ota_mark_app_valid_cancel_rollback();
+                    ESP_LOGI(TAG, "OTA image marked valid");
+                }
+                ota_validated = true;
+            }
+        }
+
         vTaskDelay(pdMS_TO_TICKS(2000));
     }
 }

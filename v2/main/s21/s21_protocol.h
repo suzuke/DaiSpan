@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include "driver/uart.h"
 #include "common/types.h"
+#include "s21/s21_codec.h"  /* pure encode/decode helpers (host-testable) */
 
 #define S21_UART_NUM        UART_NUM_1
 #define S21_BAUD_RATE       2400
@@ -60,9 +61,4 @@ bool s21_set_swing(bool vertical, bool horizontal);
 /* Debug: get last raw G1 payload */
 int s21_get_last_g1_raw(uint8_t *out, size_t max_len);
 
-/* Encoding helpers */
-uint8_t s21_encode_target_temp(float temp);
-float s21_decode_target_temp(uint8_t encoded);
-int s21_decode_int_sensor(const uint8_t *payload);
-char s21_fan_speed_to_char(uint8_t fan_speed);
-uint8_t s21_char_to_fan_speed(char c);
+/* Pure encode/decode helpers are declared in s21_codec.h (included above). */

@@ -8,6 +8,7 @@
 #include "freertos/task.h"
 #include "lwip/sockets.h"
 #include "lwip/dns.h"
+#include "esp_timer.h"
 #include <string.h>
 
 static const char *TAG = LOG_TAG_WIFI;
@@ -15,12 +16,26 @@ static const char *TAG = LOG_TAG_WIFI;
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1
 #define MAX_RETRY          15
+#define RECONNECT_INTERVAL_US (30 * 1000 * 1000)  /* 30s slow reconnect after STA loss */
 
 static EventGroupHandle_t wifi_event_group;
 static int retry_count = 0;
 static bool connected = false;
 static bool ap_mode = false;
+static bool sta_init_done = false;          /* true once the initial connect succeeded */
+static esp_timer_handle_t reconnect_timer = NULL;
 static char ip_str[16] = "0.0.0.0";
+
+/* Slow periodic reconnect: fires only after STA was connected and later dropped
+ * (e.g. router reboot) so the device recovers on its own without a power-cycle. */
+static void reconnect_timer_cb(void *arg)
+{
+    (void)arg;
+    if (!ap_mode && !connected) {
+        ESP_LOGI(TAG, "Periodic STA reconnect attempt");
+        esp_wifi_connect();
+    }
+}
 
 static void event_handler(void *arg, esp_event_base_t event_base,
                            int32_t event_id, void *event_data)
@@ -38,9 +53,16 @@ static void event_handler(void *arg, esp_event_base_t event_base,
             retry_count++;
             ESP_LOGI(TAG, "Retry %d/%d", retry_count, MAX_RETRY);
             esp_wifi_connect();
-        } else {
+        } else if (!sta_init_done) {
+            /* Initial connect window exhausted: signal failure so init falls
+             * back to AP config mode. */
             xEventGroupSetBits(wifi_event_group, WIFI_FAIL_BIT);
-            ESP_LOGE(TAG, "Connection failed after %d retries", MAX_RETRY);
+            ESP_LOGE(TAG, "Initial connection failed after %d retries", MAX_RETRY);
+        } else if (reconnect_timer && !esp_timer_is_active(reconnect_timer)) {
+            /* Was connected before (router reboot, AP moved): keep retrying on a
+             * slow timer forever instead of giving up until a manual power-cycle. */
+            ESP_LOGW(TAG, "STA connection lost; starting periodic reconnect");
+            esp_timer_start_periodic(reconnect_timer, RECONNECT_INTERVAL_US);
         }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
@@ -48,6 +70,9 @@ static void event_handler(void *arg, esp_event_base_t event_base,
         ESP_LOGI(TAG, "Connected: %s", ip_str);
         retry_count = 0;
         connected = true;
+        if (reconnect_timer && esp_timer_is_active(reconnect_timer)) {
+            esp_timer_stop(reconnect_timer);  /* recovered: stop slow reconnect */
+        }
         xEventGroupSetBits(wifi_event_group, WIFI_CONNECTED_BIT);
     }
 }
@@ -90,6 +115,10 @@ static void dns_server_task(void *arg)
         int len = recvfrom(sock, buf, sizeof(buf), 0,
                            (struct sockaddr *)&client_addr, &addr_len);
         if (len < 12) continue;
+        /* The response is the copied query (len bytes) plus a fixed 16-byte
+         * answer record; reject oversized queries so the append below cannot
+         * overflow resp[] (no stack canary is configured). */
+        if (len > (int)sizeof(buf) - 16) continue;
 
         /* Build DNS response: copy query, set response flags, add answer */
         uint8_t resp[512];
@@ -192,8 +221,17 @@ esp_err_t wifi_manager_init(void)
     config_get_wifi_password(pass, sizeof(pass));
 
     wifi_config_t sta_config = {0};
-    strncpy((char *)sta_config.sta.ssid, ssid, sizeof(sta_config.sta.ssid));
-    strncpy((char *)sta_config.sta.password, pass, sizeof(sta_config.sta.password));
+    /* strlcpy guarantees NUL-termination even for a max-length credential
+     * (strncpy would leave a 64-char password unterminated). */
+    strlcpy((char *)sta_config.sta.ssid, ssid, sizeof(sta_config.sta.ssid));
+    strlcpy((char *)sta_config.sta.password, pass, sizeof(sta_config.sta.password));
+
+    /* Create the slow reconnect timer used if STA drops after connecting. */
+    esp_timer_create_args_t reconnect_args = {
+        .callback = reconnect_timer_cb,
+        .name = "wifi_reconnect",
+    };
+    esp_timer_create(&reconnect_args, &reconnect_timer);
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_config));
@@ -214,6 +252,7 @@ esp_err_t wifi_manager_init(void)
         pdFALSE, pdFALSE, pdMS_TO_TICKS(60000));
 
     if (bits & WIFI_CONNECTED_BIT) {
+        sta_init_done = true;  /* enable periodic auto-reconnect on future drops */
         ESP_LOGI(TAG, "WiFi connected");
         return ESP_OK;
     }

@@ -93,3 +93,18 @@ esp_err_t config_set_hk_name(const char *name)
 {
     return nvs_set("hk_name", name);
 }
+
+esp_err_t config_get_ota_key(char *buf, size_t len)
+{
+    esp_err_t err = nvs_get("ota_key", buf, len);
+    if (err != ESP_OK) {
+        strncpy(buf, "12345678", len);
+        buf[len - 1] = '\0';
+    }
+    return ESP_OK;
+}
+
+esp_err_t config_set_ota_key(const char *key)
+{
+    return nvs_set("ota_key", key);
+}

@@ -17,3 +17,7 @@ esp_err_t config_get_hk_setup_code(char *buf, size_t len);  /* default "111-22-3
 esp_err_t config_set_hk_setup_code(const char *code);
 esp_err_t config_get_hk_name(char *buf, size_t len);        /* default "DaiSpan" */
 esp_err_t config_set_hk_name(const char *name);
+
+/* Auth key gating firmware/config-mutating web endpoints (default "12345678") */
+esp_err_t config_get_ota_key(char *buf, size_t len);
+esp_err_t config_set_ota_key(const char *key);

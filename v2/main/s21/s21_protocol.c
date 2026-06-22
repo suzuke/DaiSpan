@@ -46,20 +46,20 @@ esp_err_t s21_init(void)
     return ESP_OK;
 }
 
-static uint8_t s21_checksum(const uint8_t *data, size_t len)
-{
-    uint8_t sum = 0;
-    for (size_t i = 0; i < len; i++) {
-        sum += data[i];
-    }
-    return sum;
-}
-
 bool s21_send_command(char cmd0, char cmd1, const uint8_t *payload, size_t payload_len)
 {
     /* Build frame: STX + cmd0 + cmd1 + payload + checksum + ETX */
     uint8_t frame[32];
     size_t idx = 0;
+
+    /* Frame overhead is 5 bytes (STX, cmd0, cmd1, checksum, ETX); guard the
+     * payload memcpy so a future caller with a large payload cannot overrun
+     * the stack frame buffer. */
+    if (payload_len > sizeof(frame) - 5) {
+        ESP_LOGE(TAG, "Payload too large for %c%c: %zu (max %zu)",
+                 cmd0, cmd1, payload_len, sizeof(frame) - 5);
+        return false;
+    }
 
     frame[idx++] = S21_FRAME_STX;
     frame[idx++] = (uint8_t)cmd0;
@@ -162,60 +162,6 @@ int s21_read_response(uint8_t *cmd0, uint8_t *cmd1, uint8_t *payload, size_t max
     return (int)plen;
 }
 
-/* Encoding helpers */
-
-uint8_t s21_encode_target_temp(float temp)
-{
-    /* S21: temperature = (encoded - '@') * 0.5 + 18 */
-    /* So encoded = (temp - 18) * 2 + '@' */
-    int offset = (int)((temp - 18.0f) * 2.0f + 0.5f);
-    return (uint8_t)('@' + offset);
-}
-
-float s21_decode_target_temp(uint8_t encoded)
-{
-    return 18.0f + (float)(encoded - '@') * 0.5f;
-}
-
-int s21_decode_int_sensor(const uint8_t *payload)
-{
-    /* payload[0..2] = ASCII digits (little-endian: ones, tens, hundreds)
-     * payload[3] = '+' or '-' */
-    int val = (payload[0] - '0') + (payload[1] - '0') * 10 + (payload[2] - '0') * 100;
-    if (payload[3] == '-') {
-        val = -val;
-    }
-    return val;
-}
-
-char s21_fan_speed_to_char(uint8_t fan_speed)
-{
-    switch (fan_speed) {
-        case AC_FAN_AUTO:  return 'A';
-        case AC_FAN_QUIET: return 'B';
-        case AC_FAN_1:     return '3';
-        case AC_FAN_2:     return '4';
-        case AC_FAN_3:     return '5';
-        case AC_FAN_4:     return '6';
-        case AC_FAN_5:     return '7';
-        default:           return 'A';
-    }
-}
-
-uint8_t s21_char_to_fan_speed(char c)
-{
-    switch (c) {
-        case 'A': return AC_FAN_AUTO;
-        case 'B': return AC_FAN_QUIET;
-        case '3': return AC_FAN_1;
-        case '4': return AC_FAN_2;
-        case '5': return AC_FAN_3;
-        case '6': return AC_FAN_4;
-        case '7': return AC_FAN_5;
-        default:  return AC_FAN_AUTO;
-    }
-}
-
 /* High-level operations */
 
 bool s21_set_power_and_mode(bool power, uint8_t mode, float temp, uint8_t fan_speed)
@@ -254,6 +200,15 @@ bool s21_query_status(ac_status_t *status)
     ESP_LOGD(TAG, "G1 raw: [0x%02X 0x%02X 0x%02X 0x%02X] '%c%c%c%c' len=%d",
              payload[0], payload[1], payload[2], payload[3],
              payload[0], payload[1], payload[2], payload[3], len);
+
+    /* Validate power/mode are in the expected ASCII range before decoding, so a
+     * corrupt-but-checksum-passing frame is not cached and later re-encoded as a
+     * garbage mode byte back to the AC (unlike RH/SH, G1 was previously trusted). */
+    if ((payload[0] != '0' && payload[0] != '1') ||
+        payload[1] < '0' || payload[1] > '9') {
+        ESP_LOGW(TAG, "Invalid G1 power/mode: 0x%02X 0x%02X", payload[0], payload[1]);
+        return false;
+    }
 
     /* Store raw for debug API */
     memcpy(last_g1_raw, payload, len < 8 ? len : 8);
