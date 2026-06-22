@@ -1,8 +1,18 @@
-# DaiSpan V3 架構測試完整報告
+# DaiSpan 舊版 C++ 事件驅動架構測試報告（歷史歸檔）
+
+> ⚠️ **歷史歸檔文件 — 請勿與 Rust v3 混淆。**
+>
+> 本報告（2025-07）描述的是一個**舊的 C++「V3 事件驅動架構」實驗**，建構在 **v1（Arduino / C++17 / HomeKit）之上**——使用 `EventSystemSimple`、`Result<T>`、`ServiceContainer`、`ThermostatDomain` 等，協議仍是 **HomeKit**。它**與 `v3/` 目錄的 Rust + Matter 重寫毫無關係**，當初只是沿用了「V3」這個名字。
+>
+> 本文中的所有效能數字（如「響應提升 40-56%」、記憶體對比、flash 91.9%）僅屬於這個 C++ 實驗，**不可套用到 Rust v3**。
+>
+> 當前真正的 **v3 = Rust 2021 + ESP-IDF + Matter（rs-matter，非 HomeKit）**，位於 `v3/` 目錄（分支 `v3/rust-matter-rewrite`）；設計文件見 `docs/plans/2026-03-06-v3-rust-matter-rewrite-design.md`。
+>
+> （此檔原名 `V3_ARCHITECTURE_TEST_REPORT.md`，已重命名以消除混淆。）
 
 ## 項目概述
 
-**項目名稱**: DaiSpan V3 事件驅動架構整合  
+**項目名稱**: DaiSpan 舊版 C++ 事件驅動架構整合（建於 v1 之上，非 Rust v3）  
 **測試日期**: 2025-07-14  
 **測試環境**: ESP32-C3, Daikin 空調 S21 協議  
 **韌體版本**: v3.0-OTA-FINAL  

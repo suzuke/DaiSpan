@@ -4,10 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-DaiSpan is an ESP32-based HomeKit smart thermostat that controls Daikin air conditioners via the S21 serial protocol. Two versions exist:
+DaiSpan is an ESP32-based smart thermostat that controls Daikin air conditioners via the S21 serial protocol. Three versions exist:
 
-- **v1** (root): PlatformIO + Arduino + C++17 + HomeSpan library
-- **v2** (`v2/`): ESP-IDF + esp-homekit-sdk + FreeRTOS (C, recommended for new development)
+- **v1** (root `src/`, `include/`): PlatformIO + Arduino + C++17 + HomeSpan, **HomeKit**. Most feature-complete, production-stable.
+- **v2** (`v2/`): ESP-IDF + esp-homekit-sdk + FreeRTOS (C), **HomeKit**. Leanest; recommended for HomeKit-only work.
+- **v3** (`v3/`, only on branch `v3/rust-matter-rewrite`): Rust 2021 + ESP-IDF + **Matter** (rs-matter, not HomeKit). Cross-ecosystem (Apple/Google/Amazon); newest direction. Design: `docs/plans/2026-03-06-v3-rust-matter-rewrite-design.md`.
+
+> ⚠️ Naming caveat: `LEGACY-cpp-event-architecture-report.md` (formerly `V3_ARCHITECTURE_TEST_REPORT.md`) is an OLD C++ event-driven experiment built on v1 (still HomeKit) — it is **unrelated** to the Rust+Matter v3 above. Don't apply its perf numbers to v3.
 
 ## Build and Deploy
 
@@ -120,21 +123,32 @@ ESP32-C3 has tight limits (~2MB flash, ~327KB RAM). Flash usage is ~80%, RAM ~47
 
 ## Web Interface and Debugging
 
-- Web config UI: `http://device-ip:8080`
-- Remote debug dashboard: `http://device-ip:8080/debug`
-- WebSocket real-time logs: `ws://device-ip:8081`
-- API endpoints: `/api/health`, `/api/metrics`, `/api/memory/stats`
+**v1** (port 8080): config UI at `/`, remote debug dashboard at `/debug`,
+WebSocket real-time logs at `ws://device-ip:8081`, API `/api/health`,
+`/api/metrics`, `/api/memory/stats`.
+
+**v2** (port 8080 in STA, port 80 in AP/setup): control panel at `/`, plus
+`/control`, `/wifi`, `/wifi-save`, `/settings`, `/settings-save`, `/ota`,
+`/api/health`, `/api/metrics`, `/api/debug`. v2 has **no** `/debug` dashboard,
+**no** WebSocket, and **no** `/api/memory/stats`. Firmware/config-mutating
+endpoints (`/ota`, and `/settings-save` / `/wifi-save` in STA mode) require an
+auth key (`?key=...`, default `12345678`, stored in NVS); `/ota` is registered
+in STA mode only.
 
 ## Testing
 
-No unit test framework — testing is done via:
-- Simulation mode (mock controller) through web interface
+**v1**: no unit test framework. Testing is done via:
+- Simulation mode (mock controller) through the web interface (v1 only — v2 has no mock)
 - Serial monitor (`pio device monitor`)
 - Python scripts in `scripts/` for device health checks and stability tests:
   ```bash
   python3 scripts/quick_check.py [device_ip]
   python3 scripts/long_term_test.py 192.168.4.1 24 5
   ```
+
+**v2**: host-compiled unit tests for the pure S21 codec live in `v2/tests/`
+(`cd v2/tests && make`, no ESP-IDF toolchain needed). On-device testing via
+`idf.py monitor` and the web `/api/metrics` / `/api/debug` endpoints.
 
 ## Configuration
 
