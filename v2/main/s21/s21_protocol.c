@@ -51,11 +51,18 @@ static uint8_t s21_checksum(const uint8_t *data, size_t len)
     return sum;
 }
 
-bool s21_send_command(char cmd0, char cmd1, const uint8_t *payload, size_t payload_len)
+static bool s21_send_command(char cmd0, char cmd1, const uint8_t *payload,
+                             size_t payload_len)
 {
     /* Build frame: STX + cmd0 + cmd1 + payload + checksum + ETX */
     uint8_t frame[32];
     size_t idx = 0;
+
+    if (payload_len > sizeof(frame) - 5 || (payload_len > 0 && !payload)) {
+        ESP_LOGE(TAG, "Invalid payload length for %c%c: %zu", cmd0, cmd1,
+                 payload_len);
+        return false;
+    }
 
     frame[idx++] = S21_FRAME_STX;
     frame[idx++] = (uint8_t)cmd0;
@@ -102,8 +109,13 @@ bool s21_send_command(char cmd0, char cmd1, const uint8_t *payload, size_t paylo
     return true;
 }
 
-int s21_read_response(uint8_t *cmd0, uint8_t *cmd1, uint8_t *payload, size_t max_payload_len)
+static int s21_read_response(uint8_t *cmd0, uint8_t *cmd1, uint8_t *payload,
+                             size_t max_payload_len)
 {
+    if (!cmd0 || !cmd1 || (max_payload_len > 0 && !payload)) {
+        return -1;
+    }
+
     uint8_t buf[64];
     int total = 0;
 
@@ -160,7 +172,7 @@ int s21_read_response(uint8_t *cmd0, uint8_t *cmd1, uint8_t *payload, size_t max
 
 /* Encoding helpers */
 
-uint8_t s21_encode_target_temp(float temp)
+static uint8_t s21_encode_target_temp(float temp)
 {
     /* S21: temperature = (encoded - '@') * 0.5 + 18 */
     /* So encoded = (temp - 18) * 2 + '@' */
@@ -168,12 +180,12 @@ uint8_t s21_encode_target_temp(float temp)
     return (uint8_t)('@' + offset);
 }
 
-float s21_decode_target_temp(uint8_t encoded)
+static float s21_decode_target_temp(uint8_t encoded)
 {
     return 18.0f + (float)(encoded - '@') * 0.5f;
 }
 
-int s21_decode_int_sensor(const uint8_t *payload)
+static int s21_decode_int_sensor(const uint8_t *payload)
 {
     /* payload[0..2] = ASCII digits, payload[3] = '+' or '-' */
     int val = (payload[0] - '0') * 100 + (payload[1] - '0') * 10 + (payload[2] - '0');
@@ -183,7 +195,7 @@ int s21_decode_int_sensor(const uint8_t *payload)
     return val;
 }
 
-char s21_fan_speed_to_char(uint8_t fan_speed)
+static char s21_fan_speed_to_char(uint8_t fan_speed)
 {
     switch (fan_speed) {
         case AC_FAN_AUTO:  return 'A';
@@ -197,7 +209,7 @@ char s21_fan_speed_to_char(uint8_t fan_speed)
     }
 }
 
-uint8_t s21_char_to_fan_speed(char c)
+static uint8_t s21_char_to_fan_speed(char c)
 {
     switch (c) {
         case 'A': return AC_FAN_AUTO;
@@ -234,11 +246,14 @@ bool s21_set_power_and_mode(bool power, uint8_t mode, float temp, uint8_t fan_sp
 
 bool s21_query_status(ac_status_t *status)
 {
+    if (!status) {
+        return false;
+    }
     if (!s21_send_command('F', '1', NULL, 0)) {
         return false;
     }
 
-    uint8_t cmd0, cmd1, payload[8];
+    uint8_t cmd0 = 0, cmd1 = 0, payload[8] = {0};
     int len = s21_read_response(&cmd0, &cmd1, payload, sizeof(payload));
 
     if (len < 4 || cmd0 != 'G' || cmd1 != '1') {
@@ -246,9 +261,24 @@ bool s21_query_status(ac_status_t *status)
         return false;
     }
 
+    if ((payload[0] != '0' && payload[0] != '1') ||
+        (payload[1] != '0' && payload[1] != '1' &&
+         payload[1] != '2' && payload[1] != '3' &&
+         payload[1] != '6' && payload[1] != '7') ||
+        (payload[3] != 'A' && payload[3] != 'B' &&
+         (payload[3] < '3' || payload[3] > '7'))) {
+        ESP_LOGW(TAG, "Status response contains invalid values");
+        return false;
+    }
+
+    float target_temp = s21_decode_target_temp(payload[2]);
+    if (target_temp < 16.0f || target_temp > 30.0f) {
+        return false;
+    }
+
     status->power = (payload[0] == '1');
     status->mode = payload[1] - '0';
-    status->target_temp = s21_decode_target_temp(payload[2]);
+    status->target_temp = target_temp;
     status->fan_speed = s21_char_to_fan_speed(payload[3]);
     status->valid = true;
 
@@ -259,11 +289,14 @@ bool s21_query_status(ac_status_t *status)
 
 bool s21_query_temperature(float *temperature)
 {
+    if (!temperature) {
+        return false;
+    }
     if (!s21_send_command('R', 'H', NULL, 0)) {
         return false;
     }
 
-    uint8_t cmd0, cmd1, payload[8];
+    uint8_t cmd0 = 0, cmd1 = 0, payload[8] = {0};
     int len = s21_read_response(&cmd0, &cmd1, payload, sizeof(payload));
 
     if (len < 4 || cmd0 != 'S' || cmd1 != 'H') {
@@ -293,11 +326,14 @@ bool s21_query_temperature(float *temperature)
 
 bool s21_query_swing(bool *vertical, bool *horizontal)
 {
+    if (!vertical || !horizontal) {
+        return false;
+    }
     if (!s21_send_command('F', '5', NULL, 0)) {
         return false;
     }
 
-    uint8_t cmd0, cmd1, payload[8];
+    uint8_t cmd0 = 0, cmd1 = 0, payload[8] = {0};
     int len = s21_read_response(&cmd0, &cmd1, payload, sizeof(payload));
 
     if (len < 2 || cmd0 != 'G' || cmd1 != '5') {

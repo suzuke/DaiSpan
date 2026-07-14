@@ -21,18 +21,6 @@
 esp_err_t s21_init(void);
 
 /**
- * Send a command and wait for ACK.
- * Returns true on ACK received.
- */
-bool s21_send_command(char cmd0, char cmd1, const uint8_t *payload, size_t payload_len);
-
-/**
- * Read response after command. Fills cmd0/cmd1 and payload buffer.
- * Returns payload length, or -1 on error.
- */
-int s21_read_response(uint8_t *cmd0, uint8_t *cmd1, uint8_t *payload, size_t max_payload_len);
-
-/**
  * High-level: query device status (F1 -> G1).
  */
 bool s21_query_status(ac_status_t *status);
@@ -56,10 +44,3 @@ bool s21_query_swing(bool *vertical, bool *horizontal);
  * High-level: set swing (D5 command).
  */
 bool s21_set_swing(bool vertical, bool horizontal);
-
-/* Encoding helpers */
-uint8_t s21_encode_target_temp(float temp);
-float s21_decode_target_temp(uint8_t encoded);
-int s21_decode_int_sensor(const uint8_t *payload);
-char s21_fan_speed_to_char(uint8_t fan_speed);
-uint8_t s21_char_to_fan_speed(char c);

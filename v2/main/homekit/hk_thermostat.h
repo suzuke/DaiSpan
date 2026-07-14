@@ -5,7 +5,7 @@
  * Create and register the thermostat accessory with HAP.
  * Returns the accessory handle, or NULL on failure.
  */
-hap_acc_t *hk_thermostat_create(void);
+hap_acc_t *hk_thermostat_create(char *device_name);
 
 /**
  * Called periodically from the main loop to sync HomeKit state

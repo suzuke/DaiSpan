@@ -5,6 +5,7 @@
 #include <hap.h>
 #include <hap_apple_servs.h>
 #include <hap_apple_chars.h>
+#include <math.h>
 
 static const char *TAG = LOG_TAG_HK;
 
@@ -50,15 +51,27 @@ static uint8_t percent_to_fan_speed(float pct)
  * Derive current heating/cooling state from power and mode.
  * HAP values: 0=OFF, 1=HEATING, 2=COOLING
  */
-static int derive_current_state(void)
+static int derive_current_state(const thermostat_snapshot_t *snapshot)
 {
-    if (!thermostat_ctrl_get_power()) {
+    const ac_status_t *status = snapshot->observed.valid
+        ? &snapshot->observed : &snapshot->desired;
+    if (!status->power) {
         return 0;  /* OFF */
     }
-    uint8_t mode = thermostat_ctrl_get_mode();
+    uint8_t mode = ac_to_homekit_mode(status->mode);
     if (mode == HAP_MODE_HEAT) return 1;  /* HEATING */
     if (mode == HAP_MODE_COOL) return 2;  /* COOLING */
     return 0;  /* IDLE for AUTO (simplified) */
+}
+
+static void finish_write(hap_write_data_t *write, bool accepted)
+{
+    if (accepted) {
+        hap_char_update_val(write->hc, &write->val);
+        *(write->status) = HAP_STATUS_SUCCESS;
+    } else {
+        *(write->status) = HAP_STATUS_RES_BUSY;
+    }
 }
 
 /* HAP write callback: HomeKit -> Controller (non-blocking) */
@@ -71,38 +84,45 @@ static int thermostat_write(hap_write_data_t write_data[], int count,
         if (w->hc == ch_target_state) {
             uint8_t mode = w->val.i;
             ESP_LOGI(TAG, "HomeKit set mode: %d", mode);
-            thermostat_ctrl_set_mode(mode);
-            hap_char_update_val(w->hc, &w->val);
-            *(w->status) = HAP_STATUS_SUCCESS;
+            if (mode > HAP_MODE_AUTO) {
+                *(w->status) = HAP_STATUS_VAL_INVALID;
+            } else {
+                finish_write(w, thermostat_ctrl_set_mode(mode));
+            }
         }
         else if (w->hc == ch_target_temp) {
             float temp = w->val.f;
             ESP_LOGI(TAG, "HomeKit set temp: %.1f", temp);
-            thermostat_ctrl_set_temperature(temp);
-            hap_char_update_val(w->hc, &w->val);
-            *(w->status) = HAP_STATUS_SUCCESS;
+            if (!isfinite(temp) || temp < 16.0f || temp > 30.0f) {
+                *(w->status) = HAP_STATUS_VAL_INVALID;
+            } else {
+                finish_write(w, thermostat_ctrl_set_temperature(temp));
+            }
         }
         else if (w->hc == ch_fan_active) {
+            if (w->val.i < 0 || w->val.i > 1) {
+                *(w->status) = HAP_STATUS_VAL_INVALID;
+                continue;
+            }
             bool on = (w->val.i == 1);
             ESP_LOGI(TAG, "HomeKit set fan active: %d", on);
-            thermostat_ctrl_set_power(on);
-            hap_char_update_val(w->hc, &w->val);
-            *(w->status) = HAP_STATUS_SUCCESS;
+            finish_write(w, thermostat_ctrl_set_power(on));
         }
         else if (w->hc == ch_fan_speed) {
             float pct = w->val.f;
+            if (!isfinite(pct) || pct < 0.0f || pct > 100.0f) {
+                *(w->status) = HAP_STATUS_VAL_INVALID;
+                continue;
+            }
             uint8_t speed = percent_to_fan_speed(pct);
             ESP_LOGI(TAG, "HomeKit set fan speed: %.0f%% -> %d", pct, speed);
-            thermostat_ctrl_set_fan_speed(speed);
-            hap_char_update_val(w->hc, &w->val);
-            *(w->status) = HAP_STATUS_SUCCESS;
+            finish_write(w, thermostat_ctrl_set_fan_speed(speed));
         }
         else if (w->hc == ch_swing_on) {
             bool on = w->val.u;
             ESP_LOGI(TAG, "HomeKit set swing: %d", on);
-            thermostat_ctrl_set_swing(SWING_VERTICAL, on);
-            hap_char_update_val(w->hc, &w->val);
-            *(w->status) = HAP_STATUS_SUCCESS;
+            finish_write(w,
+                         thermostat_ctrl_set_swing(SWING_VERTICAL, on));
         }
         else {
             *(w->status) = HAP_STATUS_RES_ABSENT;
@@ -116,33 +136,37 @@ static int thermostat_read(hap_char_t *hc, hap_status_t *status,
                            void *serv_priv, void *read_priv)
 {
     hap_val_t val;
+    thermostat_snapshot_t snapshot;
+    thermostat_ctrl_get_snapshot(&snapshot);
 
     if (hc == ch_current_temp) {
-        val.f = thermostat_ctrl_get_current_temp();
+        val.f = snapshot.observed.valid ? snapshot.observed.current_temp
+                                        : snapshot.desired.current_temp;
         hap_char_update_val(hc, &val);
     }
     else if (hc == ch_target_temp) {
-        val.f = thermostat_ctrl_get_target_temp();
+        val.f = snapshot.desired.target_temp;
         hap_char_update_val(hc, &val);
     }
     else if (hc == ch_current_state) {
-        val.i = derive_current_state();
+        val.i = derive_current_state(&snapshot);
         hap_char_update_val(hc, &val);
     }
     else if (hc == ch_target_state) {
-        val.i = thermostat_ctrl_get_mode();
+        val.i = snapshot.desired.power ? snapshot.target_homekit_mode
+                                       : HAP_MODE_OFF;
         hap_char_update_val(hc, &val);
     }
     else if (hc == ch_fan_active) {
-        val.i = thermostat_ctrl_get_power() ? 1 : 0;
+        val.i = snapshot.desired.power ? 1 : 0;
         hap_char_update_val(hc, &val);
     }
     else if (hc == ch_fan_speed) {
-        val.f = fan_speed_to_percent(thermostat_ctrl_get_fan_speed());
+        val.f = fan_speed_to_percent(snapshot.desired.fan_speed);
         hap_char_update_val(hc, &val);
     }
     else if (hc == ch_swing_on) {
-        val.u = thermostat_ctrl_get_swing(SWING_VERTICAL);
+        val.u = snapshot.desired.swing_vertical;
         hap_char_update_val(hc, &val);
     }
 
@@ -156,10 +180,11 @@ static int identify_routine(hap_acc_t *acc)
     return HAP_SUCCESS;
 }
 
-hap_acc_t *hk_thermostat_create(void)
+hap_acc_t *hk_thermostat_create(char *device_name)
 {
     hap_acc_cfg_t acc_cfg = {
-        .name = "DaiSpan Thermostat",
+        .name = device_name && device_name[0]
+            ? device_name : "DaiSpan Thermostat",
         .manufacturer = "DaiSpan",
         .model = "DS-TH1",
         .serial_num = "001",
@@ -239,34 +264,43 @@ hap_acc_t *hk_thermostat_create(void)
 void hk_thermostat_sync(void)
 {
     hap_val_t val;
+    thermostat_snapshot_t snapshot;
+    thermostat_ctrl_get_snapshot(&snapshot);
 
     if (ch_current_temp) {
-        val.f = thermostat_ctrl_get_current_temp();
+        val.f = snapshot.observed.valid ? snapshot.observed.current_temp
+                                        : snapshot.desired.current_temp;
         hap_char_update_val(ch_current_temp, &val);
     }
 
     if (ch_current_state) {
-        val.i = derive_current_state();
+        val.i = derive_current_state(&snapshot);
         hap_char_update_val(ch_current_state, &val);
     }
 
     if (ch_target_state) {
-        val.i = thermostat_ctrl_get_mode();
+        val.i = snapshot.desired.power ? snapshot.target_homekit_mode
+                                       : HAP_MODE_OFF;
         hap_char_update_val(ch_target_state, &val);
     }
 
     if (ch_target_temp) {
-        val.f = thermostat_ctrl_get_target_temp();
+        val.f = snapshot.desired.target_temp;
         hap_char_update_val(ch_target_temp, &val);
     }
 
     if (ch_fan_active) {
-        val.i = thermostat_ctrl_get_power() ? 1 : 0;
+        val.i = snapshot.desired.power ? 1 : 0;
         hap_char_update_val(ch_fan_active, &val);
     }
 
+    if (ch_fan_speed) {
+        val.f = fan_speed_to_percent(snapshot.desired.fan_speed);
+        hap_char_update_val(ch_fan_speed, &val);
+    }
+
     if (ch_swing_on) {
-        val.u = thermostat_ctrl_get_swing(SWING_VERTICAL);
+        val.u = snapshot.desired.swing_vertical;
         hap_char_update_val(ch_swing_on, &val);
     }
 }

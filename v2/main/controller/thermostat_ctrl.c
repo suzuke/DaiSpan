@@ -4,38 +4,45 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include <math.h>
 #include <string.h>
 
 static const char *TAG = LOG_TAG_CTRL;
 
 /* Command queue: HomeKit -> Controller */
 static QueueHandle_t cmd_queue = NULL;
+static TaskHandle_t controller_task_handle = NULL;
 
-/*
- * Cached state (atomically updated by controller task, read by HomeKit task).
- * On ESP32 single-core (C3), reads/writes of aligned 32-bit values are atomic.
- */
-static volatile ac_status_t cached_status = {
-    .power           = false,
-    .mode            = AC_MODE_AUTO,
-    .target_temp     = 21.0f,
-    .current_temp    = 21.0f,
-    .fan_speed       = AC_FAN_AUTO,
-    .swing_vertical  = false,
-    .swing_horizontal = false,
-    .valid           = false,
+static portMUX_TYPE snapshot_lock = portMUX_INITIALIZER_UNLOCKED;
+static thermostat_snapshot_t cached_snapshot = {
+    .desired = {
+        .mode = AC_MODE_AUTO,
+        .target_temp = 21.0f,
+        .current_temp = 21.0f,
+        .fan_speed = AC_FAN_AUTO,
+    },
+    .observed = {
+        .mode = AC_MODE_AUTO,
+        .target_temp = 21.0f,
+        .current_temp = 21.0f,
+        .fan_speed = AC_FAN_AUTO,
+    },
+    .target_homekit_mode = HAP_MODE_AUTO,
 };
 
 /* Local mutable copy used only by the controller task */
 static ac_status_t local_status;
+static ac_status_t observed_status;
 
 /* Error tracking */
-static volatile uint32_t consecutive_errors = 0;
+static uint32_t consecutive_errors = 0;
 static uint32_t last_successful_ms = 0;
 
 /* User interaction protection */
+static uint32_t last_power_set_ms = 0;
 static uint32_t last_mode_set_ms = 0;
 static uint8_t  last_user_mode   = AC_MODE_AUTO;
+static uint32_t last_temp_set_ms = 0;
 static uint32_t last_fan_set_ms  = 0;
 static uint8_t  last_user_fan    = AC_FAN_AUTO;
 
@@ -52,9 +59,12 @@ static bool dirty_swing = false;
 #define CMD_QUEUE_SIZE         8
 #define POLL_INTERVAL_MS       6000
 #define ERROR_RECOVERY_MS      30000
-#define MAX_CONSECUTIVE_ERRORS 10
+#define MAX_CONSECUTIVE_ERRORS THERMOSTAT_CTRL_MAX_CONSECUTIVE_ERRORS
 #define MODE_PROTECT_MS        30000
+#define POWER_PROTECT_MS       10000
+#define TEMP_PROTECT_MS        10000
 #define FAN_PROTECT_MS         10000
+#define MAX_COMMAND_BATCH      8
 #define CTRL_TASK_STACK        4096
 #define CTRL_TASK_PRIORITY     5
 
@@ -63,14 +73,18 @@ static bool is_recovering(void)
     return consecutive_errors >= MAX_CONSECUTIVE_ERRORS;
 }
 
-/* Publish local_status to cached_status (read by HomeKit) */
+/* Publish controller-owned state as one coherent snapshot. */
 static void publish_status(void)
 {
-    /*
-     * On single-core ESP32-C3, struct copy is safe as long as readers
-     * tolerate slight inconsistency between individual fields.
-     */
-    cached_status = local_status;
+    bool queue_pending = cmd_queue && uxQueueMessagesWaiting(cmd_queue) > 0;
+    portENTER_CRITICAL(&snapshot_lock);
+    cached_snapshot.desired = local_status;
+    cached_snapshot.observed = observed_status;
+    cached_snapshot.target_homekit_mode = target_homekit_mode;
+    cached_snapshot.consecutive_errors = consecutive_errors;
+    cached_snapshot.pending = dirty_power || dirty_mode || dirty_temp ||
+                              dirty_fan || dirty_swing || queue_pending;
+    portEXIT_CRITICAL(&snapshot_lock);
 }
 
 static void handle_error(const char *op)
@@ -80,6 +94,7 @@ static void handle_error(const char *op)
     if (consecutive_errors >= MAX_CONSECUTIVE_ERRORS) {
         ESP_LOGE(TAG, "Entering error recovery mode");
     }
+    publish_status();
 }
 
 static void reset_errors(void)
@@ -89,6 +104,7 @@ static void reset_errors(void)
         consecutive_errors = 0;
     }
     last_successful_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
+    publish_status();
 }
 
 /* Retry sending any commands that failed on the initial attempt */
@@ -162,6 +178,7 @@ static void process_command(const ctrl_cmd_t *cmd)
     case CMD_SET_POWER:
         ESP_LOGI(TAG, "Set power: %d", cmd->data.power);
         local_status.power = cmd->data.power;
+        last_power_set_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
         dirty_power = true;
         if (!is_recovering()) {
             try_send_d1();
@@ -175,6 +192,7 @@ static void process_command(const ctrl_cmd_t *cmd)
 
         if (hk_mode == HAP_MODE_OFF) {
             local_status.power = false;
+            last_power_set_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
             dirty_power = true;
         } else {
             uint8_t ac_mode  = homekit_to_ac_mode(hk_mode);
@@ -185,6 +203,7 @@ static void process_command(const ctrl_cmd_t *cmd)
             dirty_mode = true;
             if (!local_status.power) {
                 local_status.power = true;
+                last_power_set_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
                 dirty_power = true;
             }
         }
@@ -199,6 +218,7 @@ static void process_command(const ctrl_cmd_t *cmd)
     case CMD_SET_TEMP:
         ESP_LOGI(TAG, "Set temp: %.1f", cmd->data.temperature);
         local_status.target_temp = cmd->data.temperature;
+        last_temp_set_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
         dirty_temp = true;
         if (!is_recovering()) {
             try_send_d1();
@@ -255,7 +275,15 @@ static void poll_status(void)
     ac_status_t new_status = {0};
     if (s21_query_status(&new_status)) {
         any_success = true;
-        local_status.power = new_status.power;
+        observed_status.power = new_status.power;
+        observed_status.mode = new_status.mode;
+        observed_status.target_temp = new_status.target_temp;
+        observed_status.fan_speed = new_status.fan_speed;
+
+        if (last_power_set_ms == 0 ||
+            (now - last_power_set_ms) >= POWER_PROTECT_MS) {
+            local_status.power = new_status.power;
+        }
 
         /* Mode protection period: keep user-set mode until AC settles */
         if (last_mode_set_ms > 0 && (now - last_mode_set_ms) < MODE_PROTECT_MS) {
@@ -275,7 +303,10 @@ static void poll_status(void)
             }
         }
 
-        local_status.target_temp = new_status.target_temp;
+        if (last_temp_set_ms == 0 ||
+            (now - last_temp_set_ms) >= TEMP_PROTECT_MS) {
+            local_status.target_temp = new_status.target_temp;
+        }
 
         /* Fan speed protection */
         if (last_fan_set_ms > 0 && (now - last_fan_set_ms) < FAN_PROTECT_MS) {
@@ -291,6 +322,7 @@ static void poll_status(void)
     if (any_success) {
         float temp;
         if (s21_query_temperature(&temp)) {
+            observed_status.current_temp = temp;
             local_status.current_temp = temp;
         } else {
             handle_error("poll_temp");
@@ -302,13 +334,18 @@ static void poll_status(void)
     if (any_success) {
         bool sv, sh;
         if (s21_query_swing(&sv, &sh)) {
-            local_status.swing_vertical   = sv;
-            local_status.swing_horizontal = sh;
+            observed_status.swing_vertical = sv;
+            observed_status.swing_horizontal = sh;
+            if (!dirty_swing) {
+                local_status.swing_vertical = sv;
+                local_status.swing_horizontal = sh;
+            }
         }
         /* Don't count swing query failure as error - some ACs don't support F5 */
     }
 
     if (any_success) {
+        observed_status.valid = true;
         local_status.valid = true;
         reset_errors();
     }
@@ -328,9 +365,13 @@ static void controller_task(void *arg)
     TickType_t last_poll = xTaskGetTickCount();
 
     for (;;) {
-        /* Process queued commands (non-blocking peek with short timeout) */
+        /* Bound each batch so sustained writers cannot starve status polling. */
         ctrl_cmd_t cmd;
-        while (xQueueReceive(cmd_queue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+        for (size_t processed = 0; processed < MAX_COMMAND_BATCH; processed++) {
+            TickType_t wait = processed == 0 ? pdMS_TO_TICKS(100) : 0;
+            if (xQueueReceive(cmd_queue, &cmd, wait) != pdTRUE) {
+                break;
+            }
             process_command(&cmd);
         }
 
@@ -374,11 +415,23 @@ esp_err_t thermostat_ctrl_init(void)
     memset(&local_status, 0, sizeof(local_status));
     local_status.target_temp  = 21.0f;
     local_status.current_temp = 21.0f;
+    local_status.mode = AC_MODE_AUTO;
+    local_status.fan_speed = AC_FAN_AUTO;
+
+    memset(&observed_status, 0, sizeof(observed_status));
+    observed_status.target_temp = 21.0f;
+    observed_status.current_temp = 21.0f;
+    observed_status.mode = AC_MODE_AUTO;
+    observed_status.fan_speed = AC_FAN_AUTO;
+    publish_status();
 
     BaseType_t ret = xTaskCreate(controller_task, "ctrl_task", CTRL_TASK_STACK,
-                                 NULL, CTRL_TASK_PRIORITY, NULL);
+                                 NULL, CTRL_TASK_PRIORITY,
+                                 &controller_task_handle);
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create controller task");
+        vQueueDelete(cmd_queue);
+        cmd_queue = NULL;
         return ESP_FAIL;
     }
 
@@ -388,11 +441,21 @@ esp_err_t thermostat_ctrl_init(void)
 
 static bool send_cmd(const ctrl_cmd_t *cmd)
 {
-    if (!cmd_queue) {
+    if (!cmd_queue || !cmd) {
         return false;
     }
-    /* Non-blocking send: if queue full, drop (HomeKit must never block) */
-    return xQueueSend(cmd_queue, cmd, 0) == pdTRUE;
+    if (xQueueSend(cmd_queue, cmd, 0) == pdTRUE) {
+        portENTER_CRITICAL(&snapshot_lock);
+        cached_snapshot.pending = true;
+        portEXIT_CRITICAL(&snapshot_lock);
+        return true;
+    }
+
+    portENTER_CRITICAL(&snapshot_lock);
+    cached_snapshot.dropped_commands++;
+    portEXIT_CRITICAL(&snapshot_lock);
+    ESP_LOGW(TAG, "Command queue full; rejected command type %d", cmd->type);
+    return false;
 }
 
 bool thermostat_ctrl_set_power(bool on)
@@ -403,13 +466,16 @@ bool thermostat_ctrl_set_power(bool on)
 
 bool thermostat_ctrl_set_mode(uint8_t homekit_mode)
 {
+    if (homekit_mode > HAP_MODE_AUTO) {
+        return false;
+    }
     ctrl_cmd_t cmd = { .type = CMD_SET_MODE, .data.mode = homekit_mode };
     return send_cmd(&cmd);
 }
 
 bool thermostat_ctrl_set_temperature(float temp)
 {
-    if (temp < 16.0f || temp > 30.0f) {
+    if (!isfinite(temp) || temp < 16.0f || temp > 30.0f) {
         return false;
     }
     ctrl_cmd_t cmd = { .type = CMD_SET_TEMP, .data.temperature = temp };
@@ -418,12 +484,27 @@ bool thermostat_ctrl_set_temperature(float temp)
 
 bool thermostat_ctrl_set_fan_speed(uint8_t speed)
 {
+    switch (speed) {
+    case AC_FAN_AUTO:
+    case AC_FAN_QUIET:
+    case AC_FAN_1:
+    case AC_FAN_2:
+    case AC_FAN_3:
+    case AC_FAN_4:
+    case AC_FAN_5:
+        break;
+    default:
+        return false;
+    }
     ctrl_cmd_t cmd = { .type = CMD_SET_FAN, .data.fan_speed = speed };
     return send_cmd(&cmd);
 }
 
 bool thermostat_ctrl_set_swing(swing_axis_t axis, bool enabled)
 {
+    if (axis != SWING_VERTICAL && axis != SWING_HORIZONTAL) {
+        return false;
+    }
     ctrl_cmd_t cmd = {
         .type = CMD_SET_SWING,
         .data.swing = { .axis = axis, .enabled = enabled }
@@ -431,44 +512,72 @@ bool thermostat_ctrl_set_swing(swing_axis_t axis, bool enabled)
     return send_cmd(&cmd);
 }
 
+bool thermostat_ctrl_get_snapshot(thermostat_snapshot_t *snapshot)
+{
+    if (!snapshot) {
+        return false;
+    }
+    portENTER_CRITICAL(&snapshot_lock);
+    *snapshot = cached_snapshot;
+    portEXIT_CRITICAL(&snapshot_lock);
+    return true;
+}
+
 bool thermostat_ctrl_get_power(void)
 {
-    return cached_status.power;
+    thermostat_snapshot_t snapshot;
+    thermostat_ctrl_get_snapshot(&snapshot);
+    return snapshot.desired.power;
 }
 
 uint8_t thermostat_ctrl_get_mode(void)
 {
-    return cached_status.power ? target_homekit_mode : HAP_MODE_OFF;
+    thermostat_snapshot_t snapshot;
+    thermostat_ctrl_get_snapshot(&snapshot);
+    return snapshot.desired.power ? snapshot.target_homekit_mode : HAP_MODE_OFF;
 }
 
 float thermostat_ctrl_get_target_temp(void)
 {
-    return cached_status.target_temp;
+    thermostat_snapshot_t snapshot;
+    thermostat_ctrl_get_snapshot(&snapshot);
+    return snapshot.desired.target_temp;
 }
 
 float thermostat_ctrl_get_current_temp(void)
 {
-    return cached_status.current_temp;
+    thermostat_snapshot_t snapshot;
+    thermostat_ctrl_get_snapshot(&snapshot);
+    return snapshot.observed.valid ? snapshot.observed.current_temp
+                                   : snapshot.desired.current_temp;
 }
 
 uint8_t thermostat_ctrl_get_fan_speed(void)
 {
-    return cached_status.fan_speed;
+    thermostat_snapshot_t snapshot;
+    thermostat_ctrl_get_snapshot(&snapshot);
+    return snapshot.desired.fan_speed;
 }
 
 bool thermostat_ctrl_get_swing(swing_axis_t axis)
 {
+    thermostat_snapshot_t snapshot;
+    thermostat_ctrl_get_snapshot(&snapshot);
     return (axis == SWING_VERTICAL)
-        ? cached_status.swing_vertical
-        : cached_status.swing_horizontal;
+        ? snapshot.desired.swing_vertical
+        : snapshot.desired.swing_horizontal;
 }
 
 bool thermostat_ctrl_is_healthy(void)
 {
-    return consecutive_errors < MAX_CONSECUTIVE_ERRORS;
+    thermostat_snapshot_t snapshot;
+    thermostat_ctrl_get_snapshot(&snapshot);
+    return snapshot.consecutive_errors < MAX_CONSECUTIVE_ERRORS;
 }
 
 uint32_t thermostat_ctrl_get_error_count(void)
 {
-    return consecutive_errors;
+    thermostat_snapshot_t snapshot;
+    thermostat_ctrl_get_snapshot(&snapshot);
+    return snapshot.consecutive_errors;
 }

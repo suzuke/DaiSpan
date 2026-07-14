@@ -1,13 +1,16 @@
 #include "wifi/wifi_manager.h"
+#include "wifi/dns_responder.h"
 #include "config/config_manager.h"
 #include "common/debug.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
 #include "lwip/sockets.h"
 #include "lwip/dns.h"
+#include "mbedtls/platform_util.h"
 #include <string.h>
 
 static const char *TAG = LOG_TAG_WIFI;
@@ -17,38 +20,83 @@ static const char *TAG = LOG_TAG_WIFI;
 #define MAX_RETRY          15
 
 static EventGroupHandle_t wifi_event_group;
+static esp_timer_handle_t reconnect_timer;
+static portMUX_TYPE wifi_state_lock = portMUX_INITIALIZER_UNLOCKED;
 static int retry_count = 0;
 static bool connected = false;
 static bool ap_mode = false;
 static char ip_str[16] = "0.0.0.0";
 
+static void reconnect_timer_callback(void *arg)
+{
+    (void)arg;
+    portENTER_CRITICAL(&wifi_state_lock);
+    bool should_connect = !ap_mode;
+    portEXIT_CRITICAL(&wifi_state_lock);
+    if (should_connect) {
+        esp_wifi_connect();
+    }
+}
+
+static void schedule_reconnect(uint32_t delay_ms)
+{
+    if (esp_timer_is_active(reconnect_timer)) {
+        esp_timer_stop(reconnect_timer);
+    }
+    esp_err_t err = esp_timer_start_once(reconnect_timer,
+                                         (uint64_t)delay_ms * 1000U);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to schedule WiFi reconnect: %s",
+                 esp_err_to_name(err));
+    }
+}
+
 static void event_handler(void *arg, esp_event_base_t event_base,
                            int32_t event_id, void *event_data)
 {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
+        portENTER_CRITICAL(&wifi_state_lock);
+        bool should_connect = !ap_mode;
+        portEXIT_CRITICAL(&wifi_state_lock);
+        if (should_connect) {
+            esp_wifi_connect();
+        }
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        portENTER_CRITICAL(&wifi_state_lock);
         connected = false;
-        if (ap_mode) {
+        bool already_ap = ap_mode;
+        portEXIT_CRITICAL(&wifi_state_lock);
+        xEventGroupClearBits(wifi_event_group, WIFI_CONNECTED_BIT);
+        if (already_ap) {
             return;  /* Already switched to AP mode, ignore stale STA events */
         }
         if (retry_count < MAX_RETRY) {
             retry_count++;
             /* Progressive delay: 500ms -> 1s -> 2s */
-            int delay_ms = (retry_count < 10) ? 500 : (retry_count < 20) ? 1000 : 2000;
-            vTaskDelay(pdMS_TO_TICKS(delay_ms));
-            esp_wifi_connect();
+            int delay_ms = (retry_count < 5) ? 500
+                : (retry_count < 10) ? 1000 : 2000;
+            schedule_reconnect((uint32_t)delay_ms);
             ESP_LOGI(TAG, "Retry %d/%d", retry_count, MAX_RETRY);
         } else {
             xEventGroupSetBits(wifi_event_group, WIFI_FAIL_BIT);
-            ESP_LOGE(TAG, "Connection failed after %d retries", MAX_RETRY);
+            ESP_LOGE(TAG, "Connection failed after %d retries; retrying in 30s",
+                     MAX_RETRY);
+            schedule_reconnect(30000);
         }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
-        snprintf(ip_str, sizeof(ip_str), IPSTR, IP2STR(&event->ip_info.ip));
-        ESP_LOGI(TAG, "Connected: %s", ip_str);
-        retry_count = 0;
+        char new_ip[sizeof(ip_str)];
+        snprintf(new_ip, sizeof(new_ip), IPSTR, IP2STR(&event->ip_info.ip));
+        portENTER_CRITICAL(&wifi_state_lock);
+        strlcpy(ip_str, new_ip, sizeof(ip_str));
         connected = true;
+        portEXIT_CRITICAL(&wifi_state_lock);
+        ESP_LOGI(TAG, "Connected: %s", new_ip);
+        retry_count = 0;
+        if (esp_timer_is_active(reconnect_timer)) {
+            esp_timer_stop(reconnect_timer);
+        }
+        xEventGroupClearBits(wifi_event_group, WIFI_FAIL_BIT);
         xEventGroupSetBits(wifi_event_group, WIFI_CONNECTED_BIT);
     }
 }
@@ -90,32 +138,17 @@ static void dns_server_task(void *arg)
         addr_len = sizeof(client_addr);
         int len = recvfrom(sock, buf, sizeof(buf), 0,
                            (struct sockaddr *)&client_addr, &addr_len);
-        if (len < 12) continue;
-
-        /* Build DNS response: copy query, set response flags, add answer */
+        if (len <= 0) {
+            continue;
+        }
         uint8_t resp[512];
-        memcpy(resp, buf, len);
+        size_t response_len = dns_build_captive_response(
+            buf, (size_t)len, resp, sizeof(resp));
+        if (response_len == 0) {
+            continue;
+        }
 
-        /* Set QR=1 (response), AA=1 (authoritative), RA=1 */
-        resp[2] = 0x84;
-        resp[3] = 0x00;
-        /* Answer count = 1 */
-        resp[6] = 0x00;
-        resp[7] = 0x01;
-
-        /* Append answer: pointer to name in query + A record -> 192.168.4.1 */
-        int pos = len;
-        resp[pos++] = 0xC0;  /* name pointer */
-        resp[pos++] = 0x0C;  /* offset to name in query */
-        resp[pos++] = 0x00; resp[pos++] = 0x01;  /* type A */
-        resp[pos++] = 0x00; resp[pos++] = 0x01;  /* class IN */
-        resp[pos++] = 0x00; resp[pos++] = 0x00;
-        resp[pos++] = 0x00; resp[pos++] = 0x0A;  /* TTL 10s */
-        resp[pos++] = 0x00; resp[pos++] = 0x04;  /* data length 4 */
-        resp[pos++] = 192; resp[pos++] = 168;
-        resp[pos++] = 4;   resp[pos++] = 1;      /* 192.168.4.1 */
-
-        sendto(sock, resp, pos, 0,
+        sendto(sock, resp, response_len, 0,
                (struct sockaddr *)&client_addr, addr_len);
     }
 }
@@ -123,12 +156,28 @@ static void dns_server_task(void *arg)
 static esp_err_t start_ap(void)
 {
     ESP_LOGI(TAG, "Starting AP mode: DaiSpan-Config");
+    portENTER_CRITICAL(&wifi_state_lock);
+    ap_mode = true;
+    connected = false;
+    strlcpy(ip_str, "192.168.4.1", sizeof(ip_str));
+    portEXIT_CRITICAL(&wifi_state_lock);
+    if (reconnect_timer && esp_timer_is_active(reconnect_timer)) {
+        esp_timer_stop(reconnect_timer);
+    }
+
+    char admin_token[CONFIG_ADMIN_TOKEN_LEN + 1] = {0};
+    bool token_created = false;
+    esp_err_t err = config_get_or_create_admin_token(
+        admin_token, sizeof(admin_token), &token_created);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to load AP credential: %s", esp_err_to_name(err));
+        return err;
+    }
 
     wifi_config_t ap_config = {
         .ap = {
             .ssid = "DaiSpan-Config",
             .ssid_len = 14,
-            .password = "12345678",
             .channel = 1,
             .max_connection = 4,
             .authmode = WIFI_AUTH_WPA_WPA2_PSK,
@@ -139,9 +188,20 @@ static esp_err_t start_ap(void)
             },
         },
     };
+    strlcpy((char *)ap_config.ap.password, admin_token,
+            sizeof(ap_config.ap.password));
+
+    if (token_created) {
+        /* One-time provisioning channel; capture this credential securely. */
+        ESP_LOGW(TAG, "NEW provisioning credential: user=admin password=%s",
+                 admin_token);
+    }
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
+    mbedtls_platform_zeroize(admin_token, sizeof(admin_token));
+    mbedtls_platform_zeroize(ap_config.ap.password,
+                             sizeof(ap_config.ap.password));
 
     /* Force 802.11b/g/n and HT20 bandwidth for max compatibility */
     esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
@@ -154,16 +214,33 @@ static esp_err_t start_ap(void)
     ESP_LOGI(TAG, "AP started (APSTA mode, ch1, WPA/WPA2, 13dBm)");
 
     /* Start captive portal DNS server */
-    xTaskCreate(dns_server_task, "dns_srv", 4096, NULL, 3, NULL);
+    BaseType_t task_result = xTaskCreate(
+        dns_server_task, "dns_srv", 4096, NULL, 3, NULL);
+    if (task_result != pdPASS) {
+        ESP_LOGE(TAG, "Failed to start captive DNS task");
+        return ESP_ERR_NO_MEM;
+    }
 
-    ap_mode = true;
-    strcpy(ip_str, "192.168.4.1");
     return ESP_OK;
 }
 
 esp_err_t wifi_manager_init(void)
 {
     wifi_event_group = xEventGroupCreate();
+    if (!wifi_event_group) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    const esp_timer_create_args_t timer_args = {
+        .callback = reconnect_timer_callback,
+        .name = "wifi_reconnect",
+    };
+    esp_err_t timer_err = esp_timer_create(&timer_args, &reconnect_timer);
+    if (timer_err != ESP_OK) {
+        vEventGroupDelete(wifi_event_group);
+        wifi_event_group = NULL;
+        return timer_err;
+    }
 
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
@@ -187,16 +264,28 @@ esp_err_t wifi_manager_init(void)
     }
 
     /* Try STA mode */
-    char ssid[33], pass[65];
-    config_get_wifi_ssid(ssid, sizeof(ssid));
-    config_get_wifi_password(pass, sizeof(pass));
+    char ssid[33] = {0};
+    char pass[65] = {0};
+    esp_err_t err = config_get_wifi_ssid(ssid, sizeof(ssid));
+    if (err == ESP_OK) {
+        err = config_get_wifi_password(pass, sizeof(pass));
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Stored WiFi credentials are incomplete: %s",
+                 esp_err_to_name(err));
+        mbedtls_platform_zeroize(pass, sizeof(pass));
+        return start_ap();
+    }
 
     wifi_config_t sta_config = {0};
-    strncpy((char *)sta_config.sta.ssid, ssid, sizeof(sta_config.sta.ssid));
-    strncpy((char *)sta_config.sta.password, pass, sizeof(sta_config.sta.password));
+    memcpy(sta_config.sta.ssid, ssid, strlen(ssid));
+    memcpy(sta_config.sta.password, pass, strlen(pass));
+    mbedtls_platform_zeroize(pass, sizeof(pass));
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_config));
+    mbedtls_platform_zeroize(sta_config.sta.password,
+                             sizeof(sta_config.sta.password));
     ESP_ERROR_CHECK(esp_wifi_start());
 
     /* Set TX power for C3 */
@@ -217,19 +306,30 @@ esp_err_t wifi_manager_init(void)
     }
 
     ESP_LOGW(TAG, "STA failed, falling back to AP mode");
+    portENTER_CRITICAL(&wifi_state_lock);
     ap_mode = true;  /* Prevent stale disconnect events from retrying */
+    portEXIT_CRITICAL(&wifi_state_lock);
     esp_wifi_stop();
     return start_ap();
 }
 
 bool wifi_manager_is_connected(void)
 {
-    return connected;
+    portENTER_CRITICAL(&wifi_state_lock);
+    bool result = connected;
+    portEXIT_CRITICAL(&wifi_state_lock);
+    return result;
 }
 
-const char *wifi_manager_get_ip(void)
+bool wifi_manager_get_ip(char *buf, size_t len)
 {
-    return ip_str;
+    if (!buf || len == 0) {
+        return false;
+    }
+    portENTER_CRITICAL(&wifi_state_lock);
+    strlcpy(buf, ip_str, len);
+    portEXIT_CRITICAL(&wifi_state_lock);
+    return true;
 }
 
 int wifi_manager_get_rssi(void)
@@ -241,5 +341,8 @@ int wifi_manager_get_rssi(void)
 
 bool wifi_manager_is_ap_mode(void)
 {
-    return ap_mode;
+    portENTER_CRITICAL(&wifi_state_lock);
+    bool result = ap_mode;
+    portEXIT_CRITICAL(&wifi_state_lock);
+    return result;
 }

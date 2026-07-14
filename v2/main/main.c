@@ -8,6 +8,7 @@
 
 #include <hap.h>
 #include <esp_system.h>
+#include "mbedtls/platform_util.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -47,7 +48,7 @@ void app_main(void)
 
     if (!wifi_manager_is_connected()) {
         ESP_LOGW(TAG, "No WiFi connection, running in AP config mode");
-        web_server_start(true);  /* port 80, captive portal */
+        ESP_ERROR_CHECK(web_server_start(true));  /* port 80, captive portal */
         while (1) {
             vTaskDelay(pdMS_TO_TICKS(1000));
         }
@@ -64,13 +65,20 @@ void app_main(void)
 
     char setup_code[16];
     char device_name[32];
-    config_get_hk_setup_code(setup_code, sizeof(setup_code));
-    config_get_hk_name(device_name, sizeof(device_name));
+    bool setup_code_created = false;
+    ESP_ERROR_CHECK(config_get_or_create_hk_setup_code(
+        setup_code, sizeof(setup_code), &setup_code_created));
+    ESP_ERROR_CHECK(config_get_hk_name(device_name, sizeof(device_name)));
+
+    if (setup_code_created) {
+        /* One-time provisioning channel; capture this code securely. */
+        ESP_LOGW(TAG, "NEW HomeKit setup code: %s", setup_code);
+    }
 
     hap_set_setup_code(setup_code);
     hap_set_setup_id("DS01");
 
-    hap_acc_t *accessory = hk_thermostat_create();
+    hap_acc_t *accessory = hk_thermostat_create(device_name);
     if (!accessory) {
         ESP_LOGE(TAG, "Failed to create HomeKit accessory");
         esp_restart();
@@ -84,10 +92,11 @@ void app_main(void)
                                 &hap_event_handler, NULL);
 
     hap_start();
-    ESP_LOGI(TAG, "HomeKit started: %s (code: %s)", device_name, setup_code);
+    ESP_LOGI(TAG, "HomeKit started: %s", device_name);
+    mbedtls_platform_zeroize(setup_code, sizeof(setup_code));
 
     /* 6. Web server */
-    web_server_start(false);  /* port 8080, normal mode */
+    ESP_ERROR_CHECK(web_server_start(false));  /* port 8080, normal mode */
 
     ESP_LOGI(TAG, "System ready. Free heap: %lu bytes",
              (unsigned long)esp_get_free_heap_size());

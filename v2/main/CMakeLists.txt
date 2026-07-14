@@ -9,8 +9,10 @@ idf_component_register(
         esp_wifi
         esp_http_server
         esp_event
+        esp_timer
         json
         app_update
+        mbedtls
         esp_hap_core
         esp_hap_apple_profiles
         esp_hap_platform
